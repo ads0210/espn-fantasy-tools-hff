@@ -21,7 +21,7 @@ import { throttleCheck, throttleFail, throttleSucceed } from './throttle.js';
 import { loginPage, dashboardPage } from './pages.js';
 import { wizardPage } from './wizard.js';
 import { siteConfigPage } from './siteconfig.js';
-import { shell, backAction, displayTitle, passwordField, esc,
+import { shell, backAction, displayTitle, passwordField, esc, LOGO_FALLBACK_SVG,
   THEME_COOKIE, TEAM_COOKIE, MOTION_COOKIE } from './ui.js';
 import { TOOLS, describeTools, applyVisibility, visibleTools, visibilityOf, VISIBILITY }
   from './tools.js';
@@ -31,13 +31,15 @@ import { fetchPart } from './espn.js';
 import { buildLiveScoringDigest } from './derive.js';
 import { putPart } from './store.js';
 import { timelineAppend, timelineRead } from './timeline.js';
+import { refreshLogos, logoObjectKey, LOGO_REFRESH_MS } from './logos.js';
+import { readEspnAuth } from './espnhealth.js';
 import { json, html, readJson, b64urlDecode } from './http.js';
 
 export { DatasetCoordinator } from './coordinator.js';
 export { LoginThrottle } from './throttle.js';
 export { ScoreTimelineDO } from './scoretimeline.js';
 
-const BUILD_MARKER = 'r44';
+const BUILD_MARKER = 'r48';
 
 export default {
   async fetch(request, env, ctx) {
@@ -66,8 +68,36 @@ export default {
     } catch (err) {
       console.log('scheduled tick failed:', String((err && err.stack) || err));
     }
+    try {
+      await tickLogos(env, event);
+    } catch (err) {
+      console.log('scheduled logo pass failed:', String((err && err.stack) || err));
+    }
   },
 };
+
+/**
+ * Keep the stored team logos in step with ESPN.
+ *
+ * The cron already fires every minute for the score timeline, so this needs no
+ * second trigger and no wrangler change — which matters, because a fork gets
+ * its triggers from the committed config and nothing else.
+ *
+ * A pass every fifth minute is enough for "someone changed their logo and it
+ * turned up shortly after" without spending an ESPN call a minute on something
+ * that changes a handful of times a season. The gate is arithmetic on the
+ * scheduled time rather than a stored last-run marker: it holds no state, it
+ * cannot drift, and a failed pass cannot wedge the next one.
+ */
+async function tickLogos(env, event) {
+  const at = (event && event.scheduledTime) || Date.now();
+  const everyMinutes = Math.max(1, Math.round(LOGO_REFRESH_MS / 60000));
+  if (Math.floor(at / 60000) % everyMinutes !== 0) return;
+
+  const cfg = await loadConfig(env);
+  if (!canCallEspn(cfg)) return;
+  await refreshLogos(env, cfg);
+}
 
 /**
  * Record one row of the week's score timeline, if a row is warranted.
@@ -177,6 +207,7 @@ async function route(request, env, ctx) {
     });
   }
 
+
   const cfg = await loadConfig(env);
   const theme = themeOf(request);
   const reduceMotion = motionOf(request);
@@ -284,6 +315,10 @@ async function route(request, env, ctx) {
 
   if (path === '/api/img') return serveImage(request, url, ctx);
 
+  if (path.startsWith('/api/logo/')) {
+    return serveTeamLogo(env, request, url, ctx, path.slice('/api/logo/'.length));
+  }
+
   if (path.startsWith('/api/status/')) {
     const st = await readStatus(env, path.slice('/api/status/'.length));
     return st ? json({ ok: true, status: st }) : json({ ok: false, error: 'no status yet' }, 404);
@@ -312,6 +347,7 @@ async function route(request, env, ctx) {
       teams,
       selectedTeamId: selectedTeam,
       initial, board,
+      espnAuth: await readEspnAuth(env),
     }));
   }
 
@@ -1194,9 +1230,9 @@ async function serveImage(request, url, ctx) {
     return placeholderImage();
   }
 
-  const cache = caches.default;
+  const cache = edgeCache();
   const cacheKey = new Request(new URL(request.url).toString(), { method: 'GET' });
-  const hit = await cache.match(cacheKey);
+  const hit = cache ? await cache.match(cacheKey) : null;
   if (hit) return hit;
 
   try {
@@ -1226,24 +1262,93 @@ async function serveImage(request, url, ctx) {
         'x-content-type-options': 'nosniff',
       },
     });
-    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(cache.put(cacheKey, out.clone()));
+    if (cache && ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(cache.put(cacheKey, out.clone()));
     return out;
   } catch {
     return placeholderImage();
   }
 }
 
+/**
+ * Serve a fantasy team's logo from the Worker's own store.
+ *
+ * Custom uploads live behind ESPN's session, so a browser cannot fetch them at
+ * all; the bytes are copied into R2 on a schedule and served from here.
+ *
+ * Caching is keyed on the `v` fingerprint the digest embeds. When it matches
+ * what is stored, the response is immutable — a logo under a given version can
+ * never change, so there is nothing to revalidate. When it does not, the stored
+ * bytes are still served, but briefly and without touching the edge cache: that
+ * gap means a digest refreshed just ahead of the logo pass, and pinning the
+ * previous image against the new version for a year would turn a few seconds of
+ * skew into a permanent wrong answer.
+ */
+/**
+ * The edge cache, when there is one.
+ *
+ * `caches.default` exists on Workers but not in the local harness, and a cache
+ * is an optimisation rather than a dependency: if it is missing, the response
+ * must still be correct. Reaching for it unguarded turned every image route
+ * into a 500 the moment it ran anywhere but Cloudflare.
+ */
+function edgeCache() {
+  try {
+    return (typeof caches !== 'undefined' && caches.default) || null;
+  } catch {
+    return null;
+  }
+}
+
+async function serveTeamLogo(env, request, url, ctx, rawId) {
+  const teamId = decodeURIComponent(rawId || '').trim();
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(teamId)) return placeholderImage();
+
+  const wanted = url.searchParams.get('v');
+  const cache = edgeCache();
+  const cacheKey = new Request(new URL(request.url).toString(), { method: 'GET' });
+  const hit = cache ? await cache.match(cacheKey) : null;
+  if (hit) return hit;
+
+  let obj = null;
+  try {
+    obj = await env.DATA.get(logoObjectKey(teamId));
+  } catch {
+    obj = null;
+  }
+  if (!obj) return placeholderImage();
+
+  const meta = obj.customMetadata || {};
+  const type = meta.contentType
+    || (obj.httpMetadata && obj.httpMetadata.contentType)
+    || 'image/png';
+  const matched = Boolean(wanted && meta.version && wanted === meta.version);
+
+  const body = await obj.arrayBuffer();
+  const out = new Response(body, {
+    headers: {
+      'content-type': type,
+      'cache-control': matched
+        ? 'public, max-age=31536000, immutable'
+        : 'public, max-age=60',
+      'x-content-type-options': 'nosniff',
+      ...(meta.version ? { etag: `"${meta.version}"` } : {}),
+    },
+  });
+  if (matched && cache && ctx && typeof ctx.waitUntil === 'function') {
+    ctx.waitUntil(cache.put(cacheKey, out.clone()));
+  }
+  return out;
+}
+
 /** A drawn stand-in, so a team that cannot supply a logo still reads as a team. */
 function placeholderImage() {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">
-    <path d="M20 3 33 8v12c0 8-5.6 14.3-13 17-7.4-2.7-13-9-13-17V8z"
-          fill="none" stroke="#5A6A5C" stroke-width="2.4" stroke-linejoin="round"/>
-    <path d="M14 20h12M20 14v12" stroke="#5A6A5C" stroke-width="2.4" stroke-linecap="round"/>
-  </svg>`;
-  return new Response(svg, {
+  // A placeholder is cached only briefly. It means "no bytes stored yet", which
+  // the next logo pass is expected to fix, and a long cache would outlive the
+  // fix and make an empty store look like a broken one.
+  return new Response(LOGO_FALLBACK_SVG, {
     headers: {
       'content-type': 'image/svg+xml; charset=utf-8',
-      'cache-control': 'public, max-age=3600',
+      'cache-control': 'public, max-age=60',
     },
   });
 }
