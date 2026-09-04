@@ -1,0 +1,21 @@
+{
+  "name": "espn-fantasy-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare": "node scripts/build.mjs",
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "0.383.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.1.11",
+    "esbuild": "0.25.0",
+    "tailwindcss": "4.1.11",
+    "wrangler": "^4.40.0"
+  }
+}

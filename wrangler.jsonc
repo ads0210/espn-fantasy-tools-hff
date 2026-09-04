@@ -1,0 +1,56 @@
+{
+  "name": "espn-fantasy-tools",
+  "compatibility_date": "2026-08-28",
+  "main": "src/index.js",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    // Every request runs the Worker first. This is what makes the League
+    // Password check unbypassable — without it the edge would serve files in
+    // ./public directly, with no auth check ever running.
+    "run_worker_first": true
+  },
+  "kv_namespaces": [
+    {
+      "binding": "CONFIG",
+      "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "DATA",
+      "bucket_name": "espn-fantasy-tools-data"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "COORDINATOR", "class_name": "DatasetCoordinator" },
+      { "name": "THROTTLE", "class_name": "LoginThrottle" },
+      { "name": "SCORE_TIMELINE", "class_name": "ScoreTimelineDO" }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["DatasetCoordinator"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["LoginThrottle"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["ScoreTimelineDO"]
+    }
+  ],
+  // The platform's only scheduled work. Every other dataset is fetched on
+  // demand, which is right for a snapshot but wrong for a gap-free historical
+  // record: a score progression chart cannot reconstruct the minute nobody was
+  // watching. Declared here rather than in the dashboard so a fork registers it
+  // automatically on its first Workers Builds deploy, with nothing to click.
+  // The handler itself checks whether anything is genuinely live before doing
+  // any work, so this is a near-instant no-op outside game windows.
+  "triggers": {
+    "crons": ["* * * * *"]
+  }
+}
