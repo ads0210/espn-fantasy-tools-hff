@@ -1,5 +1,5 @@
 {
-  "name": "espn-fantasy-tools",
+  "name": "heareff",
   "compatibility_date": "2026-08-28",
   "main": "src/index.js",
   "assets": {
@@ -13,7 +13,7 @@
   "kv_namespaces": [
     {
       "binding": "CONFIG",
-      "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+      "id": "99c2edede7a9497cbf3a90f3b0820cc1"
     }
   ],
   "r2_buckets": [
