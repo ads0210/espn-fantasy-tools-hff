@@ -43,8 +43,9 @@ improvements to the original without losing your settings.
 ### 2. Enable Actions on your fork
 
 In your fork, open the **Actions** tab and click the button confirming you
-understand the workflows. This is what lets your fork stay in sync with the
-original later on. Nothing runs until you allow it.
+understand the workflows. Then, navigate to the "Sync with upstream" action
+in the sidebar and click to enable it. This is what lets your fork stay in 
+sync with the original later on. Nothing runs until you allow it.
 
 ### 3. Create your Cloudflare account
 
