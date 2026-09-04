@@ -1,0 +1,80 @@
+# Keeps a fork up to date with the repository it was forked from.
+#
+# Two GitHub constraints shape this:
+#
+#   Workflows are disabled in a fork until its owner enables them once, from the
+#   Actions tab. There is no way to opt in on their behalf.
+#
+#   The fork holds one local edit — the KV namespace id in wrangler.jsonc — so
+#   this merges rather than force-syncing. A force sync would silently delete
+#   that id and break the deployment.
+#
+# Upstream is discovered from the fork itself, so nothing here needs editing.
+
+name: Sync with upstream
+
+on:
+  schedule:
+    - cron: '0 8 * * *'   # daily, 08:00 UTC
+  workflow_dispatch:       # or run it on demand from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    # Only forks have an upstream to sync from.
+    if: github.event.repository.fork
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find the upstream repository
+        id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          parent=$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.parent.full_name // empty')
+          if [ -z "$parent" ]; then
+            echo "No upstream found; nothing to sync."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Upstream is $parent"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "repo=$parent" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream changes
+        if: steps.upstream.outputs.found == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream "https://github.com/${{ steps.upstream.outputs.repo }}.git"
+          git fetch upstream
+
+          branch="${GITHUB_REF_NAME}"
+          if ! git rev-parse --verify "upstream/${branch}" >/dev/null 2>&1; then
+            echo "Upstream has no ${branch} branch; nothing to do."
+            exit 0
+          fi
+
+          if git merge-base --is-ancestor "upstream/${branch}" HEAD; then
+            echo "Already up to date."
+            exit 0
+          fi
+
+          # A merge preserves the local wrangler.jsonc edit. If upstream ever
+          # changes that same file the merge conflicts and this step fails,
+          # which is the correct outcome: it needs a human, not a silent
+          # overwrite of a live deployment's bindings.
+          if ! git merge --no-edit "upstream/${branch}"; then
+            echo "::error::Merge conflict with upstream. Resolve it manually, most likely in wrangler.jsonc."
+            exit 1
+          fi
+
+          git push origin "${branch}"
