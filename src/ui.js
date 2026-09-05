@@ -502,6 +502,26 @@ export const BASE_CSS = `
   .note { margin-top:14px; margin-bottom:0; font-size:12px; color:var(--ink-3);
           line-height:1.6; }
 
+  /* Team logo box. The image sits in front of a shield that shows only when
+     the image is missing or fails to load, so a team never renders as a blank
+     gap or as initials the league never chose. Size comes from the caller's own
+     class on the same element (.tklogo, .cardlogo, .mlogo). */
+  .lgo { display:inline-flex; align-items:center; justify-content:center; overflow:hidden; }
+  .lgo > img, .lgo > svg { width:100%; height:100%; object-fit:contain; display:block; }
+  .lgo > svg { display:none; }
+  .lgo.lgofail > svg, .lgo > img[hidden] + svg { display:block; }
+
+  /* Something the site needs a person to act on. Amber rather than red: the
+     site is still serving, it just cannot refresh until somebody intervenes. */
+  .alertbar { display:flex; align-items:flex-start; gap:12px; margin:0 0 18px;
+    padding:13px 15px; border:1px solid var(--signal); background:var(--signal-soft); }
+  .alertbar .alerticon { flex:none; width:19px; height:19px; margin-top:1px; color:var(--signal); }
+  .alertbar .alerticon svg { width:100%; height:100%; display:block; }
+  .alertbar b { display:block; font-size:11.5px; font-weight:900; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--signal); }
+  .alertbar p { margin:5px 0 0; font-size:12.5px; line-height:1.55; color:var(--ink-2); }
+  .alertbar a { color:var(--ink); font-weight:800; text-underline-offset:3px; }
+
   /* Empty states are designed, not apologetic: a marked-out area of field. */
   .placeholder { position:relative; overflow:hidden; padding:20px 16px; text-align:center;
     border:1px dashed var(--line-2); background:
@@ -674,6 +694,24 @@ export function displayTitle(text, { underline = true, sub = '' } = {}) {
  * A listbox that can carry the site's type treatment on its selected value.
  * Emits a bubbling `xselect` event carrying the chosen value.
  */
+/**
+ * The stand-in for a team logo that is missing or will not load.
+ *
+ * One definition, used by the server-rendered pages, the React tools and the
+ * /api/logo fallback response, so a team without a logo reads identically
+ * everywhere. It is deliberately a drawn shield rather than initials or an
+ * abbreviation: an invented two-letter code reads as real data in exactly the
+ * way "Team 1" does, and the league never chose it.
+ *
+ * Sized by its container, not by the width/height attributes.
+ */
+export const LOGO_FALLBACK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" '
+  + 'width="40" height="40" role="img" aria-hidden="true" focusable="false">'
+  + '<path d="M20 3 33 8v12c0 8-5.6 14.3-13 17-7.4-2.7-13-9-13-17V8z" fill="none" '
+  + 'stroke="#5A6A5C" stroke-width="2.4" stroke-linejoin="round"/>'
+  + '<path d="M14 20h12M20 14v12" stroke="#5A6A5C" stroke-width="2.4" stroke-linecap="round"/>'
+  + '</svg>';
+
 export function selectField({ id, value = '', placeholder = 'Select', options = [] }) {
   const current = options.find((o) => String(o.value) === String(value));
   return `
