@@ -39,6 +39,7 @@
  */
 
 import { DATASETS, getDataset, planBatches } from './datasets.js';
+import { refreshLogos } from './logos.js';
 import { coordinatorRefresh } from './dedupe.js';
 
 const JOB_KEY = 'jobs/prime.json';
@@ -206,6 +207,15 @@ export async function runPrimeBatch(env, cfg, { restart = false } = {}) {
     } else {
       job.complete = true;
       job.finishedAt = new Date().toISOString();
+      // Copy the team logos now that the team view exists, so the dashboard has
+      // them the first time anyone opens it rather than on the next cron pass.
+      // A failure here is not a prime failure: the pass runs every five minutes
+      // anyway, and a missing logo degrades to the shield.
+      try {
+        await refreshLogos(env, cfg);
+      } catch (err) {
+        job.logoError = String((err && err.message) || err).slice(0, 160);
+      }
     }
   }
 
