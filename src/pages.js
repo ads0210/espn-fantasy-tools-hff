@@ -6,7 +6,8 @@
  * the League Password.
  */
 
-import { shell, passwordField, displayTitle, selectField, esc, TEAM_COOKIE } from './ui.js';
+import { shell, passwordField, displayTitle, selectField, esc, LOGO_FALLBACK_SVG, TEAM_COOKIE }
+  from './ui.js';
 
 export { THEME_COOKIE, TEAM_COOKIE } from './ui.js';
 
@@ -78,8 +79,30 @@ const TOOL_ICONS = {
 
 export function dashboardPage({
   leagueName, season, theme, reduceMotion, tools, teams, selectedTeamId,
-  initial = null, board = null,
+  initial = null, board = null, espnAuth = null,
 }) {
+  /* Expired ESPN credentials are shown to everyone signed in, not just to the
+     administrator, because the site has no way to tell them apart: the Admin
+     Password has no persistent session by design. Everyone therefore sees the
+     same message, written so a member who cannot fix it still understands why
+     the numbers have stopped moving and who to ask. */
+  const credentialAlert = espnAuth && espnAuth.failing ? `
+    <div class="alertbar" role="status">
+      <span class="alerticon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 9v4"/><path d="M12 17h.01"/>
+          <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>
+        </svg>
+      </span>
+      <span>
+        <b>ESPN sign-in has expired</b>
+        <p>The site\u2019s stored ESPN credentials are no longer being accepted, so
+        league data has stopped updating\u2014everything below is the last copy that
+        was fetched successfully. Whoever administers this site can replace them in
+        <a href="/config">Site Configuration</a>, which asks for the Admin Password.</p>
+      </span>
+    </div>` : '';
   const tiles = tools.map((t, i) => `
     <a class="tile" href="${esc(t.href)}">
       <span class="tileidx">${String(i + 1).padStart(2, '0')}</span>
@@ -103,6 +126,7 @@ export function dashboardPage({
     { underline: false, sub: season ? `${season} Season` : '' });
 
   const body = `
+    ${credentialAlert}
     <div class="panel tight reveal">
       <div class="tickhead">
         <span class="dot" id="fdot"></span>
@@ -384,9 +408,18 @@ function esc(s) {
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 function logo(url, alt, cls) {
-  if (!url) return '<span class="' + (cls || 'tklogo') + '"></span>';
-  return '<img class="' + (cls || 'tklogo') + '" src="' + esc(url) + '" alt="' + esc(alt) +
-    '" referrerpolicy="no-referrer" onerror="this.style.visibility=\\'hidden\\'">';
+  /* A team with no logo, or one whose image will not load, gets the shield —
+     never a blank gap and never invented initials. The failure path is
+     onerror="this.hidden=true" and a CSS sibling rule rather than a handler
+     that rewrites markup: this function is emitted inside a template literal,
+     where a quoted string in an inline handler needs escaping that does not
+     survive the trip to the browser. */
+  var c = cls || 'tklogo';
+  var shield = '${LOGO_FALLBACK_SVG}';
+  if (!url) return '<span class="' + c + ' lgo lgofail">' + shield + '</span>';
+  return '<span class="' + c + ' lgo"><img src="' + esc(url) + '" alt="' + esc(alt) +
+    '" referrerpolicy="no-referrer" loading="lazy" onerror="this.hidden=true">' +
+    shield + '</span>';
 }
 
 /* ---------------------------------------------------------------- tickers */
