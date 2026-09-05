@@ -11,6 +11,7 @@
  */
 
 import { fetchPart, mapLimit, inspectBody } from './espn.js';
+import { noteEspnAuth, readAuthOutcome } from './espnhealth.js';
 import { headPart, getPart, putPart, writeStatus, readStatus, isFresh, ageSeconds } from './store.js';
 import { canCallEspn } from './config.js';
 import { derivationFor } from './derive.js';
@@ -145,7 +146,7 @@ export async function refreshDataset(env, cfg, dataset, { force = false } = {}) 
   });
 
   const fetched = await mapLimit(work, CONCURRENCY, async ({ p, existing }) => {
-    const res = await fetchPart(cfg, p, { auth: dataset.auth });
+    const res = await fetchPart(cfg, p, { auth: dataset.auth, timeoutMs: dataset.timeoutMs });
     // Always inspect, including on failure — a 403's body is what identifies
     // an Akamai denial vs. a genuine permissions problem, and leaving it
     // uncaptured costs a whole extra diagnose-and-redeploy round trip.
@@ -214,6 +215,14 @@ export async function refreshDataset(env, cfg, dataset, { force = false } = {}) 
 
   const all = results.concat(fetched);
   all.sort((a, b) => String(a.part).localeCompare(String(b.part), undefined, { numeric: true }));
+
+  // Only an authenticated dataset can say anything about the credentials. An
+  // unauthenticated 403 is ESPN's bot protection, which is a different problem
+  // wearing the same status code.
+  if (dataset.auth && fetched.length) {
+    const outcome = readAuthOutcome(fetched);
+    if (outcome) await noteEspnAuth(env, outcome);
+  }
 
   const counts = {
     fetched: all.filter((r) => r.action === 'fetched').length,

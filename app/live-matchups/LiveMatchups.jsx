@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { PALETTES, BASE_CSS, BACKDROP } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
+import TeamLogo from "../shared/TeamLogo.jsx";
 
 /**
  * Live Matchups.
@@ -937,16 +938,10 @@ function MatchCard({ g, tz, timelineRows, events, h2h, pinned, expandAll }) {
   const leader = marginNow >= 0 ? g.home : g.away;
   const projLeader = marginProj >= 0 ? g.home : g.away;
 
-  // The logo when the team has one, ESPN's own abbreviation when it does not.
-  // Never an invented code: an abbreviation the league never chose reads as
-  // real data in exactly the way placeholder identity does.
-  const logoBox = (s) => (
-    <div className="mlogo">
-      {s.logo
-        ? <img src={s.logo} alt="" loading="lazy" onError={(e) => { e.target.style.display = "none"; }} />
-        : <span>{s.abbrev || initials(s.name)}</span>}
-    </div>
-  );
+  // The logo when the team has one, the shield when it does not. Never an
+  // invented code: an abbreviation the league never chose reads as real data in
+  // exactly the way placeholder identity does.
+  const logoBox = (s) => <TeamLogo src={s.logo} className="mlogo" />;
 
   const teamBlock = (s, sideKey, wins, loses) => (
     <div className={`mteam ${sideKey}${wins ? " winner" : ""}${loses ? " loser" : ""}`}>
@@ -1253,10 +1248,8 @@ export default function LiveMatchups() {
         .mcard-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
         .mteam { display:flex; align-items:center; gap:10px; flex:1; min-width:0; }
         .mteam.away { justify-content:flex-end; text-align:right; }
-        .mlogo { flex:none; width:44px; height:44px; display:flex; align-items:center; justify-content:center;
-          background:var(--inset); border:1px solid var(--line-2); font-size:11px; font-weight:900;
-          letter-spacing:.02em; color:var(--ink-2); overflow:hidden; }
-        .mlogo img { width:100%; height:100%; object-fit:contain; display:block; }
+        .mlogo { flex:none; width:44px; height:44px;
+          background:var(--inset); border:1px solid var(--line-2); }
         .mteam-info { display:flex; flex-direction:column; gap:1px; min-width:0; }
         .mname { font-size:13.5px; font-weight:900; letter-spacing:-.01em;
           overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

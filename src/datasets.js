@@ -67,6 +67,24 @@ const CDN_HOST = 'https://cdn.espn.com';
 const NOW_HOST = 'https://now.core.api.espn.com';
 const WEB_HOST = 'https://site.web.api.espn.com';
 
+/**
+ * Fetch budgets for payloads that a flat 15 seconds does not cover.
+ *
+ * The default suits a 35KB league view; it does not suit a 17MB player pool
+ * when ESPN is under load. Measured on 2026-09-04, days before week one, a
+ * 35KB view answered in 212ms on the same host and with the same cookies that
+ * a 1.7MB view could not finish inside 30 seconds.
+ *
+ * That mattered far more than it should have. An aborted fetch is a failure, a
+ * failure is retried three times, and six datasets share one prime call — so a
+ * slow upstream turned into roughly two minutes per request and a pull that ran
+ * past half an hour. Sizes below are the real stored sizes of a single part.
+ */
+const TIMEOUT = {
+  LARGE: 45000,   // ~1-4MB
+  HUGE: 90000,    // 8MB and up
+};
+
 const leagueBase = (cfg) =>
   `${FANTASY_HOST}/apis/v3/games/ffl/seasons/${cfg.season}/segments/0/leagues/${cfg.leagueId}`;
 
@@ -119,6 +137,7 @@ export const DATASETS = [
   },
   {
     key: 'rosters',
+    timeoutMs: TIMEOUT.LARGE,
     label: 'Rosters (teams + roster contents)',
     group: 'fantasy',
     ttl: TTL.LIVE,
@@ -143,6 +162,7 @@ export const DATASETS = [
   },
   {
     key: 'matchups',
+    timeoutMs: TIMEOUT.LARGE,
     label: 'Matchup schedule & scores',
     group: 'fantasy',
     ttl: TTL.LIVE,
@@ -165,6 +185,7 @@ export const DATASETS = [
   },
   {
     key: 'live_scoring',
+    timeoutMs: TIMEOUT.LARGE,
     label: 'Live in-game fantasy scoring',
     group: 'fantasy',
     ttl: TTL.LIVE,
@@ -232,6 +253,7 @@ export const DATASETS = [
   },
   {
     key: 'league_players',
+    timeoutMs: TIMEOUT.LARGE,
     label: 'League-scoped player pool (with onTeamId)',
     group: 'fantasy',
     ttl: TTL.MIN_1,
@@ -248,6 +270,7 @@ export const DATASETS = [
   },
   {
     key: 'player_pool',
+    timeoutMs: TIMEOUT.HUGE,
     label: 'Bulk player pool (league defaults, ADP/ranks)',
     group: 'fantasy',
     ttl: TTL.MIN_1,
@@ -395,6 +418,7 @@ export const DATASETS = [
   },
   {
     key: 'nfl_injuries',
+    timeoutMs: TIMEOUT.HUGE,
     label: 'League-wide injury report',
     group: 'nfl_site',
     ttl: TTL.MIN_5,
@@ -485,6 +509,7 @@ export const DATASETS = [
   },
   {
     key: 'nfl_team_rosters',
+    timeoutMs: TIMEOUT.LARGE,
     label: 'Full NFL team rosters (per team)',
     group: 'nfl_site',
     ttl: TTL.MIN_30,
@@ -494,6 +519,7 @@ export const DATASETS = [
   },
   {
     key: 'nfl_depth_charts',
+    timeoutMs: TIMEOUT.LARGE,
     label: 'Depth charts (per team)',
     group: 'nfl_site',
     ttl: TTL.MIN_30,
@@ -503,6 +529,7 @@ export const DATASETS = [
   },
   {
     key: 'nfl_team_schedules',
+    timeoutMs: TIMEOUT.LARGE,
     label: 'Team schedules (per team)',
     group: 'nfl_site',
     ttl: TTL.HOUR_6,
@@ -675,6 +702,7 @@ export const DATASETS = [
   },
   {
     key: 'espn_news_all',
+    timeoutMs: TIMEOUT.LARGE,
     label: 'Real-time general sports news feed',
     group: 'realtime',
     ttl: TTL.MIN_5,
