@@ -28,6 +28,13 @@ export const TOOLS = [
     href: '/apps/live-matchups/',
     defaultVisibility: VISIBILITY.VISIBLE,
   },
+  {
+    key: 'hall-of-fame',
+    name: 'Hall of Fame',
+    description: 'Champions, all-time standings and every team\u2019s record.',
+    href: '/apps/hall-of-fame/',
+    defaultVisibility: VISIBILITY.VISIBLE,
+  },
 ];
 
 /**
