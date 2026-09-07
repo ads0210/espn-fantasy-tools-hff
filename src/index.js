@@ -39,7 +39,7 @@ export { DatasetCoordinator } from './coordinator.js';
 export { LoginThrottle } from './throttle.js';
 export { ScoreTimelineDO } from './scoretimeline.js';
 
-const BUILD_MARKER = 'r48';
+const BUILD_MARKER = 'r57';
 
 export default {
   async fetch(request, env, ctx) {
@@ -312,6 +312,8 @@ async function route(request, env, ctx) {
     const [key, partRaw] = rest.split('/');
     return serveDataset(env, cfg, key, partRaw || 'main', url, ctx);
   }
+
+  if (path === '/api/hof') return hallOfFame(env, ctx);
 
   if (path === '/api/img') return serveImage(request, url, ctx);
 
@@ -867,6 +869,36 @@ async function liveH2h(env, ctx) {
   } catch {
     return json({ ok: true, ready: false, pairs: {}, seasons: 0 });
   }
+}
+
+/**
+ * The whole record book in one read.
+ *
+ * Both digests are served together because the page needs both on first paint
+ * and they are rebuilt in the same pass: splitting them into two endpoints
+ * would double the round trips to show one screen. Neither touches ESPN on this
+ * path — the archive is immutable and both are refreshed on the slow poll.
+ *
+ * An absent digest is not an error. A league that has never played a season has
+ * nothing to put here, and the tool renders its own designed empty state for
+ * that rather than an apology.
+ */
+async function hallOfFame(env, ctx) {
+  const empty = { ok: true, ready: false, rows: [], pairs: {}, records: {}, champions: [], seasonMeta: {} };
+  const bookObj = await ensureDataset(env, 'league_history_digest', ctx);
+  if (!bookObj) return json(empty);
+
+  let book = null;
+  try { book = await bookObj.json(); } catch { book = null; }
+  if (!book || !Array.isArray(book.rows)) return json(empty);
+
+  let pairs = {};
+  const pairObj = await ensureDataset(env, 'h2h_full_digest', ctx);
+  if (pairObj) {
+    try { pairs = (await pairObj.json()).pairs || {}; } catch { pairs = {}; }
+  }
+
+  return json({ ok: true, ready: true, ...book, pairs });
 }
 
 /**

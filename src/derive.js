@@ -922,9 +922,718 @@ export async function buildHeadToHeadHistory({ teamIds, readPart, readCurrent })
   };
 }
 
+/* ============================================================================
+ * Hall of Fame
+ * ==========================================================================*/
+
 /**
- * Registry of derivations, keyed by the source dataset. Each entry names the
- * dataset the digest is written to and the function that produces it.
+ * Turn ESPN's bracket type into the round a reader would name.
+ *
+ * `playoffTierType` says which bracket a fixture belongs to, never which round
+ * of it — every game of the championship bracket, semifinal and final alike,
+ * comes back as WINNERS_BRACKET. A game log that repeats that string for three
+ * different rounds tells the reader nothing, so the round is reconstructed from
+ * position instead: the winners bracket is counted back from the season's last
+ * playoff week, and a consolation ladder is counted forward from its first.
+ *
+ * Deliberately not attempted: a placement-specific label such as "5th Place
+ * Game". That needs the consolation bracket's real seeding, which is not
+ * present in the payload, and a wrong placement reads as fact.
+ */
+export function playoffRoundLabel(tier, week, { firstPlayoffWeek, lastPlayoffWeek }) {
+  if (!tier || tier === 'NONE') return null;
+  const fromEnd = Number(lastPlayoffWeek) - Number(week);
+  const isWinners = String(tier).toUpperCase().includes('WINNER');
+  if (isWinners) {
+    if (fromEnd <= 0) return 'Championship';
+    if (fromEnd === 1) return 'Semifinal';
+    if (fromEnd === 2) return 'Quarterfinal';
+    return `Playoff Round ${Number(week) - Number(firstPlayoffWeek) + 1}`;
+  }
+  if (fromEnd <= 0) return 'Consolation Final';
+  if (fromEnd === 1) return 'Consolation Semifinal';
+  return `Consolation Round ${Number(week) - Number(firstPlayoffWeek) + 1}`;
+}
+
+const pairKeyOf = (a, b) => (a < b ? `${a}:${b}` : `${b}:${a}`);
+const r1 = (n) => Math.round(Number(n || 0) * 10) / 10;
+
+function displayName(t) {
+  return t.name || `${t.location || ''} ${t.nickname || ''}`.trim() || `Team ${t.id}`;
+}
+
+/**
+ * Walk every stored season plus the live one, yielding a normalised view of
+ * each. Both Hall of Fame digests read history the same way, so the traversal
+ * lives in one place rather than being written twice and drifting.
+ */
+async function eachSeason({ teamIds, readPart, readCurrent }, visit) {
+  const parts = [...(teamIds || [])].sort();
+  for (const part of parts) {
+    let doc = null;
+    try { doc = await readPart(part); } catch { doc = null; }
+    const season = Array.isArray(doc) ? doc[0] : doc;
+    if (!season || !Array.isArray(season.schedule)) continue;
+    visit(season, season.seasonId || Number(part) || null, false);
+  }
+  let current = null;
+  try { current = readCurrent ? await readCurrent() : null; } catch { current = null; }
+  if (current && Array.isArray(current.schedule)) {
+    visit(current, current.seasonId || null, true);
+  }
+  return Boolean(current && Array.isArray(current.schedule));
+}
+
+/**
+ * Played fixtures only, with the round already named.
+ *
+ * Each matchup also carries `weeks`: its constituent scoring periods, taken
+ * from `pointsByScoringPeriod`. This matters because a postseason matchup in
+ * this league can span two NFL weeks, so ESPN's `totalPoints` for one is a
+ * two-week sum. Comparing that against a one-week regular-season score
+ * produced a "highest single-game score" no team ever actually scored. Any
+ * record about scoring reads `weeks`; anything about a result reads the
+ * matchup.
+ *
+ * `postseason` is true for every fixture outside the regular season, winners
+ * bracket and consolation ladder alike. The bracket a game belongs to is still
+ * named for display, but for splitting a stat into regular season and
+ * postseason the only question is whether the regular season had ended.
+ */
+function playedGames(season, year) {
+  const weeks = season.schedule
+    .filter((m) => m.playoffTierType && m.playoffTierType !== 'NONE')
+    .map((m) => Number(m.matchupPeriodId || 0))
+    .filter((w) => w > 0);
+  const bounds = {
+    firstPlayoffWeek: weeks.length ? Math.min(...weeks) : 0,
+    lastPlayoffWeek: weeks.length ? Math.max(...weeks) : 0,
+  };
+  const out = [];
+  for (const m of season.schedule) {
+    const h = m.home, a = m.away;
+    if (!h || !a || h.teamId == null || a.teamId == null) continue;
+    const hp = Number(h.totalPoints || 0);
+    const ap = Number(a.totalPoints || 0);
+    if (!hp && !ap) continue;                       // never played
+    if (m.winner === 'UNDECIDED') continue;         // still in progress
+
+    const hBy = h.pointsByScoringPeriod || {};
+    const aBy = a.pointsByScoringPeriod || {};
+    const periods = [...new Set([...Object.keys(hBy), ...Object.keys(aBy)])]
+      .map(Number).filter((n) => Number.isFinite(n)).sort((x, y) => x - y);
+    const perWeek = periods
+      .map((p) => ({ period: p, homePts: r1(hBy[p] || 0), awayPts: r1(aBy[p] || 0) }))
+      .filter((w) => w.homePts || w.awayPts);
+
+    const tier = m.playoffTierType;
+    out.push({
+      season: year,
+      week: Number(m.matchupPeriodId || 0) || null,
+      homeId: h.teamId, awayId: a.teamId,
+      homePts: r1(hp), awayPts: r1(ap),
+      round: playoffRoundLabel(tier, m.matchupPeriodId, bounds),
+      postseason: Boolean(tier && tier !== 'NONE'),
+      // A matchup with no per-period breakdown is treated as a single week, so
+      // nothing silently drops out of the scoring pools.
+      weeks: perWeek.length ? perWeek
+        : [{ period: Number(m.matchupPeriodId || 0) || null, homePts: r1(hp), awayPts: r1(ap) }],
+    });
+  }
+  return out;
+}
+
+/**
+ * The uncapped pairwise history.
+ *
+ * Deliberately separate from `h2h_digest`, which caps each pair at 24 meetings
+ * for Live Matchups' compact card. Capping here would silently truncate the
+ * very thing the Hall of Fame exists to show, and widening the existing digest
+ * would grow a payload Live Matchups reads on every page view.
+ */
+export async function buildHeadToHeadFull(ctx) {
+  const pairs = {};
+  let seasons = 0;
+  const blank = () => ({
+    lowWins: 0, highWins: 0, ties: 0, lowPoints: 0, highPoints: 0,
+    // Kept separately so a head-to-head card can show the regular season and
+    // the postseason as their own records rather than one blended number.
+    regular: { lowWins: 0, highWins: 0, ties: 0, lowPoints: 0, highPoints: 0 },
+    post: { lowWins: 0, highWins: 0, ties: 0, lowPoints: 0, highPoints: 0 },
+    games: [],
+  });
+  const currentIncluded = await eachSeason(ctx, (season, year) => {
+    seasons += 1;
+    for (const g of playedGames(season, year)) {
+      const key = pairKeyOf(g.homeId, g.awayId);
+      const [lowId] = key.split(':').map(Number);
+      const lowIsHome = g.homeId === lowId;
+      const lowPts = lowIsHome ? g.homePts : g.awayPts;
+      const highPts = lowIsHome ? g.awayPts : g.homePts;
+      if (!pairs[key]) pairs[key] = blank();
+      const rec = pairs[key];
+      const phase = g.postseason ? rec.post : rec.regular;
+      for (const bucket of [rec, phase]) {
+        bucket.lowPoints = r1(bucket.lowPoints + lowPts);
+        bucket.highPoints = r1(bucket.highPoints + highPts);
+        if (lowPts > highPts) bucket.lowWins += 1;
+        else if (highPts > lowPts) bucket.highWins += 1;
+        else bucket.ties += 1;
+      }
+      rec.games.push({
+        season: g.season, week: g.week, lowPts, highPts, round: g.round,
+        postseason: g.postseason,
+        // Per-week scoring for this fixture, low team first, so a two-week
+        // postseason matchup contributes two values to any scoring pool
+        // instead of one doubled one.
+        weeks: g.weeks.map((w) => ({
+          period: w.period,
+          lowPts: lowIsHome ? w.homePts : w.awayPts,
+          highPts: lowIsHome ? w.awayPts : w.homePts,
+        })),
+      });
+    }
+  });
+
+  // Oldest first: this log is read as a chronology, not as a recent-form list.
+  for (const key of Object.keys(pairs)) {
+    pairs[key].games.sort((x, y) => (x.season - y.season) || ((x.week || 0) - (y.week || 0)));
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    seasons,
+    currentSeasonIncluded: currentIncluded,
+    pairCount: Object.keys(pairs).length,
+    count: Object.keys(pairs).length,
+    pairs,
+  };
+}
+
+/** Every team tied at the extreme, never just the first one found. */
+function topHolders(items, valueOf, { min = null, higherIsBetter = true } = {}) {
+  const eligible = items.filter((it) => {
+    const v = valueOf(it);
+    return v != null && Number.isFinite(v) && (min == null || it._sample >= min);
+  });
+  if (!eligible.length) return [];
+  let best = valueOf(eligible[0]);
+  for (const it of eligible) {
+    const v = valueOf(it);
+    if (higherIsBetter ? v > best : v < best) best = v;
+  }
+  return eligible.filter((it) => Math.abs(valueOf(it) - best) < 1e-9);
+}
+
+/**
+ * The league record book: one row per franchise, plus league-wide superlatives
+ * and the champion of each completed season.
+ */
+export async function buildLeagueHistoryDigest(rawCtx) {
+  // This build walks the archive twice — once for the record book, once for the
+  // pairwise history it folds in — so part reads are memoised. Without this the
+  // second pass would repeat every R2 get for no new information.
+  const memo = new Map();
+  const ctx = {
+    ...rawCtx,
+    readPart: async (part) => {
+      if (!memo.has(part)) memo.set(part, await rawCtx.readPart(part));
+      return memo.get(part);
+    },
+  };
+  if (rawCtx.readCurrent) {
+    let currentMemo;
+    let haveCurrent = false;
+    ctx.readCurrent = async () => {
+      if (!haveCurrent) { currentMemo = await rawCtx.readCurrent(); haveCurrent = true; }
+      return currentMemo;
+    };
+  }
+
+  const teams = {};                       // id -> accumulating row
+  const phases = {};                      // id -> { all, regular, post }
+  const seasonMeta = {};                  // year -> { size, playoffTeamCount }
+  const owners = {};                      // id -> owner display name
+  const gamesByTeam = {};                 // id -> chronological matchup list
+  const champions = [];
+  let currentSeason = null;
+
+  /** One phase's running totals for a team. */
+  function newPhase() {
+    return {
+      wins: 0, losses: 0, ties: 0, pointsFor: 0, pointsAgainst: 0,
+      // Scoring pools are per scoring period, never per matchup: a two-week
+      // postseason matchup puts two values in, not one doubled one.
+      weekScores: [], margins: [],
+    };
+  }
+
+  const ensure = (id) => {
+    if (!teams[id]) {
+      teams[id] = {
+        teamId: Number(id), name: `Team ${id}`, abbrev: '',
+        seasons: [], championships: [], runnerUp: [], thirdPlace: [], lastPlace: [],
+        finishes: [], playoffAppearances: 0, seasonsCompleted: 0,
+        transactions: { acquisitions: 0, drops: 0, trades: 0 },
+        seasonLog: [],
+      };
+      // Results are kept per phase and combined on the way out, so every stat
+      // that can differ between the regular season and the postseason has both
+      // without a second pass over the archive.
+      phases[id] = {
+        all: newPhase(), regular: newPhase(), post: newPhase(),
+      };
+      gamesByTeam[id] = [];
+    }
+    return teams[id];
+  };
+
+  const currentIncluded = await eachSeason(ctx, (season, year, isCurrent) => {
+    if (isCurrent) currentSeason = year;
+    const settings = season.settings || {};
+    const sched = settings.scheduleSettings || {};
+    seasonMeta[year] = {
+      size: Number(settings.size || (season.teams || []).length || 0),
+      playoffTeamCount: Number(sched.playoffTeamCount || 0),
+      inProgress: Boolean(isCurrent),
+    };
+
+    // Owner names come from the season's own member list where present, so a
+    // franchise that changed hands is credited to whoever held it that year.
+    const memberName = {};
+    for (const mem of season.members || []) {
+      const id = mem.id || mem.displayName;
+      const full = `${mem.firstName || ''} ${mem.lastName || ''}`.trim();
+      if (id) memberName[id] = full || mem.displayName || '';
+    }
+
+    for (const t of season.teams || []) {
+      const row = ensure(t.id);
+      row.name = displayName(t);
+      row.abbrev = t.abbrev || row.abbrev;
+      if (!row.seasons.includes(year)) row.seasons.push(year);
+      const own = memberName[t.primaryOwner] || (t.owners || []).map((o) => memberName[o]).find(Boolean);
+      if (own) owners[t.id] = own;
+
+      const tc = t.transactionCounter || {};
+      // Counters are per-season totals, so they add across the archive.
+      row.transactions.acquisitions += Number(tc.acquisitions || 0);
+      row.transactions.drops += Number(tc.drops || 0);
+      row.transactions.trades += Number(tc.trades || 0);
+
+      const rank = Number(t.rankCalculatedFinal || 0);
+      const rec = (t.record && t.record.overall) || {};
+      if (!isCurrent) {
+        row.seasonsCompleted += 1;
+        if (rank > 0) {
+          row.finishes.push({ year, rank });
+          if (rank === 1) row.championships.push(year);
+          else if (rank === 2) row.runnerUp.push(year);
+          else if (rank === 3) row.thirdPlace.push(year);
+          if (rank === seasonMeta[year].size) row.lastPlace.push(year);
+        }
+        const seed = Number(t.playoffSeed || 0);
+        if (seed > 0 && seasonMeta[year].playoffTeamCount > 0 &&
+            seed <= seasonMeta[year].playoffTeamCount) {
+          row.playoffAppearances += 1;
+        }
+        row.seasonLog.push({
+          year,
+          wins: Number(rec.wins || 0), losses: Number(rec.losses || 0), ties: Number(rec.ties || 0),
+          pf: r1(rec.pointsFor), pa: r1(rec.pointsAgainst),
+          rank: rank || null, size: seasonMeta[year].size,
+        });
+      }
+      if (rank === 1 && !isCurrent) {
+        champions.push({ year, teamId: t.id });
+      }
+    }
+
+    // Records and points are accumulated from the games themselves rather than
+    // from ESPN's per-season totals, so the current season's part-played record
+    // counts exactly the games that have actually finished.
+    for (const g of playedGames(season, year)) {
+      ensure(g.homeId); ensure(g.awayId);
+      const homeWon = g.homePts > g.awayPts, tie = g.homePts === g.awayPts;
+
+      for (const [id, own, opp, won] of [
+        [g.homeId, g.homePts, g.awayPts, homeWon],
+        [g.awayId, g.awayPts, g.homePts, !homeWon && !tie],
+      ]) {
+        const buckets = [phases[id].all, g.postseason ? phases[id].post : phases[id].regular];
+        for (const b of buckets) {
+          b.pointsFor = r1(b.pointsFor + own);
+          b.pointsAgainst = r1(b.pointsAgainst + opp);
+          if (tie) b.ties += 1;
+          else if (won) b.wins += 1;
+          else b.losses += 1;
+          // Every scoring period of the fixture enters the pool on its own.
+          for (const w of g.weeks) {
+            const wOwn = id === g.homeId ? w.homePts : w.awayPts;
+            const wOpp = id === g.homeId ? w.awayPts : w.homePts;
+            b.weekScores.push({ points: wOwn, season: g.season, week: w.period, opponent: id === g.homeId ? g.awayId : g.homeId });
+            b.margins.push({ margin: r1(wOwn - wOpp), season: g.season, week: w.period, opponent: id === g.homeId ? g.awayId : g.homeId });
+          }
+        }
+      }
+
+      // Streaks and the chronology read matchups, not weeks: a two-week
+      // postseason matchup is one result, however many weeks it covered.
+      gamesByTeam[g.homeId].push({ season: g.season, week: g.week, own: g.homePts, opp: g.awayPts, oppId: g.awayId, round: g.round, postseason: g.postseason });
+      gamesByTeam[g.awayId].push({ season: g.season, week: g.week, own: g.awayPts, opp: g.homePts, oppId: g.homeId, round: g.round, postseason: g.postseason });
+    }
+  });
+
+  // Current identity and active status: a franchise is active when it is on
+  // this season's roster. `isActive` on the payload is unreliable — it reads
+  // false for every team in every season, current ones included — so presence
+  // in the live roster is the only trustworthy signal.
+  const sources = (ctx && ctx.sources) || {};
+  const liveTeams = Array.isArray(sources.league_teams && sources.league_teams.teams)
+    ? sources.league_teams.teams : [];
+  const activeIds = new Set(liveTeams.map((t) => t.id));
+  for (const t of liveTeams) {
+    const row = ensure(t.id);
+    row.name = displayName(t);
+    row.abbrev = t.abbrev || row.abbrev;
+    // Never the raw ESPN URL. An uploaded logo lives on mystique-api and
+    // answers 401 without the league's ESPN session, so a browser cannot fetch
+    // it at all, and the other kinds sit on assorted hosts. Every other digest
+    // routes through the same R2-backed proxy; a per-host split would render
+    // one league two different ways.
+    if (t.logo) row.logo = teamLogoUrl(t.id, t.logo);
+  }
+  for (const mem of (sources.league_teams && sources.league_teams.members) || []) {
+    const full = `${mem.firstName || ''} ${mem.lastName || ''}`.trim();
+    for (const t of liveTeams) {
+      if (t.primaryOwner === mem.id || (t.owners || []).includes(mem.id)) {
+        if (full) owners[t.id] = full;
+      }
+    }
+  }
+
+  /** Reduce one phase's pools into the shape the tool renders. */
+  function phaseStats(p) {
+    const played = p.wins + p.losses + p.ties;
+    const best = (list, key, higher) => {
+      if (!list.length) return null;
+      let pick = list[0];
+      for (const it of list) {
+        if (higher ? it[key] > pick[key] : it[key] < pick[key]) pick = it;
+      }
+      return pick;
+    };
+    const wins = p.margins.filter((m) => m.margin > 0);
+    const losses = p.margins.filter((m) => m.margin < 0);
+    return {
+      record: {
+        wins: p.wins, losses: p.losses, ties: p.ties, games: played,
+        winPct: played ? (p.wins + p.ties * 0.5) / played : 0,
+      },
+      points: {
+        for: r1(p.pointsFor), against: r1(p.pointsAgainst),
+        diff: r1(p.pointsFor - p.pointsAgainst),
+        // Per scoring period, not per matchup, so a two-week postseason
+        // fixture does not read as one enormous game.
+        perGame: p.weekScores.length ? r1(p.pointsFor / p.weekScores.length) : 0,
+        weeks: p.weekScores.length,
+      },
+      high: best(p.weekScores, 'points', true),
+      low: best(p.weekScores, 'points', false),
+      biggestWin: best(wins, 'margin', true),
+      biggestLoss: losses.length
+        ? (() => { const w = best(losses, 'margin', false); return { ...w, margin: r1(Math.abs(w.margin)) }; })()
+        : null,
+      closestWin: best(wins, 'margin', false),
+      closestLoss: losses.length
+        ? (() => { const w = best(losses, 'margin', true); return { ...w, margin: r1(Math.abs(w.margin)) }; })()
+        : null,
+    };
+  }
+
+  const rows = Object.values(teams).map((row) => {
+    const games = (gamesByTeam[row.teamId] || [])
+      .sort((a, b) => (a.season - b.season) || ((a.week || 0) - (b.week || 0)));
+
+    // Streaks run as one continuous chronology, never reset at a season
+    // boundary — a team that closed one year on four wins and opened the next
+    // with three is on a seven-game run, and saying otherwise loses the record.
+    let bestWin = 0, bestLoss = 0, runType = null, runLen = 0;
+    let bestWinAt = null, bestLossAt = null, runAt = null;
+    for (const g of games) {
+      const res = g.own > g.opp ? 'W' : (g.own < g.opp ? 'L' : 'T');
+      if (res === runType) { runLen += 1; }
+      else { runType = res; runLen = 1; runAt = { season: g.season, week: g.week }; }
+      if (res === 'W' && runLen > bestWin) { bestWin = runLen; bestWinAt = { ...runAt, endSeason: g.season, endWeek: g.week }; }
+      if (res === 'L' && runLen > bestLoss) { bestLoss = runLen; bestLossAt = { ...runAt, endSeason: g.season, endWeek: g.week }; }
+    }
+
+    const all = phaseStats(phases[row.teamId].all);
+    const regular = phaseStats(phases[row.teamId].regular);
+    const post = phaseStats(phases[row.teamId].post);
+
+    const ranks = row.finishes.map((f) => f.rank);
+    const best = row.finishes.length
+      ? row.finishes.reduce((m, f) => (f.rank < m.rank ? f : m)) : null;
+    const worst = row.finishes.length
+      ? row.finishes.reduce((m, f) => (f.rank > m.rank ? f : m)) : null;
+    const seasonsSorted = row.seasons.slice().sort((a, b) => a - b);
+    const active = activeIds.size ? activeIds.has(row.teamId) : true;
+
+    return {
+      teamId: row.teamId,
+      name: row.name,
+      abbrev: row.abbrev,
+      // Set on the accumulator from the live roster and then dropped here,
+      // which is why every logo on the page fell back to the shield — the
+      // proxy URL was being built correctly and then thrown away.
+      logo: row.logo || null,
+      owner: owners[row.teamId] || '',
+      active,
+      lastActiveSeason: active ? null : (seasonsSorted[seasonsSorted.length - 1] || null),
+      seasons: seasonsSorted,
+      // Career figures stay at the top level so every existing reader keeps
+      // working; the split lives beside them rather than replacing them.
+      record: all.record,
+      points: all.points,
+      phases: { all, regular, post },
+      streak: (() => {
+        const last = games[games.length - 1];
+        if (!last) return null;
+        return { type: runType, length: runLen, final: !active };
+      })(),
+      bestWinStreak: bestWin ? { length: bestWin, ...bestWinAt } : null,
+      worstLossStreak: bestLoss ? { length: bestLoss, ...bestLossAt } : null,
+      postseason: {
+        appearances: row.playoffAppearances,
+        seasonsPlayed: row.seasonsCompleted,
+        wins: post.record.wins, losses: post.record.losses, ties: post.record.ties,
+      },
+      championships: { count: row.championships.length, years: row.championships },
+      runnerUp: { count: row.runnerUp.length, years: row.runnerUp },
+      thirdPlace: { count: row.thirdPlace.length, years: row.thirdPlace },
+      lastPlace: { count: row.lastPlace.length, years: row.lastPlace },
+      bestFinish: best, worstFinish: worst,
+      avgFinish: ranks.length ? Math.round((ranks.reduce((s, r) => s + r, 0) / ranks.length) * 100) / 100 : null,
+      singleGameHigh: all.high, singleGameLow: all.low,
+      biggestWin: all.biggestWin, biggestLoss: all.biggestLoss,
+      transactions: row.transactions,
+      seasonLog: row.seasonLog.sort((a, b) => a.year - b.year),
+    };
+  }).sort((a, b) => b.record.winPct - a.record.winPct);
+
+  /**
+   * Where each team places league-wide on every stat its card shows.
+   *
+   * Computed here rather than in the browser because the tool would otherwise
+   * have to re-sort every team for every stat on every render, and because the
+   * tie rule and the "higher is better" question differ per stat — decisions
+   * that belong with the data, not spread through the view.
+   *
+   * A rank is emitted as the placement, whether it is shared, and the leader's
+   * value, which is all the card needs to render either the gold first-place
+   * line or the "T-2nd (1st: …)" form.
+   */
+  const RANKABLE = [
+    ['record.wins', (r) => r.record.wins, true],
+    ['record.losses', (r) => r.record.losses, false],
+    ['record.winPct', (r) => r.record.winPct, true],
+    ['record.games', (r) => r.record.games, true],
+    ['points.for', (r) => r.points.for, true],
+    ['points.against', (r) => r.points.against, false],
+    ['points.perGame', (r) => r.points.perGame, true],
+    ['points.diff', (r) => r.points.diff, true],
+    ['bestWinStreak', (r) => (r.bestWinStreak ? r.bestWinStreak.length : null), true],
+    ['worstLossStreak', (r) => (r.worstLossStreak ? r.worstLossStreak.length : null), false],
+    ['postseason.appearances', (r) => r.postseason.appearances, true],
+    ['postseason.wins', (r) => r.postseason.wins, true],
+    ['championships', (r) => r.championships.count, true],
+    ['runnerUp', (r) => r.runnerUp.count, true],
+    ['thirdPlace', (r) => r.thirdPlace.count, true],
+    ['lastPlace', (r) => r.lastPlace.count, false],
+    ['avgFinish', (r) => r.avgFinish, false],
+    ['bestFinish', (r) => (r.bestFinish ? r.bestFinish.rank : null), false],
+    ['transactions.total', (r) => r.transactions.acquisitions + r.transactions.drops + r.transactions.trades, true],
+    ['transactions.trades', (r) => r.transactions.trades, true],
+    ['transactions.acquisitions', (r) => r.transactions.acquisitions, true],
+  ];
+  for (const phaseName of ['regular', 'post']) {
+    RANKABLE.push(
+      [`${phaseName}.record.wins`, (r) => r.phases[phaseName].record.wins, true],
+      [`${phaseName}.record.winPct`, (r) => r.phases[phaseName].record.winPct, true],
+      [`${phaseName}.points.for`, (r) => r.phases[phaseName].points.for, true],
+      [`${phaseName}.points.against`, (r) => r.phases[phaseName].points.against, false],
+      [`${phaseName}.points.perGame`, (r) => r.phases[phaseName].points.perGame, true],
+      [`${phaseName}.points.diff`, (r) => r.phases[phaseName].points.diff, true],
+    );
+  }
+
+  const ranked = rows.filter((r) => r.record.games > 0);
+  for (const [key, valueOf, higherIsBetter] of RANKABLE) {
+    const scored = ranked
+      .map((r) => ({ teamId: r.teamId, name: r.name, v: valueOf(r) }))
+      .filter((x) => x.v != null && Number.isFinite(x.v));
+    if (!scored.length) continue;
+    scored.sort((a, b) => (higherIsBetter ? b.v - a.v : a.v - b.v));
+    const leader = scored[0];
+    // Standard competition ranking: equal values share a place, and the next
+    // distinct value skips as many places as were shared.
+    let place = 0, seen = 0, prev = null;
+    const placeOf = new Map();
+    for (const x of scored) {
+      seen += 1;
+      if (prev === null || Math.abs(x.v - prev) > 1e-9) { place = seen; prev = x.v; }
+      placeOf.set(x.teamId, place);
+    }
+    const counts = new Map();
+    for (const p of placeOf.values()) counts.set(p, (counts.get(p) || 0) + 1);
+    for (const r of rows) {
+      if (!placeOf.has(r.teamId)) continue;
+      const p = placeOf.get(r.teamId);
+      if (!r.ranks) r.ranks = {};
+      r.ranks[key] = {
+        place: p,
+        tied: counts.get(p) > 1,
+        of: scored.length,
+        leaderValue: leader.v,
+        leaderTeam: leader.name,
+        leaderTeamId: leader.teamId,
+      };
+    }
+  }
+
+  // ---- league-wide superlatives -------------------------------------------
+  const withSample = rows.map((r) => ({ ...r, _sample: r.seasons.filter((y) => y !== currentSeason).length }));
+  const played = withSample.filter((r) => r.record.games > 0);
+  const pick = (items, valueOf, opts) => topHolders(items, valueOf, opts)
+    .map((r) => ({ teamId: r.teamId, value: valueOf(r) }));
+
+  // Single-game extremes are league-wide, so they are found across every row's
+  // own extreme rather than by re-walking the schedule.
+  const highs = played.map((r) => r.singleGameHigh && { teamId: r.teamId, ...r.singleGameHigh }).filter(Boolean);
+  const lows = played.map((r) => r.singleGameLow && { teamId: r.teamId, ...r.singleGameLow }).filter(Boolean);
+  const bestOf = (list, key, higher) => {
+    if (!list.length) return [];
+    let b = list[0][key];
+    for (const it of list) { if (higher ? it[key] > b : it[key] < b) b = it[key]; }
+    return list.filter((it) => Math.abs(it[key] - b) < 1e-9);
+  };
+
+  // Pairwise records are computed here rather than read from h2h_full_digest.
+  //
+  // Declaring that digest as a `need` would look tidier, but it derives from
+  // this same source: resolving it through the coordinator would refresh
+  // `league_history`, which re-enters this very build. It happens to be fresh
+  // in practice, because it is written moments earlier in the same pass, so the
+  // loop would stay closed by timing alone — which is not a guarantee worth
+  // resting on. Recomputing from the already-memoised parts costs nothing extra
+  // and removes the cycle outright.
+  const pairs = (await buildHeadToHeadFull(ctx)).pairs;
+  const pairStats = Object.entries(pairs).map(([key, p]) => {
+    const [lowId, highId] = key.split(':').map(Number);
+    const games = p.lowWins + p.highWins + p.ties;
+    const lowPct = games ? (p.lowWins + p.ties * 0.5) / games : 0;
+    return { key, lowId, highId, games, lowPct, skew: Math.abs(lowPct - 0.5), p };
+  });
+  // Five meetings, not three. At three, a 4-0-0 pairing sits at a perfect
+  // 100% and eight of them tie for "most lopsided" at once — technically the
+  // record, but it says more about a short sample than about a rivalry.
+  const PAIR_FLOOR = 5;
+  const eligiblePairs = pairStats.filter((p) => p.games >= PAIR_FLOOR);
+  const pairPick = (higher) => {
+    if (!eligiblePairs.length) return [];
+    let b = eligiblePairs[0].skew;
+    for (const p of eligiblePairs) { if (higher ? p.skew > b : p.skew < b) b = p.skew; }
+    return eligiblePairs.filter((p) => Math.abs(p.skew - b) < 1e-9).map((p) => ({
+      teamA: p.lowId, teamB: p.highId,
+      dominantTeam: p.lowPct >= 0.5 ? p.lowId : p.highId,
+      record: p.lowPct >= 0.5
+        ? `${p.p.lowWins}-${p.p.highWins}-${p.p.ties}`
+        : `${p.p.highWins}-${p.p.lowWins}-${p.p.ties}`,
+      winPct: Math.max(p.lowPct, 1 - p.lowPct),
+      games: p.games,
+    }));
+  };
+
+  // Every single game, once, for the two whole-league game records.
+  let blowout = [], closest = [];
+  for (const [key, p] of Object.entries(pairs)) {
+    const [lowId, highId] = key.split(':').map(Number);
+    for (const g of p.games || []) {
+      // Per scoring period: a two-week postseason matchup would otherwise post
+      // a margin no single week ever produced.
+      for (const w of g.weeks || [{ period: g.week, lowPts: g.lowPts, highPts: g.highPts }]) {
+      const margin = r1(Math.abs(w.lowPts - w.highPts));
+      const winner = w.lowPts > w.highPts ? lowId : highId;
+      const loser = winner === lowId ? highId : lowId;
+      const entry = { winner, loser, teamA: lowId, teamB: highId, margin, season: g.season, week: w.period, postseason: g.postseason };
+      if (!blowout.length || margin > blowout[0].margin) blowout = [entry];
+      else if (blowout.length && Math.abs(margin - blowout[0].margin) < 1e-9) blowout.push(entry);
+      if (!closest.length || margin < closest[0].margin) closest = [entry];
+      else if (closest.length && Math.abs(margin - closest[0].margin) < 1e-9) closest.push(entry);
+      }
+    }
+  }
+
+  const records = {
+    mostChampionships: pick(played, (r) => r.championships.count),
+    highestWinPct: pick(played, (r) => r.record.winPct),
+    bestAvgFinish: pick(withSample.filter((r) => r.avgFinish != null), (r) => r.avgFinish,
+      { min: 2, higherIsBetter: false }),
+    mostPoints: pick(played, (r) => r.points.for),
+    bestDiff: pick(played, (r) => r.points.diff),
+    mostPlayoffApps: pick(played, (r) => r.postseason.appearances),
+    longestWinStreak: played.filter((r) => r.bestWinStreak)
+      .filter((r, _i, arr) => r.bestWinStreak.length === Math.max(...arr.map((x) => x.bestWinStreak.length)))
+      .map((r) => ({ teamId: r.teamId, value: r.bestWinStreak.length, at: r.bestWinStreak })),
+    longestLossStreak: played.filter((r) => r.worstLossStreak)
+      .filter((r, _i, arr) => r.worstLossStreak.length === Math.max(...arr.map((x) => x.worstLossStreak.length)))
+      .map((r) => ({ teamId: r.teamId, value: r.worstLossStreak.length, at: r.worstLossStreak })),
+    highestSingleGame: bestOf(highs, 'points', true),
+    lowestSingleGame: bestOf(lows, 'points', false),
+    biggestBlowout: blowout,
+    closestGame: closest,
+    mostLopsidedMatchup: pairPick(true),
+    closestMatchup: pairPick(false),
+    mostTransactions: pick(played, (r) => r.transactions.acquisitions + r.transactions.drops + r.transactions.trades),
+    mostTrades: pick(played, (r) => r.transactions.trades),
+  };
+
+  // One card per season, newest first, with the season still being played
+  // present as a placeholder rather than missing — an absent slot reads as a
+  // season that never happened.
+  const years = Object.keys(seasonMeta).map(Number).sort((a, b) => b - a);
+  const championsByYear = [];
+  for (const year of years) {
+    const won = champions.filter((c) => c.year === year);
+    if (won.length) {
+      for (const c of won) {
+        championsByYear.push({ year, teamId: c.teamId, placeholder: false });
+      }
+    } else {
+      championsByYear.push({ year, teamId: null, placeholder: true });
+    }
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    currentSeason,
+    currentSeasonIncluded: currentIncluded,
+    seasonMeta,
+    champions: championsByYear,
+    count: rows.length,
+    rows,
+    records,
+  };
+}
+
+/**
+ * Registry of derivations, keyed by the source dataset.
+ *
+ * A source may drive more than one digest — `league_history` feeds Live
+ * Matchups' capped head-to-head card, the Hall of Fame's uncapped one, and the
+ * record book — so an entry is either a single spec or an array of them.
+ * `derivationsFor` always answers with an array so callers never branch.
  */
 export const DERIVATIONS = {
   nfl_injuries: {
@@ -942,12 +1651,28 @@ export const DERIVATIONS = {
     target: 'bye_weeks',
     buildMulti: buildByeWeeks,
   },
-  league_history: {
-    target: 'h2h_digest',
-    buildMulti: buildHeadToHeadHistory,
-    // This season's schedule, so meetings already played this year count.
-    current: 'matchups',
-  },
+  league_history: [
+    {
+      target: 'h2h_digest',
+      buildMulti: buildHeadToHeadHistory,
+      // This season's schedule, so meetings already played this year count.
+      current: 'matchups',
+    },
+    {
+      target: 'h2h_full_digest',
+      buildMulti: buildHeadToHeadFull,
+      current: 'matchups',
+    },
+    {
+      target: 'league_history_digest',
+      buildMulti: buildLeagueHistoryDigest,
+      current: 'matchups',
+      // Current identity for names, logos and the active-team test. The
+      // pairwise history it also needs is computed in-process rather than
+      // declared here — see the note in buildLeagueHistoryDigest.
+      needs: ['league_teams'],
+    },
+  ],
   nfl_scoreboard: {
     target: 'scoreboard_digest',
     build: buildScoreboardDigest,
@@ -982,6 +1707,21 @@ export const DERIVATIONS = {
   },
 };
 
+/**
+ * Every derivation a source drives, always as an array.
+ *
+ * Registry entries may be a single spec or a list of them; normalising here
+ * means the refresh path has one shape to handle and adding a second digest to
+ * an existing source needs no change anywhere else.
+ */
+export function derivationsFor(datasetKey) {
+  const entry = DERIVATIONS[datasetKey];
+  if (!entry) return [];
+  return Array.isArray(entry) ? entry : [entry];
+}
+
+/** The first derivation for a source. Retained for callers that only ever
+ *  dealt with one, such as the dev diagnostics surface. */
 export function derivationFor(datasetKey) {
-  return DERIVATIONS[datasetKey] || null;
+  return derivationsFor(datasetKey)[0] || null;
 }

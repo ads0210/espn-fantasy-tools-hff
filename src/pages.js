@@ -73,6 +73,11 @@ const TOOL_ICONS = {
   // played. Deliberately not a clock or a broadcast tower — the subject is the
   // matchup, not the fact that it is live.
   'live-matchups': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4.2h-3v15.6h3"/><path d="M17.5 4.2h3v15.6h-3"/><path d="M2.2 12h2.4M19.4 12h2.4"/><path d="M8 12h1.6l1.1-3 1.9 6 1.2-3H16"/><circle cx="12" cy="20" r="1.05"/><circle cx="12" cy="4" r="1.05"/></svg>',
+  // A trophy on its plinth, with handles and an engraved band. The record book
+  // covers every team rather than only the winners, but the name on the tile
+  // says Hall of Fame, and a glyph that argues with its own label just reads as
+  // the wrong icon.
+  'hall-of-fame': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7.4 3.2h9.2v5.4a4.6 4.6 0 0 1-9.2 0z"/><path d="M7.4 4.9H4.9v1.8a3.1 3.1 0 0 0 3.1 3.1"/><path d="M16.6 4.9h2.5v1.8a3.1 3.1 0 0 1-3.1 3.1"/><path d="M12 13.2v3.1"/><path d="M8.9 20.8h6.2l-.7-4.5H9.6z"/><path d="M6.6 20.8h10.8"/></svg>',
   'site-config': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h12"/><path d="M19 6h2"/><circle cx="17" cy="6" r="2"/><path d="M3 12h4"/><path d="M11 12h10"/><circle cx="9" cy="12" r="2"/><path d="M3 18h10"/><path d="M17 18h4"/><circle cx="15" cy="18" r="2"/></svg>',
   default: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>',
 };

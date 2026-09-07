@@ -14,7 +14,7 @@ import { fetchPart, mapLimit, inspectBody } from './espn.js';
 import { noteEspnAuth, readAuthOutcome } from './espnhealth.js';
 import { headPart, getPart, putPart, writeStatus, readStatus, isFresh, ageSeconds } from './store.js';
 import { canCallEspn } from './config.js';
-import { derivationFor } from './derive.js';
+import { derivationsFor } from './derive.js';
 import { getDataset } from './datasets.js';
 import { coordinatorRefresh } from './dedupe.js';
 
@@ -253,22 +253,44 @@ export async function refreshDataset(env, cfg, dataset, { force = false } = {}) 
   // season's meetings as they are played. Without the staleness check below,
   // such a digest is built exactly once and then frozen forever, because its
   // source is never refetched again.
-  const derivation = derivationFor(dataset.key);
-  let targetStale = false;
-  if (derivation && derivation.target && counts.fetched === 0) {
-    const targetSpec = getDataset(derivation.target);
-    if (targetSpec && targetSpec.ttl > 0) {
-      const head = await headPart(env, derivation.target, 'main');
-      targetStale = !head || !isFresh(head.uploaded, targetSpec.ttl);
+  //
+  // A source may drive several digests. They are built in registry order, and
+  // each is judged on its own staleness — one digest going stale must not force
+  // its siblings to rebuild, and a sibling that throws must not stop the rest.
+  const derivations = derivationsFor(dataset.key);
+  const derivedReports = [];
+  for (const derivation of derivations) {
+    let targetStale = false;
+    if (derivation.target && counts.fetched === 0) {
+      const targetSpec = getDataset(derivation.target);
+      if (targetSpec && targetSpec.ttl > 0) {
+        const head = await headPart(env, derivation.target, 'main');
+        targetStale = !head || !isFresh(head.uploaded, targetSpec.ttl);
+      }
     }
-  }
-  if (derivation && (counts.fetched > 0 || targetStale)) {
+    if (!(counts.fetched > 0 || targetStale)) continue;
+
     try {
       let digest = null;
+
+      // Dependencies are resolved the same way for both build styles, so a
+      // multi-part build can name what it needs exactly as a single-part one
+      // does rather than reaching for R2 itself.
+      const ctx = {};
+      if (Array.isArray(derivation.needs) && derivation.needs.length) {
+        ctx.sources = {};
+        for (const key of derivation.needs) {
+          const o = await ensureSource(env, key);
+          if (o) {
+            try { ctx.sources[key] = await o.json(); } catch { /* leave absent */ }
+          }
+        }
+      }
 
       if (derivation.buildMulti) {
         // Sources spread across many parts build from the parts directly.
         digest = await derivation.buildMulti({
+          ...ctx,
           env,
           teamIds: parts.map((p) => p.part),
           readPart: async (part) => {
@@ -288,16 +310,6 @@ export async function refreshDataset(env, cfg, dataset, { force = false } = {}) 
       } else {
         const source = await getPart(env, dataset.key, 'main');
         if (source) {
-          const ctx = {};
-          if (Array.isArray(derivation.needs) && derivation.needs.length) {
-            ctx.sources = {};
-            for (const key of derivation.needs) {
-              const o = await ensureSource(env, key);
-              if (o) {
-                try { ctx.sources[key] = await o.json(); } catch { /* leave absent */ }
-              }
-            }
-          }
           if (derivation.needsByeMap) {
             // Fetched when entirely absent, then left alone until its own TTL
             // expires. The reconstruction costs 32 upstream calls, so forcing
@@ -325,11 +337,17 @@ export async function refreshDataset(env, cfg, dataset, { force = false } = {}) 
           derivedFrom: dataset.key,
           bytes: body.byteLength,
         });
-        report.derived = { target: derivation.target, bytes: body.byteLength, entries: digest.count };
+        derivedReports.push({ target: derivation.target, bytes: body.byteLength, entries: digest.count });
       }
     } catch (err) {
-      report.derived = { target: derivation.target, error: String((err && err.message) || err) };
+      derivedReports.push({ target: derivation.target, error: String((err && err.message) || err) });
     }
+  }
+  if (derivedReports.length) {
+    // `derived` stays the single-object shape every existing reader expects;
+    // `derivedAll` carries the rest so a multi-digest source reports honestly.
+    [report.derived] = derivedReports;
+    if (derivedReports.length > 1) report.derivedAll = derivedReports;
   }
 
   // Only rewrite the status document when the sweep actually changed something.
