@@ -343,6 +343,30 @@ export const DATASETS = [
     parts: () => [{ part: 'main', url: null }],
   },
   {
+    key: 'h2h_full_digest',
+    label: 'Every meeting between two teams, uncapped',
+    group: 'derived',
+    // Same reasoning as h2h_digest: the historical source is immutable, so
+    // without a TTL of its own this would be built once and frozen, and this
+    // season's meetings would never appear.
+    ttl: TTL.MIN_30,
+    auth: true,
+    tier: 'core',
+    derivedFrom: 'league_history',
+    parts: () => [{ part: 'main', url: null }],
+    notes: 'Deliberately separate from h2h_digest, which caps each pair at 24 games for Live Matchups.',
+  },
+  {
+    key: 'league_history_digest',
+    label: 'League record book',
+    group: 'derived',
+    ttl: TTL.MIN_30,
+    auth: true,
+    tier: 'core',
+    derivedFrom: 'league_history',
+    parts: () => [{ part: 'main', url: null }],
+  },
+  {
     key: 'live_scoring_digest',
     label: 'Live matchup detail, reduced',
     group: 'derived',
