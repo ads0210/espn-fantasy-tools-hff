@@ -29,6 +29,12 @@ const TOOLS = [
     entry: 'app/live-matchups/main.jsx',
     css: 'app/live-matchups/styles.css',
   },
+  {
+    key: 'hall-of-fame',
+    title: 'Hall of Fame',
+    entry: 'app/hall-of-fame/main.jsx',
+    css: 'app/hall-of-fame/styles.css',
+  },
 ];
 
 /**
