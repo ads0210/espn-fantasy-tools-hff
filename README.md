@@ -157,7 +157,7 @@ you find a box like this:
 ```
 
 Enter that code on the site. The wizard takes it from there: two passwords,
-your ESPN league, which tools to switch on, and optionally your league history.
+your ESPN league, which tools to switch on, and your league history.
 
 The code stops working the moment setup completes, so nobody who finds your
 address later can reconfigure your site.
@@ -183,7 +183,7 @@ like `%2B` that must stay exactly as they are, and `SWID` must keep its curly
 braces. The wizard tests both against ESPN before saving, so you will know
 straight away if something did not paste cleanly.
 
-**League history** is the last step and it is optional. It walks through past
+**League history** is the last step. It walks through past
 seasons pulling every game result. This may take a few minutes depending on how
 many seasons your league has — please do not close or refresh the tab while it
 runs. Once you start it, it runs to the end on its own: it paces itself, retries
