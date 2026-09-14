@@ -1585,8 +1585,6 @@ export default function HallOfFame() {
         .teamcard:not(.expanded) { min-height:278px; }
         .teamcard:hover { border-color:var(--accent-deep); }
         .teamcard.expanded { flex:0 0 100%; cursor:default; border-color:var(--accent-deep); }
-        .teamcard > .chev { position:absolute; top:16px; right:16px; color:var(--ink-3); z-index:2; }
-        .teamcard:hover > .chev { color:var(--accent); }
         .cardinner { padding:18px 16px; display:flex; flex-direction:column; min-height:inherit; }
         .tc-head { flex:none; display:flex; flex-direction:column; align-items:center; gap:9px; }
         .tc-head .lgo { width:50px; height:50px; }
@@ -1659,8 +1657,6 @@ export default function HallOfFame() {
         .oppcard:not(.expanded) { min-height:196px; }
         .oppcard:hover { border-color:var(--accent-deep); }
         .oppcard.expanded { flex:0 0 100%; cursor:default; border-color:var(--accent-deep); }
-        .oppcard > .chev { position:absolute; top:12px; right:12px; color:var(--ink-3);
-          width:7px; height:7px; z-index:2; }
         .oppinner { padding:14px 12px; display:flex; flex-direction:column; min-height:inherit; }
         .opp-head { flex:none; display:flex; flex-direction:column; align-items:center; gap:7px; }
         .opp-head .lgo { width:32px; height:32px; }
@@ -1737,15 +1733,29 @@ export default function HallOfFame() {
         .cardowner { display:block; font-style:normal; font-size:9.5px; font-weight:700;
           color:var(--ink-3); margin-top:3px; letter-spacing:.04em; }
 
-        /* --- the expand affordance, bottom centre -------------------------- */
+        /* --- the expand affordance, bottom centre --------------------------
+           The arrow itself is two borders on an empty box, rotated — the same
+           construction every other tool on the site uses, so a chevron here
+           reads identically to one in Live Matchups. Without this rule the
+           element still positioned and coloured correctly and drew nothing at
+           all, which is exactly how it shipped: an invisible affordance on a
+           card whose whole interaction depends on looking clickable. */
+        .chev { width:9px; height:9px; border-right:2px solid currentColor;
+          border-bottom:2px solid currentColor; transform:rotate(45deg);
+          transition:transform .2s ease, border-color .2s ease, color .2s ease; }
         .bottomchev { position:absolute; left:50%; bottom:8px; margin-left:-5px;
           width:9px; height:9px; color:var(--accent-deep); opacity:.85; z-index:2; }
         .teamcard:hover .bottomchev, .oppcard:hover .bottomchev { color:var(--accent); opacity:1; }
         [aria-expanded="true"] > .cardinner > .bottomchev,
         [aria-expanded="true"] > .oppinner > .bottomchev { transform:rotate(225deg); }
         .cardinner, .oppinner { position:relative; }
-        .teamcard:not(.expanded) .cardinner { padding-bottom:24px; }
-        .oppcard:not(.expanded) .oppinner { padding-bottom:22px; }
+        /* The chevron keeps its own band whether the card is open or shut.
+           Reserving it only while collapsed meant an expanded team card ran its
+           head-to-head cards straight through its own chevron, so two chevrons
+           and a card edge landed on top of each other. Direct children only, so
+           an opp card nested inside an open team card cannot inherit it. */
+        .teamcard > .cardinner { padding-bottom:26px; }
+        .oppcard > .oppinner { padding-bottom:24px; }
 
         .toolfoot { margin-top:10px; padding:10px 0 4px; text-align:center; border-top:1px solid var(--line); }
         .toolfoot .gh { display:inline-flex; align-items:center; gap:7px; color:var(--ink-3);

@@ -357,7 +357,17 @@ export function buildMatchupDigest(doc, ctx = {}) {
       abbrev: info.abbrev || '',
       owner: info.owner || '',
       logo: teamLogoUrl(s && s.teamId, info.logo),
-      points: Number((s && s.totalPoints) || 0),
+      /* Live first.
+       *
+       * ESPN keeps a game's running score in `totalPointsLive` and only settles
+       * it into `totalPoints` once the week closes, so reading `totalPoints`
+       * alone left every in-progress matchup on the dashboard reading 0-0 while
+       * Live Matchups, which already preferred the live figure, showed the real
+       * score. Same rule in both places now. */
+      points: round1((s && (s.totalPointsLive ?? s.totalPoints)) || 0),
+      projected: round1((s && (s.totalProjectedPointsLive ?? s.totalProjectedPoints)) || 0),
+      winProb: s && typeof s.winProbability === 'number'
+        ? Math.round(s.winProbability * 1000) / 10 : null,
     };
   };
 
@@ -392,6 +402,52 @@ const SLOT_NAMES = {
   0: 'QB', 2: 'RB', 3: 'RB/WR', 4: 'WR', 5: 'WR/TE', 6: 'TE', 7: 'OP',
   16: 'D/ST', 17: 'K', 20: 'BE', 21: 'IR', 23: 'FLEX',
 };
+
+/**
+ * The order a lineup is read in, site-wide.
+ *
+ * ESPN returns roster entries in no guaranteed order, so a table built by
+ * mapping over them straight showed the quarterback first on one team and
+ * fourth on another — for the same week, in the same view. That is not a
+ * cosmetic inconsistency: a reader comparing two lineups side by side has to
+ * re-find each slot on each side rather than reading across a row.
+ *
+ * One rank per slot id, applied everywhere a lineup is emitted. Anything
+ * unmapped sorts last rather than throwing, so a slot ESPN adds later appears
+ * at the end instead of taking a surface down.
+ */
+const SLOT_RANK = {
+  0: 0,   // QB
+  2: 1,   // RB
+  3: 2,   // RB/WR
+  4: 3,   // WR
+  5: 4,   // WR/TE
+  6: 5,   // TE
+  23: 6,  // FLEX
+  7: 7,   // OP
+  16: 8,  // D/ST
+  17: 9,  // K
+  20: 10, // BE
+  21: 11, // IR
+};
+
+const UNRANKED_SLOT = 99;
+
+export const slotRank = (slotId) => {
+  const r = SLOT_RANK[slotId];
+  return r === undefined ? UNRANKED_SLOT : r;
+};
+
+/**
+ * Sort a lineup into canonical slot order.
+ *
+ * `Array.prototype.sort` is stable in every runtime this targets, so two
+ * players sharing a slot keep the order ESPN listed them in — which is what
+ * makes RB1/RB2 stay put between refreshes instead of swapping places.
+ */
+function bySlotOrder(list, slotOf) {
+  return [...list].sort((a, b) => slotRank(slotOf(a)) - slotRank(slotOf(b)));
+}
 
 /** Records and points, joined to team identity. */
 export function buildStandingsDigest(doc, ctx = {}) {
@@ -451,7 +507,8 @@ export function buildStandingsDigest(doc, ctx = {}) {
 export function buildRosterDigest(doc) {
   const teams = {};
   for (const t of (doc && doc.teams) || []) {
-    const entries = ((t.roster && t.roster.entries) || []).map((e) => {
+    const ordered = bySlotOrder((t.roster && t.roster.entries) || [], (e) => e.lineupSlotId);
+    const entries = ordered.map((e) => {
       const p = (e.playerPoolEntry && e.playerPoolEntry.player) || {};
       const slot = e.lineupSlotId;
       return {
@@ -608,7 +665,7 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
   for (const r of (standings && standings.rows) || []) seasonRow[r.teamId] = r;
 
   // NFL game state, by team abbreviation. A player's live/final/upcoming dot and
-  // the "NFL games in play" section both resolve through this one map.
+  // the "NFL games" section both resolve through this one map.
   const gameByTeam = {};
   for (const g of (board && board.games) || []) {
     const entry = {
@@ -629,7 +686,7 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
       (s && s.rosterForCurrentScoringPeriod && s.rosterForCurrentScoringPeriod.entries) ||
       (s && s.rosterForMatchupPeriod && s.rosterForMatchupPeriod.entries) || [];
 
-    const players = roster.map((e) => {
+    const players = bySlotOrder(roster, (e) => e.lineupSlotId).map((e) => {
       const p = (e.playerPoolEntry && e.playerPoolEntry.player) || {};
       const slot = e.lineupSlotId;
       const nfl = PRO_TEAM_MAP[p.proTeamId] ?? 'FA';
@@ -695,6 +752,9 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
       starters,
       bench,
       benchPoints: byPos.BN,
+      // The bench's own projected total, so "what is still sitting there" can
+      // be read before those players have played rather than only after.
+      benchProjected: round1(bench.reduce((a, p) => a + p.proj, 0)),
       byPos,
       counts,
       optimal: optimalTotal(players, starters.map((p) => p.slotId)),
@@ -743,12 +803,26 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
         String(a.kickoff || '').localeCompare(String(b.kickoff || '')));
       for (const g of nflGames) g.players.sort((a, b) => b.points - a.points);
 
-      // Boom and bust are measured against each player's own projection, so a
-      // low-projection player who doubles it is as notable as a star who did.
+      /* Boom and bust are measured against each player's own projection, so a
+       * low-projection player who doubles it is as notable as a star who did.
+       *
+       * The two are deliberately not symmetric about who is eligible.
+       *
+       * A projection covers a whole game, so comparing it against a player who
+       * is nine minutes into the first quarter is not a swing, it is an
+       * unfinished sample: everybody starts at zero, and the panel was calling
+       * a running back a hundred per cent bust before he had touched the ball.
+       * A shortfall only means something once there is no game left to make it
+       * up in, so a bust needs a finished game.
+       *
+       * Beating the projection is different. Once a player is past his number
+       * the game cannot take it back, so a live player who is already over is a
+       * genuine boom and worth showing while it is still happening. */
       const swings = [...home.starters.map((p) => ({ ...p, team: home.name })),
                       ...away.starters.map((p) => ({ ...p, team: away.name }))]
         .filter((p) => p.proj >= 1 && p.gameStatus !== 'pre')
-        .map((p) => ({ ...p, delta: Math.round(((p.points - p.proj) / p.proj) * 100) }));
+        .map((p) => ({ ...p, delta: Math.round(((p.points - p.proj) / p.proj) * 100) }))
+        .filter((p) => (p.delta > 0 ? true : p.gameStatus === 'final'));
 
       let firstKickoff = null;
       for (const p of [...home.starters, ...away.starters]) {

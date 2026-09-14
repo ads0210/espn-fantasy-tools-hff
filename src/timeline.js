@@ -53,6 +53,30 @@ export async function timelineRead(env, season, period) {
   }
 }
 
+/** What a week's timeline costs in storage. Diagnostics only. */
+export async function timelineSize(env, season, period) {
+  const s = stub(env, season, period);
+  if (!s) return { ok: false, error: 'SCORE_TIMELINE binding missing' };
+  try {
+    const res = await s.fetch('https://timeline/size');
+    return await res.json();
+  } catch (err) {
+    return { ok: false, error: String((err && err.message) || err) };
+  }
+}
+
+/** Collapse stored runs where nothing moved. Idempotent. */
+export async function timelinePrune(env, season, period) {
+  const s = stub(env, season, period);
+  if (!s) return { ok: false, error: 'SCORE_TIMELINE binding missing' };
+  try {
+    const res = await s.fetch('https://timeline/prune');
+    return await res.json();
+  } catch (err) {
+    return { ok: false, error: String((err && err.message) || err) };
+  }
+}
+
 export async function timelineReset(env, season, period) {
   const s = stub(env, season, period);
   if (!s) return { ok: false };
