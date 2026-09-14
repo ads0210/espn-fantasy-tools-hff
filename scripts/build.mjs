@@ -48,6 +48,7 @@ function shellHtml(tool) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <title>${tool.title}</title>
 <link rel="stylesheet" href="./styles.css">
 <style>html,body{margin:0;background:#0A0D0B;}</style>
