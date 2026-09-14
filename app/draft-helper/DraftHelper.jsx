@@ -38,7 +38,17 @@ const PALETTE = {
 const UI_FONT = "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 
 // league roster construction — stable league settings, not fetched live (see planning doc)
-const STARTER_SLOTS = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "K", "D/ST"];
+const STARTER_SLOTS = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "D/ST", "K"];
+
+/* The bench is read in the same order as the starting lineup rather than in
+   the order players happened to be drafted, so a slot sits in the same place
+   whichever team is being looked at. Sorting is stable, so two players sharing
+   a position keep their pick order relative to each other. */
+const BENCH_POS_ORDER = { QB: 0, RB: 1, WR: 2, TE: 3, "D/ST": 4, K: 5 };
+const benchPosRank = (pos) => {
+  const r = BENCH_POS_ORDER[pos];
+  return r === undefined ? 99 : r;
+};
 const BENCH_SLOTS = 7;
 const MAX_ROSTERED = { QB: 4, RB: 8, WR: 8, TE: 3, K: 3, "D/ST": 3 };
 const FLEX_ELIGIBLE = ["RB", "WR", "TE"];
@@ -260,6 +270,7 @@ function assignRoster(teamId, draftedByOverall) {
   if (fi >= 0) { slots[flexIdx].player = remaining[fi]; remaining.splice(fi, 1); }
 
   remaining.forEach((p) => { if (bench.length < BENCH_SLOTS) bench.push(p); });
+  bench.sort((a, b) => benchPosRank(a.pos) - benchPosRank(b.pos));
   return { slots, bench, totalPicks: picks.length };
 }
 
