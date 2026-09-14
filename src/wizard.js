@@ -12,6 +12,7 @@
  */
 
 import { shell, passwordField, displayTitle, esc, HISTORY_RUNNER_JS } from './ui.js';
+import { TOOL_ICONS } from './pages.js';
 
 const STEPS = [
   { n: '01', label: 'Access' },
@@ -265,6 +266,10 @@ export function wizardPage({ theme, reduceMotion, codeRequired, step = 1, league
                 font-weight:500; color:var(--ink); margin:0; }
     .toolpick:last-child { border-bottom:0; }
     .toolpick input { width:auto; margin-top:3px; accent-color:var(--accent); }
+    /* The dashboard tile's icon treatment, so a tool is recognisable here as
+       the tile it becomes. */
+    .toolglyph { flex:none; width:26px; height:26px; color:var(--accent); margin-top:1px; }
+    .toolglyph svg { width:100%; height:100%; display:block; }
     .toolpick b { display:block; font-size:14px; font-weight:700; }
     .toolpick i { display:block; font-style:normal; font-size:12.5px;
                   color:var(--ink-2); margin-top:2px; }
@@ -425,10 +430,17 @@ async function runPrime() {
   }
 }
 
+/* The same glyphs the dashboard tiles carry, so the tools being chosen here
+   are recognisable as the tiles they become. Injected from the one shared
+   definition rather than written out again. */
+var TOOL_GLYPHS = ${JSON.stringify(TOOL_ICONS)};
+
 async function loadTools() {
   var r = await get('/api/setup/tools');
   document.getElementById('toolList').innerHTML = (r.tools || []).map(function (t) {
+    var glyph = TOOL_GLYPHS[t.key] || TOOL_GLYPHS.default;
     return '<label class="toolpick"><input type="checkbox" data-tool="' + t.key + '" checked>'
+      + '<span class="toolglyph">' + glyph + '</span>'
       + '<span><b>' + t.name + '</b><i>' + t.description + '</i></span></label>';
   }).join('');
 }
