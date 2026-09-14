@@ -96,6 +96,13 @@ function useWeek(week, idle) {
 
   const load = useCallback(async (quiet) => {
     try {
+      /* The dev preview inlines a real payload into the document, because the
+         browser tool used to inspect this page cannot sign in and never sees an
+         XHR result. Same hook the Hall of Fame uses, and inert without it. */
+      if (typeof window !== "undefined" && window.__LM_PREVIEW__) {
+        setState({ data: window.__LM_PREVIEW__, error: null, at: new Date(), loading: false });
+        return;
+      }
       if (!quiet) setState((s) => ({ ...s, loading: true }));
       const q = week ? `?w=${week}` : "";
       const res = await fetch(`/api/live/week${q}`, { credentials: "same-origin" });
@@ -140,6 +147,10 @@ function useH2h() {
   const [h2h, setH2h] = useState(null);
   useEffect(() => {
     let live = true;
+    if (typeof window !== "undefined" && window.__LM_H2H_PREVIEW__) {
+      setH2h(window.__LM_H2H_PREVIEW__);
+      return () => { live = false; };
+    }
     fetch("/api/live/h2h", { credentials: "same-origin" })
       .then((r) => r.json())
       .then((b) => { if (live) setH2h(b); })
@@ -152,17 +163,39 @@ function useH2h() {
 /** The stored score history for a week. Written by the cron, never by a view. */
 function useTimeline(season, week, live, idle) {
   const [rows, setRows] = useState([]);
+  const [lastTick, setLastTick] = useState(null);
   const [events, setEvents] = useState([]);
   const load = useCallback(async () => {
     if (!season || !week) return;
+    /* Inlined for the dev preview, same as the week and head-to-head payloads.
+       Without it the progression charts read as empty in preview while the
+       stored timeline held dozens of rows — a preview that disagrees with the
+       page it previews. */
+    if (typeof window !== "undefined" && window.__LM_TIMELINE_PREVIEW__) {
+      const pv = window.__LM_TIMELINE_PREVIEW__;
+      setRows(Array.isArray(pv.rows) ? pv.rows : []);
+      setLastTick(pv.lastTick || null);
+      setEvents(Array.isArray(pv.events) ? pv.events : []);
+      return;
+    }
     try {
       const res = await fetch(`/api/live/timeline?season=${season}&w=${week}`,
         { credentials: "same-origin" });
       const body = await res.json();
       setRows(Array.isArray(body.rows) ? body.rows : []);
+      setLastTick(body.lastTick || null);
       setEvents(Array.isArray(body.events) ? body.events : []);
     } catch { /* the charts and feed fall back to their empty states */ }
   }, [season, week]);
+
+  // Diagnostics: what the component actually holds, as opposed to what the
+  // preview inlined. The two disagreeing is the whole reason this exists.
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.__LM_TIMELINE_PREVIEW__) {
+      window.__LM_SEEN__ = { rows: rows.length, events: events.length,
+        season: season || null, week: week || null };
+    }
+  }, [rows, events, season, week]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -170,7 +203,7 @@ function useTimeline(season, week, live, idle) {
     const t = setInterval(() => { if (!document.hidden && !idle) load(); }, 60000);
     return () => clearInterval(t);
   }, [load, live, idle]);
-  return { rows, events };
+  return { rows, events, lastTick };
 }
 
 // ---------------------------------------------------------------- chart maths
@@ -236,15 +269,54 @@ function buildDaySpan(axisStart, axisEnd, tz) {
   return days;
 }
 
-function makeXOf(days, dayWidth) {
+/* What an idle day is still worth on the axis.
+   Enough to stay a legible band with its own marker, because a week that
+   silently omitted Friday and Saturday would misrepresent how long a matchup
+   actually ran. */
+const MIN_DAY_SHARE = 0.07;
+
+/**
+ * Give each day a width proportional to how much happened in it.
+ *
+ * Sizing days by elapsed time is what made these charts unreadable: a Thursday
+ * night game and a full Sunday carry almost all the scoring, and the two empty
+ * days between them are drawn just as wide, so the parts worth looking at get
+ * squeezed into a fraction of the frame while nothing occupies the rest.
+ *
+ * Now that repeats are no longer recorded, the number of samples in a day is a
+ * direct measure of how much moved in it, so the stored data already carries
+ * the weighting. Every day keeps a floor, so an idle day narrows to a band
+ * rather than vanishing and the passage of time stays visible.
+ *
+ * Position *within* a day stays proportional to the clock, so the shape of a
+ * game is never distorted — only how much of the frame each day is given.
+ */
+function weightDays(days, times) {
+  const counts = days.map(() => 0);
+  let di = 0;
+  for (const t of times) {
+    while (di < days.length - 1 && t >= days[di].segEnd) di += 1;
+    counts[di] += 1;
+  }
+  const total = counts.reduce((a, b) => a + b, 0) || 1;
+  const raw = counts.map((c) => MIN_DAY_SHARE + c / total);
+  const sum = raw.reduce((a, b) => a + b, 0) || 1;
+  return days.map((d, i) => ({ ...d, samples: counts[i], w: (raw[i] / sum) * CHART_W }));
+}
+
+function makeXOf(days) {
   return (t) => {
     let cumX = 0;
     for (let i = 0; i < days.length; i++) {
       const d = days[i];
       if (t < d.segEnd || i === days.length - 1) {
-        return cumX + ((t - d.start) / d.fullDur) * dayWidth;
+        // Within the day, still the clock: a day's width changes, the shape of
+        // what happened inside it does not.
+        const span = Math.max(1, d.segEnd - d.start);
+        const frac = Math.min(1, Math.max(0, (t - d.start) / span));
+        return cumX + frac * d.w;
       }
-      cumX += d.frac * dayWidth;
+      cumX += d.w;
     }
     return cumX;
   };
@@ -253,21 +325,47 @@ function makeXOf(days, dayWidth) {
 const yOf = (v, min, max, padTop, innerH) =>
   padTop + innerH - ((v - min) / ((max - min) || 1)) * innerH;
 
-function linePath(values, times, xOf, min, max, padTop, padBottom) {
-  const innerH = CHART_H - padTop - padBottom;
-  let d = "";
+/* Longer than this between two samples and nothing was being recorded.
+   The cron samples every minute inside a game window, so anything beyond a few
+   minutes is a gap rather than a slow tick. */
+const SAMPLE_GAP_MS = 10 * 60 * 1000;
+
+/* Expand a series so a recording gap reads as a hold rather than a slope.
+ *
+ * A straight line between two samples a day apart reads as points being scored
+ * all night: the Thursday game ends, nothing is recorded until Sunday, and the
+ * chart draws a smooth climb through Friday and Saturday that never happened.
+ * A score cannot drift while nobody is playing, so the honest shape is flat
+ * until the next sample and then a step.
+ *
+ * Every chart in this section goes through here. The margin chart used to build
+ * its own path inline and kept sloping through gaps after the others had been
+ * fixed, which is the whole argument for one implementation.
+ */
+function seriesPoints(values, times) {
+  const out = [];
   for (let i = 0; i < values.length; i++) {
-    d += (i === 0 ? "M" : "L") + xOf(times[i]).toFixed(1) + "," +
-      yOf(values[i], min, max, padTop, innerH).toFixed(1) + " ";
+    if (i > 0 && times[i] - times[i - 1] > SAMPLE_GAP_MS) {
+      out.push([times[i], values[i - 1]]);
+    }
+    out.push([times[i], values[i]]);
   }
-  return d.trim();
+  return out;
 }
 
-function DayAxis({ days, dayWidth }) {
+function linePath(values, times, xOf, min, max, padTop, padBottom) {
+  const innerH = CHART_H - padTop - padBottom;
+  return seriesPoints(values, times)
+    .map(([t, v], i) => (i === 0 ? "M" : "L") +
+      xOf(t).toFixed(1) + "," + yOf(v, min, max, padTop, innerH).toFixed(1))
+    .join(" ");
+}
+
+function DayAxis({ days }) {
   const out = [];
   let cumX = 0;
   days.forEach((d, i) => {
-    const segW = d.frac * dayWidth;
+    const segW = d.w;
     if (i > 0) {
       out.push(<line key={`m${i}`} className="daymark" x1={cumX.toFixed(1)} y1="0"
         x2={cumX.toFixed(1)} y2={CHART_H} />);
@@ -299,7 +397,8 @@ function Diverging({ values, times, xOf, min, max, baseline, padTop, padBottom }
   const ids = useMemo(() => { clipSeq += 1; return { top: `ct${clipSeq}`, bot: `cb${clipSeq}` }; }, []);
   const innerH = CHART_H - padTop - padBottom;
   const baseY = yOf(baseline, min, max, padTop, innerH);
-  const pts = values.map((v, i) => [xOf(times[i]), yOf(v, min, max, padTop, innerH)]);
+  const pts = seriesPoints(values, times)
+    .map(([t, v]) => [xOf(t), yOf(v, min, max, padTop, innerH)]);
   const d = pts.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
   const areaD = `M${pts[0][0].toFixed(1)},${baseY.toFixed(1)} ` +
     pts.map((p) => `L${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ") +
@@ -335,10 +434,15 @@ function Progression({ series, tz, homeName, awayName, kickoff }) {
     if (!series || series.times.length < 2) return null;
     const times = series.times;
     // Cropped to the real data at both ends.
-    const days = buildDaySpan(times[0], times[times.length - 1], tz);
-    if (!days.length) return null;
-    const totalUnits = days.reduce((s, d) => s + d.frac, 0) || 1;
-    return { days, dayWidth: CHART_W / totalUnits, xOf: makeXOf(days, CHART_W / totalUnits) };
+    const span = buildDaySpan(times[0], times[times.length - 1], tz);
+    if (!span.length) return null;
+    /* One frame for the whole section.
+       The three charts describe the same matchup over the same minutes, so
+       reading them together only works if a vertical position means the same
+       instant in all of them. They share this object rather than each deriving
+       its own, which is what keeps them aligned by construction. */
+    const days = weightDays(span, times);
+    return { days, xOf: makeXOf(days) };
   }, [series, tz]);
 
   // Each chart states its own absence rather than the section swallowing all
@@ -356,7 +460,7 @@ function Progression({ series, tz, homeName, awayName, kickoff }) {
     );
   }
 
-  const { days, dayWidth, xOf } = frame;
+  const { days, xOf } = frame;
   const { times, home, away, wp } = series;
   const padTop = 8, padBottom = 20;
   const scoreMax = Math.max(...home, ...away, 1) * 1.08;
@@ -375,7 +479,7 @@ function Progression({ series, tz, homeName, awayName, kickoff }) {
             d={linePath(home, times, xOf, 0, scoreMax, padTop, padBottom)} />
           <path className="chartpath" style={{ stroke: "var(--sky)" }}
             d={linePath(away, times, xOf, 0, scoreMax, padTop, padBottom)} />
-          <DayAxis days={days} dayWidth={dayWidth} />
+          <DayAxis days={days} />
         </svg>
       </div>
       <div className="chartblock">
@@ -384,7 +488,7 @@ function Progression({ series, tz, homeName, awayName, kickoff }) {
           <GridLines padTop={padTop} padBottom={padBottom} n={4} />
           <Diverging values={margin} times={times} xOf={xOf} min={-maxAbsM} max={maxAbsM}
             baseline={0} padTop={padTop} padBottom={padBottom} />
-          <DayAxis days={days} dayWidth={dayWidth} />
+          <DayAxis days={days} />
         </svg>
       </div>
       {!hasWp && (
@@ -399,7 +503,7 @@ function Progression({ series, tz, homeName, awayName, kickoff }) {
             <Diverging values={wp.map((v) => v ?? 50)} times={times} xOf={xOf}
               min={50 - maxDevWP} max={50 + maxDevWP} baseline={50}
               padTop={padTop} padBottom={padBottom} />
-            <DayAxis days={days} dayWidth={dayWidth} />
+            <DayAxis days={days} />
           </svg>
         </div>
       )}
@@ -547,10 +651,13 @@ function Lineups({ g, tz }) {
   }
   const bench = (s) => (
     <details>
-      <summary>{s.name} bench · {n1(s.benchPoints)} unused</summary>
+      <summary>
+        {s.name} bench · {n1(s.benchPoints)} unused (proj {n1(s.benchProjected)})
+      </summary>
       {s.bench.map((p) => (
         <div className="benchrow" key={p.id}>
-          <span>{shortName(p.name)} <small>{p.pos}</small></span><span>{n1(p.points)}</span>
+          <span>{shortName(p.name)} <small>{p.pos}</small></span>
+          <span className="benchpts"><b>{n1(p.points)}</b><small>{n1(p.proj)}</small></span>
         </div>
       ))}
     </details>
@@ -881,7 +988,7 @@ function Unwired({ title, why }) {
 
 // ---------------------------------------------------------------- match card
 
-function MatchCard({ g, tz, timelineRows, events, h2h, pinned, expandAll }) {
+function MatchCard({ g, tz, timelineRows, lastTick, events, h2h, pinned, expandAll }) {
   const [open, setOpen] = useState(expandAll);
   const panelRef = useRef(null), innerRef = useRef(null), animRef = useRef(null);
 
@@ -927,8 +1034,25 @@ function MatchCard({ g, tz, timelineRows, events, h2h, pinned, expandAll }) {
       times.push(t); home.push(Number(v[0]) || 0); away.push(Number(v[1]) || 0);
       wp.push(v[2] === null || v[2] === undefined ? null : Number(v[2]));
     }
+    /* Carry the last known values out to the most recent sample.
+     *
+     * Repeats are no longer stored, so a matchup whose players have all
+     * finished has its final point at the moment it last moved. Without this
+     * the line would stop partway across a chart whose axis runs to now, which
+     * reads as missing data rather than as a score that has stopped changing.
+     * The added point is the last one repeated, so it draws as the flat line it
+     * describes. */
+    if (times.length && lastTick) {
+      const end = Date.parse(lastTick);
+      if (Number.isFinite(end) && end > times[times.length - 1]) {
+        times.push(end);
+        home.push(home[home.length - 1]);
+        away.push(away[away.length - 1]);
+        wp.push(wp[wp.length - 1]);
+      }
+    }
     return times.length >= 2 ? { times, home, away, wp } : null;
-  }, [timelineRows, g.id, g.firstKickoff]);
+  }, [timelineRows, lastTick, g.id, g.firstKickoff]);
 
   const final = g.state === "final";
   const homeWins = final && (g.winner === "HOME" || (!g.winner && g.home.points > g.away.points));
@@ -1070,7 +1194,11 @@ function MatchCard({ g, tz, timelineRows, events, h2h, pinned, expandAll }) {
 
           <Disclosure defaultOpen={expandAll} label="Season context"><SeasonContext g={g} /></Disclosure>
 
-          <Disclosure defaultOpen={expandAll} label="NFL games in play">
+          {/* Not "in play": this lists every fixture either lineup has a player
+              in, which on a Thursday is mostly games three days away. The
+              section's own empty state already said "involves either lineup",
+              so the label was the part that was wrong. */}
+          <Disclosure defaultOpen={expandAll} label="NFL games">
             {g.nflGames.length
               ? g.nflGames.map((ng) => <NflGame key={ng.key} game={ng} tz={tz} />)
               : <Unwired title="No games scheduled" why="No NFL fixture on this week's board involves either lineup." />}
@@ -1151,7 +1279,7 @@ export default function LiveMatchups() {
   const currentWeek = data ? data.current : 0;
   const shownWeek = data ? data.week : 0;
   const isCurrent = data ? data.live : true;
-  const { rows: timelineRows, events } = useTimeline(
+  const { rows: timelineRows, events, lastTick } = useTimeline(
     digest && digest.season, shownWeek, isCurrent, idle);
   const h2h = useH2h();
 
@@ -1274,8 +1402,16 @@ export default function LiveMatchups() {
         .wpcaption { text-align:center; font-size:8.5px; font-weight:900; letter-spacing:.14em;
           text-transform:uppercase; color:var(--ink-3); margin-top:5px; }
 
-        .mscores { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:10px; margin-top:14px; }
-        .mscore { text-align:center; min-width:0; }
+        /* The scores are the point of this row, so they are sized to their own
+           content and the margin note takes whatever is left.
+           It used to be the other way around — an auto centre column against
+           1fr scores — so a long team name in the note squeezed the numbers
+           until they clipped mid-glyph: "70.5" rendered as "70.!". Names are
+           unbounded and scores are four characters, so the fixed thing should
+           be the scores. */
+        .mscores { display:grid; grid-template-columns:auto minmax(0,1fr) auto;
+          align-items:center; gap:10px; margin-top:14px; }
+        .mscore { text-align:center; flex:none; }
         .mscore.home { text-align:left; }
         .mscore.away { text-align:right; }
         .mscore b { font-size:clamp(26px,5vw,32px); font-weight:900; letter-spacing:-.02em;
@@ -1284,8 +1420,11 @@ export default function LiveMatchups() {
           -webkit-background-clip:text; background-clip:text;
           color:transparent; -webkit-text-fill-color:transparent; }
         .mscore small { font-size:10.5px; color:var(--ink-3); font-weight:700; }
+        /* Wraps rather than pushing the scores aside. A long pair of team names
+           takes as many lines as it needs; the numbers never move. */
         .mmargin { font-size:10.5px; color:var(--ink-2); font-weight:800; text-align:center;
-          display:flex; align-items:center; justify-content:center; gap:5px; min-width:0; }
+          display:flex; align-items:center; justify-content:center; gap:5px;
+          min-width:0; overflow-wrap:anywhere; }
         .marrow { color:var(--accent); font-size:12px; }
         .marrow.away { color:var(--sky); }
 
@@ -1405,6 +1544,12 @@ export default function LiveMatchups() {
         .benchwrap .benchrow { display:flex; justify-content:space-between; gap:6px;
           padding:6px 0; border-bottom:1px solid var(--line); color:var(--ink-2); font-size:10.5px; }
         .benchwrap .benchrow small { color:var(--ink-3); }
+        /* Points over projection, the same stack the starting lineup uses, so a
+           bench row reads the same way a starter's does. */
+        .benchwrap .benchrow .benchpts { flex:none; text-align:right;
+          font-variant-numeric:tabular-nums; }
+        .benchwrap .benchrow .benchpts b { display:block; font-size:10.5px; color:var(--ink-2); }
+        .benchwrap .benchrow .benchpts small { display:block; font-size:8px; color:var(--ink-3); }
 
         .chartblock + .chartblock { margin-top:24px; }
         .chartname { font-size:10.5px; font-weight:900; letter-spacing:.06em; text-transform:uppercase;
@@ -1638,7 +1783,8 @@ export default function LiveMatchups() {
             <div className="placeholder"><b>Loading this week</b><span>Fetching the current scoreboard.</span></div>
           ) : games.length ? (
             games.map((g) => (
-              <MatchCard key={g.id} g={g} tz={tz} timelineRows={timelineRows} expandAll={expandAll}
+              <MatchCard key={g.id} g={g} tz={tz} timelineRows={timelineRows} lastTick={lastTick}
+                expandAll={expandAll}
                 events={events} h2h={h2h}
                 pinned={myTeam && (g.home.teamId === myTeam || g.away.teamId === myTeam)} />
             ))
