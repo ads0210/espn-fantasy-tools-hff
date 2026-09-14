@@ -6,10 +6,56 @@
  * the League Password.
  */
 
-import { shell, passwordField, displayTitle, selectField, esc, LOGO_FALLBACK_SVG, TEAM_COOKIE }
+import { shell, passwordField, displayTitle, selectField, esc, LOGO_FALLBACK_SVG, TEAM_COOKIE, CLOSE }
   from './ui.js';
 
 export { THEME_COOKIE, TEAM_COOKIE } from './ui.js';
+
+import { TOOLS, SITE_CONFIG_TOOL } from './tools.js';
+
+/**
+ * Turn a tool's name into a link to it.
+ *
+ * Update notes name the tools they describe, and a reader who has just been
+ * told Live Matchups changed should be able to go and look rather than dismiss
+ * the notice and hunt for it. The credential and re-pull banners already link
+ * Site Configuration this way; this makes it the rule for every notice.
+ *
+ * Escaping happens first and the anchors are inserted afterwards, so release
+ * copy is still treated as text and cannot introduce markup of its own. Longer
+ * names are matched first: "Site Configuration" must win over a shorter name it
+ * contains before that name gets a chance to match inside it.
+ */
+export function linkTools(text) {
+  const all = [...TOOLS, SITE_CONFIG_TOOL]
+    .flatMap((t) => (t.key === 'site-config'
+      // The short form people actually write, alongside the formal name.
+      ? [{ ...t }, { ...t, name: 'Site Config' }]
+      : [t]))
+    .sort((a, b) => b.name.length - a.name.length);
+  let out = esc(text);
+  const taken = [];
+  for (const t of all) {
+    const needle = esc(t.name);
+    let from = 0;
+    for (;;) {
+      const at = out.indexOf(needle, from);
+      if (at < 0) break;
+      // Never match inside an anchor already inserted for a longer name.
+      if (taken.some(([s0, e0]) => at < e0 && at + needle.length > s0)) {
+        from = at + needle.length;
+        continue;
+      }
+      const link = `<a href="${t.href}">${needle}</a>`;
+      out = out.slice(0, at) + link + out.slice(at + needle.length);
+      const shift = link.length - needle.length;
+      for (const span of taken) { if (span[0] > at) { span[0] += shift; span[1] += shift; } }
+      taken.push([at, at + link.length]);
+      from = at + link.length;
+    }
+  }
+  return out;
+}
 
 export function loginPage({ leagueName, season, theme, reduceMotion, error }) {
   const rail = `
@@ -64,7 +110,13 @@ pw.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); }
     ] });
 }
 
-const TOOL_ICONS = {
+/**
+ * One glyph per tool, shared by the dashboard tiles and the setup wizard's
+ * tool picker. Exported rather than duplicated: a new tool's icon has to
+ * appear in both places, and two copies is exactly the shape of the bug where
+ * one of them silently keeps an older list.
+ */
+export const TOOL_ICONS = {
   // A draft board: a column of picks with the next slot marked. Deliberately
   // not a trophy, which belongs to standings and playoff tools.
   'draft-helper': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 8.5h18M3 14h18"/><path d="M8.5 3v18"/><path d="M12 11.2h5.5M12 16.8h4"/><circle cx="5.7" cy="11.2" r="1"/><circle cx="5.7" cy="16.8" r="1"/></svg>',
@@ -85,6 +137,11 @@ const TOOL_ICONS = {
 export function dashboardPage({
   leagueName, season, theme, reduceMotion, tools, teams, selectedTeamId,
   initial = null, board = null, espnAuth = null,
+  version = '', releaseItems = [], repullNeeded = false, needsHistoryRepull = false,
+  // Diagnostics only: render the update dialog already open. The real page
+  // never sets this — whether the dialog opens is decided in the browser from
+  // what that browser has already seen, which a server render cannot know.
+  updateOpen = false,
 }) {
   /* Expired ESPN credentials are shown to everyone signed in, not just to the
      administrator, because the site has no way to tell them apart: the Admin
@@ -108,6 +165,50 @@ export function dashboardPage({
         <a href="/config">Site Configuration</a>, which asks for the Admin Password.</p>
       </span>
     </div>` : '';
+
+  /* An update added data this deployment has never fetched.
+   *
+   * Written for the reader who cannot fix it, the same way the credentials
+   * banner is: a member seeing an empty tool needs to know why it is empty and
+   * who to ask, not to be addressed as the person holding the Admin Password. */
+  const repullAlert = repullNeeded ? `
+    <div class="alertbar" role="status">
+      <span class="alerticon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v5.5h-5.5"/>
+        </svg>
+      </span>
+      <span>
+        <b>Update needs a data pull</b>
+        <p>A recent update added information this site has not fetched yet, so some
+        tools may be empty until it arrives. Whoever administers this site can finish
+        the update by running ${needsHistoryRepull
+          ? 'both the league data and past seasons pulls'
+          : 'the league data pull'} in
+        <a href="/config">Site Configuration</a>, which asks for the Admin Password.</p>
+      </span>
+    </div>` : '';
+
+  /* Shown once per browser, the first time it sees a version it has not seen
+     before. A browser with no record at all is a first visit rather than an
+     update, and is told nothing — greeting somebody's very first arrival with
+     a changelog for a site they have never used describes a history they were
+     not part of. */
+  const updatePopup = version ? `
+  <div class="uplayer" id="updatepop"${updateOpen ? '' : ' hidden'}>
+    <div class="upbox" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+      <div class="uphead">
+        <h2 id="updateTitle">Site updated \u2014 v${esc(version)}</h2>
+        <button class="ctlbtn" id="updateClose" aria-label="Close">${CLOSE}</button>
+      </div>
+      ${releaseItems.length
+        ? `<ul class="uplist">${releaseItems.map((i) => `<li>${linkTools(i)}</li>`).join('')}</ul>`
+        : '<p class="hint" style="margin:0 0 14px">This site was updated.</p>'}
+      <button class="primary" id="updateDone">Got it</button>
+    </div>
+  </div>` : '';
+
   const tiles = tools.map((t, i) => `
     <a class="tile" href="${esc(t.href)}">
       <span class="tileidx">${String(i + 1).padStart(2, '0')}</span>
@@ -132,6 +233,7 @@ export function dashboardPage({
 
   const body = `
     ${credentialAlert}
+    ${repullAlert}
     <div class="panel tight reveal">
       <div class="tickhead">
         <span class="dot" id="fdot"></span>
@@ -179,20 +281,21 @@ export function dashboardPage({
       <div id="injuries"><p class="hint" style="margin:0">Loading</p></div>
     </div>
 
+    <p class="eyebrow" style="margin-top:26px">Tools</p>
+    <div class="tiles reveal">${tiles || '<p class="hint">No tools are enabled yet.</p>'}</div>
+
+    <p class="eyebrow" style="margin-top:26px">News</p>
     <div class="panel reveal">
       <div class="panelhead"><span class="t">League activity</span>
         <span class="ranges" id="ranges">
-          <button data-range="7">7d</button>
-          <button data-range="30" class="on">30d</button>
+          <button data-range="7" class="on">7d</button>
+          <button data-range="30">30d</button>
           <button data-range="90">90d</button>
           <button data-range="0">All</button>
         </span>
       </div>
       <div id="transactions"><p class="hint" style="margin:0">Loading</p></div>
     </div>
-
-    <p class="eyebrow" style="margin-top:26px">Tools</p>
-    <div class="tiles reveal">${tiles || '<p class="hint">No tools are enabled yet.</p>'}</div>
 
     <div class="panel reveal" style="margin-top:14px">
       <div class="panelhead"><span class="t">Around the league</span></div>
@@ -202,6 +305,29 @@ export function dashboardPage({
 `;
 
   const css = `
+    /* A notice, not a destination.
+       The instructions dialog is a full-page sheet because it explains a whole
+       surface; this says a handful of sentences and gets out of the way, so it
+       is a small box over the site with the page still visible behind it. The
+       layout rule is scoped past [hidden] — an author display declaration
+       outranks the attribute, and this element spends most of its life hidden. */
+    .uplayer { position:fixed; inset:0; z-index:90; padding:20px;
+      background:rgba(3,6,4,.66); }
+    .uplayer:not([hidden]) { display:flex; align-items:center; justify-content:center; }
+    .upbox { width:min(440px,100%); max-height:min(78vh,620px); overflow-y:auto;
+      background:var(--panel,#111713); color:var(--ink,#E6F2E4);
+      border:1px solid var(--line-2,#2C3B2E); border-radius:14px;
+      padding:20px 20px 18px; box-shadow:0 24px 60px rgba(0,0,0,.55); }
+    .uphead { display:flex; align-items:flex-start; gap:12px; margin-bottom:14px; }
+    .uphead h2 { flex:1; margin:0; font-size:16px; font-weight:900;
+      letter-spacing:-.01em; color:var(--ink,#E6F2E4); }
+    .uphead .ctlbtn { margin-top:1px; }
+
+    .uplist { margin:0 0 16px; padding-left:17px; }
+    .uplist li { font-size:12.5px; line-height:1.55; color:var(--ink-2); margin-bottom:8px; }
+    .uplist li:last-child { margin-bottom:0; }
+    .uplist li::marker { color:var(--accent); }
+
     .tickhead { display:flex; align-items:center; gap:9px; margin-bottom:11px; }
     .tickttl { font-size:11px; font-weight:900; text-transform:uppercase; letter-spacing:.16em;
       background:linear-gradient(94deg,var(--ink) 10%,var(--accent) 150%);
@@ -231,7 +357,7 @@ export function dashboardPage({
        fantasy strip's "Week 1" trailing most of an inch of empty rule. */
     .tkstate { font-size:9.5px; font-weight:900; letter-spacing:.1em; text-transform:uppercase;
                color:var(--ink-3); margin-left:4px; display:inline-block;
-               min-width:var(--statew, 5ch); }
+               min-width:var(--sw, 5ch); flex:none; }
     .tk.live .tkstate { color:var(--accent); }
     .tk.win .tkab { color:var(--accent); }
 
@@ -278,11 +404,37 @@ export function dashboardPage({
       .cardstats { gap:14px; }
       .stat b { font-size:16px; }
     }
-    .vsmid { flex:none; text-align:center; min-width:118px; }
+    .vsmid { flex:none; text-align:center; min-width:150px; }
     .vsscore { font-size:20px; font-weight:900; font-variant-numeric:tabular-nums;
                color:var(--accent); letter-spacing:-.02em; }
     .vslabel { font-size:9.5px; font-weight:900; letter-spacing:.15em; text-transform:uppercase;
                color:var(--ink-3); margin-top:2px; }
+    /* Scores stacked on the left, the win split on the right, both sides of the
+       fixture readable without the eye moving twice. Each score keeps its own
+       colour so a line can be matched to a team without a label. */
+    .vsgrid { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .vslines { text-align:left; }
+    .sline { display:flex; align-items:baseline; gap:6px; }
+    .sline b { font-size:19px; font-weight:900; font-variant-numeric:tabular-nums;
+               letter-spacing:-.02em; line-height:1.15; }
+    .smine { color:var(--accent); }
+    .stheirs { color:var(--sky); }
+    /* The projection trails its own score: what has happened, then where it is
+       heading, in that order and never the same weight. */
+    .sproj { font-size:10.5px; font-weight:800; font-variant-numeric:tabular-nums;
+             color:var(--ink-2); }
+    .vslines .vslabel { margin:1px 0 2px; }
+
+    .wgauge { position:relative; flex:none; width:52px; height:52px; }
+    .wgauge svg { width:100%; height:100%; transform:rotate(0deg); }
+    .wgauge circle { fill:none; stroke-width:9; }
+    .wgtrack { stroke:var(--line-2); }
+    .wgmine { stroke:var(--accent); }
+    .wgtheirs { stroke:var(--sky); }
+    .wgmid { position:absolute; inset:0; display:flex; align-items:center;
+             justify-content:center; font-size:12px; font-weight:900;
+             font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
+    .wgmid i { font-style:normal; font-size:8px; margin-left:1px; }
     .countdown { font-size:19px; font-weight:900; font-variant-numeric:tabular-nums;
                  letter-spacing:.02em; color:var(--ink); }
     .countdown em { font-style:normal; color:var(--ink-3); font-size:12px; margin:0 1px 0 1px; }
@@ -433,6 +585,21 @@ function logo(url, alt, cls) {
    inside the already-scrolling copies are updated. */
 var stripSig = {};
 
+/* Each fixture reserves only the room its own state needs.
+ *
+ * One width for the whole strip meant every item reserved what the longest one
+ * needed — an upcoming kickoff time runs to about eighteen characters — so a
+ * game reading FINAL carried a dozen blank characters after it. The reservation
+ * exists to stop a label resizing mid-scroll, and a game only changes state a
+ * couple of times a day, at which point the strip rebuilds once anyway.
+ *
+ * A little headroom on top, because a running clock grows by a character when
+ * the quarter ticks over and that should not nudge the loop. */
+function stateCell(state) {
+  var n = Math.max(4, String(state || '').length + 1);
+  return '<span class="tkstate j-s" style="--sw:' + n + 'ch"></span>';
+}
+
 function nflItem(g, i) {
   // The score cell is only rendered once a game is under way. Reserving it
   // beforehand left a visible hole in every fixture. Started state is part of
@@ -453,7 +620,7 @@ function nflItem(g, i) {
   }
   return { key: 'n' + i,
     html: '<div class="tk" data-k="n' + i + '">' + away +
-      '<span class="tkvs">AT</span>' + home + '<span class="tkstate j-s"></span></div>',
+      '<span class="tkvs">AT</span>' + home + stateCell(state) + '</div>',
     vals: { a: g.started ? g.awayScore : '', h: g.started ? g.homeScore : '',
             s: state, live: !!g.inProgress, win: null } };
 }
@@ -464,9 +631,10 @@ function fantasyItem(m, i) {
       '<b class="tkab">' + esc(s.name) + '</b>' +
       (m.started ? '<b class="tkpts j-' + cls + '"></b>' : '') + '</span>';
   }
+  var state = m.winner ? 'Final' : (m.started ? 'Live' : 'Week ' + m.period);
   return { key: 'f' + i,
     html: '<div class="tk" data-k="f' + i + '">' + side(m.away, 'a') +
-      '<span class="tkvs">VS</span>' + side(m.home, 'h') + '<span class="tkstate j-s"></span></div>',
+      '<span class="tkvs">VS</span>' + side(m.home, 'h') + stateCell(state) + '</div>',
     vals: { a: m.started ? m.away.points.toFixed(1) : '',
             h: m.started ? m.home.points.toFixed(1) : '',
             s: m.winner ? 'Final' : (m.started ? 'Live' : 'Week ' + m.period),
@@ -509,17 +677,6 @@ function marquee(runEl, stripEl, emptyEl, items) {
   if (stripSig[id] === signature) { patch(runEl, items); return; }
   stripSig[id] = signature;
 
-  /* Reserve the widest state this strip actually carries — set before the copy
-     is measured, because the reservation is part of the copy's width. A game
-     going from a kickoff time to FINAL then cannot resize an item mid-scroll
-     and shift the loop. */
-  var widest = 0;
-  items.forEach(function (it) {
-    var n = (it.vals.s || '').length;
-    if (n > widest) widest = n;
-  });
-  runEl.style.setProperty('--statew', Math.max(4, widest + 1) + 'ch');
-
   runEl.style.animation = 'none';
   runEl.innerHTML = structure;
   patch(runEl, items);
@@ -540,6 +697,35 @@ function marquee(runEl, stripEl, emptyEl, items) {
 
 /* ---------------------------------------------------------------- team card */
 var KICKOFF = null, cdTimer = null;
+
+/* The win split as one dial rather than two.
+ *
+ * A matchup has exactly two outcomes, so a single ring divided between them
+ * says more than a lone percentage: the reader sees both shares and which way
+ * it leans in one glance. The reader's own side is drawn in the accent green
+ * from the top of the arc, the opponent's in blue for the remainder, and the
+ * centre carries whichever side is ahead in that side's colour. */
+function winGauge(m) {
+  if (m.winner || typeof m.myWinProb !== 'number') return '';
+  var mine = Math.max(0, Math.min(100, m.myWinProb));
+  var theirs = 100 - mine;
+  var R = 42, C = 2 * Math.PI * R;
+  var lead = mine >= theirs;
+  var pct = (lead ? mine : theirs).toFixed(0);
+  return '<div class="wgauge" role="img" aria-label="' +
+      mine.toFixed(0) + ' percent to win">' +
+    '<svg viewBox="0 0 100 100">' +
+      '<circle class="wgtrack" cx="50" cy="50" r="' + R + '"/>' +
+      '<circle class="wgtheirs" cx="50" cy="50" r="' + R + '" ' +
+        'stroke-dasharray="' + C + '" stroke-dashoffset="' + (C * (1 - theirs / 100)) + '" ' +
+        'transform="rotate(' + (-90 + 360 * (mine / 100)) + ' 50 50)"/>' +
+      '<circle class="wgmine" cx="50" cy="50" r="' + R + '" ' +
+        'stroke-dasharray="' + C + '" stroke-dashoffset="' + (C * (1 - mine / 100)) + '" ' +
+        'transform="rotate(-90 50 50)"/>' +
+    '</svg>' +
+    '<span class="wgmid ' + (lead ? 'smine' : 'stheirs') + '">' + pct + '<i>%</i></span>' +
+  '</div>';
+}
 
 function two(n) { return n < 10 ? '0' + n : String(n); }
 
@@ -600,14 +786,26 @@ function renderCard(t, identified) {
 
   var mid, vs = '';
   if (t.matchup) {
-    if (t.matchup.started) {
-      mid = '<div class="vsscore">' + t.matchup.myPoints.toFixed(1) + ' &middot; ' +
-        t.matchup.oppPoints.toFixed(1) + '</div><div class="vslabel">' +
-        (t.matchup.winner ? 'Final' : 'Live') + '</div>';
+    var m = t.matchup;
+    /* A matchup that has kicked off shows what it is worth, not how long until
+       something that already happened. The countdown is for a fixture where
+       nobody has taken the field yet. */
+    if (m.inPlay || m.started) {
+      var projMe = m.myProjected != null
+        ? '<span class="sproj">' + m.myProjected.toFixed(1) + '</span>' : '';
+      var projOpp = m.oppProjected != null
+        ? '<span class="sproj">' + m.oppProjected.toFixed(1) + '</span>' : '';
+      mid = '<div class="vsgrid">' +
+        '<div class="vslines">' +
+          '<div class="sline"><b class="smine">' + m.myPoints.toFixed(1) + '</b>' + projMe + '</div>' +
+          '<div class="vslabel">' + (m.winner ? 'Final' : 'Live') + '</div>' +
+          '<div class="sline"><b class="stheirs">' + m.oppPoints.toFixed(1) + '</b>' + projOpp + '</div>' +
+        '</div>' + winGauge(m) +
+      '</div>';
     } else if (t.kickoff) {
       mid = '<div class="countdown" id="cdown">--</div><div class="vslabel">Until kickoff</div>';
     } else {
-      mid = '<div class="vslabel">Week ' + t.matchup.period + '</div>';
+      mid = '<div class="vslabel">Week ' + m.period + '</div>';
     }
     var meLabel = short(t.name);
     var oppLabel = short(t.matchup.opponent);
@@ -631,13 +829,15 @@ function renderCard(t, identified) {
 
   document.getElementById('cardBody').innerHTML = vs;
 
-  KICKOFF = (t.matchup && !t.matchup.started) ? t.kickoff : null;
+  KICKOFF = (t.matchup && !t.matchup.started && !t.matchup.inPlay) ? t.kickoff : null;
   if (cdTimer) clearInterval(cdTimer);
   if (KICKOFF) { renderCountdown(); cdTimer = setInterval(renderCountdown, 1000); }
 }
 
 /* ---------------------------------------------------------------- board */
-var TX = [], RANGE = 30;
+/* Two weeks of waiver noise buried the useful part of this list, and the panel
+   is a glance rather than an archive. The wider ranges are one click away. */
+var TX = [], RANGE = 7;
 
 function renderStandings(st) {
   var host = document.getElementById('standings');
@@ -811,11 +1011,61 @@ async function loadStatus() {
 if (INITIAL) { LAST_STATUS = INITIAL; paint(INITIAL); } else loadStatus();
 if (BOARD) paintBoard(BOARD); else loadBoard();
 setInterval(loadBoard, 90000);
-${idleAwarePoller('loadStatus', 15000)}`;
+${idleAwarePoller('loadStatus', 15000)}
+
+/* The update notice, shown once per browser per version.
+ *
+ * There is no per-member identity on this site — one shared League Password —
+ * so there is no server-side record of who has read what, and localStorage is
+ * the only thing that can answer "has this browser seen this version". A
+ * browser with nothing stored is treated as a first visit and told nothing:
+ * it has not been updated from anything.
+ *
+ * Every storage access is guarded. Private browsing and locked-down profiles
+ * throw on access rather than returning null, and a changelog is never worth
+ * taking the dashboard down over. */
+(function () {
+  var VERSION = ${JSON.stringify(version || '')};
+  if (!VERSION) return;
+  var pop = document.getElementById('updatepop');
+  if (!pop) return;
+
+  var KEY = 'eft_seen_version';
+
+  function remember() {
+    try { window.localStorage.setItem(KEY, VERSION); } catch (e) {}
+  }
+  function close() {
+    pop.hidden = true;
+    remember();
+  }
+
+  /* Dismissal is wired before anything decides whether to open, so a dialog
+     that arrives already open — which diagnostics can render — can still be
+     closed. Wiring it after the checks below left those buttons inert. */
+  var x = document.getElementById('updateClose');
+  var done = document.getElementById('updateDone');
+  if (x) x.addEventListener('click', close);
+  if (done) done.addEventListener('click', close);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !pop.hidden) close();
+  });
+  // Clicking the page behind the notice dismisses it too, the way a small
+  // overlay is expected to behave. Clicks inside the box are not dismissals.
+  pop.addEventListener('click', function (e) { if (e.target === pop) close(); });
+
+  var seen = null;
+  try { seen = window.localStorage.getItem(KEY); } catch (e) { return; }
+
+  if (seen === null || seen === undefined) { remember(); return; }
+  if (seen === VERSION) return;
+  pop.hidden = false;
+})();`;
 
   return shell({
     title: leagueName || 'ESPN Fantasy Tools', theme, reduceMotion, rail, body,
     band: true, settings: true, extraCss: css, extraJs: js,
+    overlays: updatePopup,
     instructions: [
       ['01', 'Pick your team first',
        'Choose your team above and the whole page follows it: your matchup, your injuries, your activity. The choice is shared with every tool.'],
