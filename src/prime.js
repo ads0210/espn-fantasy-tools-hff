@@ -41,6 +41,7 @@
 import { DATASETS, getDataset, planBatches } from './datasets.js';
 import { refreshLogos } from './logos.js';
 import { coordinatorRefresh } from './dedupe.js';
+import { readStatus, listAll, DATA_PREFIX } from './store.js';
 
 const JOB_KEY = 'jobs/prime.json';
 const CALLS_PER_BATCH = 24;
@@ -99,6 +100,58 @@ export function primePlan(cfg) {
   // pass could push against the CPU ceiling.
   for (const key of derived) batches.push([key]);
   return batches;
+}
+
+/**
+ * Datasets the current code expects that this deployment has never fetched.
+ *
+ * The update problem this solves: a fork that updates its code gets any new
+ * dataset the release added registered in the registry, but nothing goes and
+ * fetches it — priming runs during setup, and setup already happened. The tool
+ * reading it then renders empty, correctly and unhelpfully, with nothing on the
+ * site saying why.
+ *
+ * `primePlan` is reused rather than re-derived because it is already the
+ * definition of "everything a complete site has fetched once", and it already
+ * picks up a newly registered digest with no registration step.
+ *
+ * A missing *status document* is the signal, not a missing payload. A dataset
+ * that was fetched and legitimately came back empty — several are expected to,
+ * out of season — still writes a status, so the two states cannot be confused.
+ */
+export async function missingDatasetKeys(env, cfg) {
+  const keys = [...new Set(primePlan(cfg).flat())];
+
+  /* Stored parts first, in one list rather than a read per dataset.
+   *
+   * A derived digest is the reason this cannot key off status documents alone.
+   * A digest is produced as a side effect of refreshing its source, so it gets
+   * a payload but never a status of its own — and a first version of this check
+   * therefore reported every digest on the site as unfetched, which would have
+   * shown the "run a re-pull" banner to every member of every freshly set-up
+   * league. Presence of the payload is what actually answers the question. */
+  const stored = new Set();
+  try {
+    for (const obj of await listAll(env, DATA_PREFIX)) {
+      const rest = obj.key.slice(DATA_PREFIX.length);
+      const slash = rest.indexOf('/');
+      if (slash > 0) stored.add(rest.slice(0, slash));
+    }
+  } catch {
+    // A listing failure must not manufacture a site-wide banner.
+    return [];
+  }
+
+  /* Anything with no stored part might still have been fetched and come back
+   * legitimately empty — several datasets are expected to, out of season. Those
+   * do write a status document, so it is consulted only for the handful of keys
+   * the listing could not account for. */
+  const unaccounted = keys.filter((k) => !stored.has(k));
+  if (!unaccounted.length) return [];
+  const statuses = await Promise.all(
+    unaccounted.map((k) => readStatus(env, k).catch(() => null))
+  );
+  return unaccounted.filter((_, i) => !statuses[i]);
 }
 
 function newJob(cfg) {
