@@ -84,6 +84,10 @@ function normalise(raw) {
     sessionSecret: c.sessionSecret || null,
     setupCompletedAt: c.setupCompletedAt || null,
     toolVisibility: c.toolVisibility || {},
+    // The build this site last confirmed its datasets against. Internal
+    // bookkeeping for the post-update re-pull banner: deliberately absent from
+    // describeConfig, because it describes the deployment rather than the league.
+    datasetsCheckedVersion: c.datasetsCheckedVersion || null,
   };
 }
 
@@ -155,7 +159,7 @@ export async function saveConfig(env, patch) {
   const allowed = [
     'leagueId', 'espnS2', 'swid', 'season', 'leaguePrivate', 'historySeasons',
     'leaguePasswordHash', 'adminPasswordHash', 'sessionSecret', 'setupCompletedAt',
-    'toolVisibility',
+    'toolVisibility', 'datasetsCheckedVersion',
   ];
   for (const field of allowed) {
     if (patch[field] === undefined) continue;
