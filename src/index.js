@@ -26,7 +26,7 @@ import { shell, backAction, displayTitle, passwordField, esc, LOGO_FALLBACK_SVG,
 import { TOOLS, describeTools, applyVisibility, visibleTools, visibilityOf, VISIBILITY }
   from './tools.js';
 import { runBatch, readJob, jobStatus } from './history.js';
-import { runPrimeBatch, primeStatus } from './prime.js';
+import { runPrimeBatch, primeStatus, missingDatasetKeys } from './prime.js';
 import { fetchPart } from './espn.js';
 import { buildLiveScoringDigest } from './derive.js';
 import { putPart } from './store.js';
@@ -39,7 +39,44 @@ export { DatasetCoordinator } from './coordinator.js';
 export { LoginThrottle } from './throttle.js';
 export { ScoreTimelineDO } from './scoretimeline.js';
 
-const BUILD_MARKER = 'r57';
+const BUILD_MARKER = 'r82';
+
+/**
+ * What changed in this version, shown once per browser after an update.
+ *
+ * Bumped in the same edit as BUILD_MARKER, because a version number that moved
+ * without the notes moving is how a reader ends up being told about the last
+ * release twice. An empty list is a valid state: the popup then says only that
+ * the site was updated, which is the honest thing to say about a build whose
+ * changes nobody outside the repo would notice.
+ */
+const RELEASE_NOTE_ITEMS = [
+  'Lineups now read in the same order everywhere: QB, RB, RB, WR, WR, TE, FLEX, D/ST, K, then the bench.',
+  "Live Matchups shows each bench player's projection, and a projected total for the whole bench.",
+  'The setup wizard now shows each tool\u2019s icon when you pick which ones to run.',
+  'Hall of Fame team and head-to-head cards now show an arrow marking that they open.',
+  'The site has its own browser tab icon.',
+  'General update compatibility.',
+  'Rescaled Score Progression graphs on Live Matchups.',
+  'Various bug fixes due to no test surface existing for in-flight matchups prior to Week 1.',
+];
+
+/**
+ * Whether this release needs the *historical* pull re-run, as opposed to the
+ * ordinary league pull.
+ *
+ * Nearly every release that adds data adds a registered dataset, and those are
+ * detected automatically — see repullBannerNeeded below. The box-score history
+ * job has no comparable per-key registry to diff against, so the rare release
+ * that needs it says so here rather than being guessed at.
+ */
+const NEEDS_HISTORY_REPULL = false;
+
+/** The version as a reader sees it. Derived from the build marker, never typed twice. */
+function displayVersion() {
+  const m = /(\d+)$/.exec(BUILD_MARKER);
+  return m ? `1.${m[1]}` : BUILD_MARKER;
+}
 
 export default {
   async fetch(request, env, ctx) {
@@ -174,6 +211,34 @@ export async function tickTimeline(env) {
   return { ok: true, matchups: Object.keys(m).length, players: Object.keys(p).length, timeline: res };
 }
 
+/**
+ * Does this deployment need a re-pull to finish an update?
+ *
+ * Cost is the whole design here. The check reads one status document per
+ * registered dataset, which is far too much to spend on every dashboard load
+ * forever — so a site that passes records the build it passed against, and every
+ * later load until the next deploy is a string comparison against config that
+ * was already loaded. A site that fails is *not* cached: the banner has to
+ * disappear the moment the re-pull is run, not whenever a cache lapses.
+ *
+ * The failure path is silent by design. This decides whether to show a notice;
+ * a store hiccup that makes it throw should cost the notice, never the page.
+ */
+async function repullBannerNeeded(env, cfg) {
+  try {
+    if (!isSetupFinished(cfg)) return false;
+    if (cfg.datasetsCheckedVersion === BUILD_MARKER) return false;
+    const missing = await missingDatasetKeys(env, cfg);
+    if (missing.length === 0) {
+      await saveConfig(env, { datasetsCheckedVersion: BUILD_MARKER });
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Read a stored digest without the ensure/revalidate machinery. */
 async function readDigestPlain(env, key) {
   const obj = await getPart(env, key, 'main');
@@ -205,6 +270,18 @@ async function route(request, env, ctx) {
         ASSETS: Boolean(env.ASSETS),
       },
     });
+  }
+
+  /* The tab icon, ahead of the gate.
+   *
+   * `run_worker_first` means even a favicon request lands here, so without an
+   * exemption the icon 401s on exactly the two surfaces a fresh visitor sees
+   * first: the login page and the setup wizard. It is a static file that holds
+   * no league data and triggers no upstream fetch, so serving it unauthenticated
+   * gives nothing away — the same reasoning that already exempts /api/health. */
+  if (path === '/favicon.svg') {
+    if (env.ASSETS) return env.ASSETS.fetch(request);
+    return new Response('not found', { status: 404 });
   }
 
 
@@ -336,10 +413,11 @@ async function route(request, env, ctx) {
 
   if (path === '/' || path === '/index.html') {
     const selectedTeam = readCookie(request, TEAM_COOKIE) || '';
-    const [teams, initial, board] = await Promise.all([
+    const [teams, initial, board, repullNeeded] = await Promise.all([
       getTeams(env, ctx),
       dashboardPayload(env, ctx),
       boardPayload(env, ctx, selectedTeam),
+      repullBannerNeeded(env, cfg),
     ]);
     return html(dashboardPage({
       leagueName: await leagueName(env, { ensure: true, ctx }),
@@ -350,6 +428,10 @@ async function route(request, env, ctx) {
       selectedTeamId: selectedTeam,
       initial, board,
       espnAuth: await readEspnAuth(env),
+      version: displayVersion(),
+      releaseItems: RELEASE_NOTE_ITEMS,
+      repullNeeded,
+      needsHistoryRepull: NEEDS_HISTORY_REPULL,
     }));
   }
 
@@ -919,6 +1001,9 @@ async function liveTimeline(env, url, ctx) {
     ok: true, season, week,
     count: out.count || 0, rows: out.rows || [],
     events: out.events || [],
+    // When sampling last ran, which is not the same as when a value last
+    // changed. A chart needs it to know a flat line runs to now.
+    lastTick: out.lastTick || null,
   });
 }
 
@@ -1036,20 +1121,24 @@ async function dashboardBoard(env, ctx, url) {
   return json(await boardPayload(env, ctx, url.searchParams.get('team')));
 }
 
-async function boardPayload(env, ctx, teamId) {
+export async function boardPayload(env, ctx, teamId) {
   // Rules and team identity ride along with the board poll rather than the
   // 15-second status poll: slow-moving data on the slow-moving endpoint.
   revalidate(env, 'league_settings', ctx);
   revalidate(env, 'league_teams', ctx);
 
-  const [standings, matchups, rosters, injuries, transactions, scoreboard] = await Promise.all([
-    readDigest(env, 'standings_digest', ctx),
-    readDigest(env, 'matchup_digest', ctx),
-    readDigest(env, 'roster_digest', ctx),
-    readDigest(env, 'injuries_digest', ctx),
-    readDigest(env, 'transaction_digest', ctx),
-    readDigest(env, 'scoreboard_digest', ctx),
-  ]);
+  const [standings, matchups, rosters, injuries, transactions, scoreboard, live] =
+    await Promise.all([
+      readDigest(env, 'standings_digest', ctx),
+      readDigest(env, 'matchup_digest', ctx),
+      readDigest(env, 'roster_digest', ctx),
+      readDigest(env, 'injuries_digest', ctx),
+      readDigest(env, 'transaction_digest', ctx),
+      readDigest(env, 'scoreboard_digest', ctx),
+      // Projections and win probability live here rather than in the matchup
+      // digest, and the card wants them the moment the first game is under way.
+      readDigest(env, 'live_scoring_digest', ctx),
+    ]);
 
   const out = {
     ok: true,
@@ -1117,6 +1206,25 @@ async function boardPayload(env, ctx, teamId) {
     owner: r.owner || '',
   } : null);
 
+  /* The reader's side of the live digest, for projections and win probability.
+   * Matched on team id rather than on position in the schedule, because the two
+   * digests are built from different payloads and need not agree on order. */
+  let liveMe = null;
+  let liveOpp = null;
+  for (const g of (live && live.games) || []) {
+    if (g.home && g.home.teamId === id) { liveMe = g.home; liveOpp = g.away; break; }
+    if (g.away && g.away.teamId === id) { liveMe = g.away; liveOpp = g.home; break; }
+  }
+
+  /* Whether this matchup is under way.
+   *
+   * Points alone are the wrong test: a fixture whose first game kicked off ten
+   * minutes ago has a real, live scoreline of nothing-nothing, and the card was
+   * showing a countdown to a kickoff that had already happened. Kickoff having
+   * passed is what makes a matchup live; points are what it is worth so far. */
+  const kickedOff = Boolean(earliest) && Date.parse(earliest) <= Date.now();
+  const inPlay = Boolean(matchup && (matchup.game.started || kickedOff));
+
   out.myTeam = {
     teamId: id,
     name: row ? row.name : (matchup ? matchup.me.name : `Team ${id}`),
@@ -1139,6 +1247,11 @@ async function boardPayload(env, ctx, teamId) {
       myPoints: matchup.me.points,
       oppPoints: matchup.opp.points,
       started: matchup.game.started,
+      // Under way, as opposed to having scored: see kickedOff above.
+      inPlay,
+      myProjected: liveMe ? liveMe.projected : null,
+      oppProjected: liveOpp ? liveOpp.projected : null,
+      myWinProb: liveMe ? liveMe.winProb : null,
       winner: matchup.game.winner,
       period: matchup.game.period,
     } : null,
