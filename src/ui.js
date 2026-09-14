@@ -629,7 +629,7 @@ export const BASE_CSS = `
 
 const SUN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.6v2.1M12 19.3v2.1M4.6 4.6l1.5 1.5M17.9 17.9l1.5 1.5M2.6 12h2.1M19.3 12h2.1M4.6 19.4l1.5-1.5M17.9 6.1l1.5-1.5"/></svg>`;
 const MOON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.6A8.4 8.4 0 1 1 9.6 4.2a6.7 6.7 0 0 0 10.4 10.4z"/></svg>`;
-const CLOSE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>`;
+export const CLOSE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>`;
 const HELP = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.4"/><path d="M9.2 9.3a2.8 2.8 0 1 1 3.9 2.9c-.9.5-1.4 1-1.4 2.1"/><circle cx="12" cy="17.2" r=".55" fill="currentColor" stroke="none"/></svg>`;
 const GEAR = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"/><path d="M19.1 14.6a1.5 1.5 0 0 0 .3 1.7l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.5 1.5 0 0 0-1.7-.3 1.5 1.5 0 0 0-.9 1.4v.2a2 2 0 1 1-4 0v-.1a1.5 1.5 0 0 0-1-1.4 1.5 1.5 0 0 0-1.7.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.5 1.5 0 0 0 .3-1.7 1.5 1.5 0 0 0-1.4-.9H3a2 2 0 1 1 0-4h.1a1.5 1.5 0 0 0 1.4-1 1.5 1.5 0 0 0-.3-1.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.5 1.5 0 0 0 1.7.3H9a1.5 1.5 0 0 0 .9-1.4V3a2 2 0 1 1 4 0v.1a1.5 1.5 0 0 0 .9 1.4 1.5 1.5 0 0 0 1.7-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.5 1.5 0 0 0-.3 1.7V9a1.5 1.5 0 0 0 1.4.9h.2a2 2 0 1 1 0 4h-.1a1.5 1.5 0 0 0-1.4.9z"/></svg>`;
 const EYE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M1.8 12S5.5 5.2 12 5.2 22.2 12 22.2 12 18.5 18.8 12 18.8 1.8 12 1.8 12z"/><circle cx="12" cy="12" r="3"/></svg>`;
@@ -1297,6 +1297,11 @@ export function shell({
   title, theme, body, rail = '', band = false, centred = false, stack = false,
   settings = false, reduceMotion = false, extraCss = '', extraJs = '',
   home = false, action = '', instructions = null,
+  /* Full-screen overlays belong beside the instructions dialog, not in the page
+     body. Both are position:fixed sheets that cover everything, and the control
+     cluster is where that already provably works — a dialog rendered inside
+     <main> instead came out unstyled. */
+  overlays = '',
 }) {
   const light = theme === 'light';
   const cls = [light ? 'light' : 'dark'];
@@ -1306,6 +1311,7 @@ export function shell({
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow">
 <meta name="theme-color" content="${light ? '#EBF1E9' : '#070A08'}">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <title>${esc(title)}</title>
 <style>
   ${PALETTES}
@@ -1321,7 +1327,7 @@ ${BACKDROP}
             aria-label="How this page works" aria-haspopup="dialog">${HELP}</button>
     <button class="ctlbtn" id="gearBtn" title="Site settings"
             aria-label="Site settings" aria-haspopup="dialog">${GEAR}</button>
-    ${settingsMenu()}${instructionsDialog(instructions)}
+    ${settingsMenu()}${instructionsDialog(instructions)}${overlays}
   </div>
   <div class="pagegrid${band ? ' band' : ''}${centred ? ' centred' : ''}${stack ? ' stack' : ''}">
     <div class="rail">
