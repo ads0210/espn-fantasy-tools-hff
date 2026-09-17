@@ -1389,12 +1389,11 @@ export default function HallOfFame() {
         ${PALETTES}
         ${BASE_CSS}
         html[data-theme="dark"] {
-          --gold:#FFD24D; --gold-glow:rgba(255,210,77,.28);
+          /* Gold is a site token now; the other two medals are this tool's. */
           --silver:#C8D2D6; --silver-glow:rgba(200,210,214,.24);
           --bronze:#CD8A4D; --bronze-glow:rgba(205,138,77,.24);
         }
         html[data-theme="light"] {
-          --gold:#B8860B; --gold-glow:rgba(184,134,11,.22);
           --silver:#8A97A0; --silver-glow:rgba(138,151,160,.18);
           --bronze:#A85E2A; --bronze-glow:rgba(168,94,42,.18);
         }
@@ -1462,16 +1461,9 @@ export default function HallOfFame() {
 
         /* --- scrollbar the pointer owns ------------------------------------ */
         .scrollwrap { position:relative; }
-        .sbar { height:8px; margin-bottom:8px; background:var(--inset);
-          border:1px solid var(--line); position:relative; cursor:pointer;
-          touch-action:none; user-select:none; }
-        .sbar-thumb { position:absolute; top:0; bottom:0; left:0; min-width:32px;
-          background:linear-gradient(90deg,var(--accent-deep),var(--accent));
-          cursor:grab; transition:filter .16s ease; }
-        .sbar-thumb:hover { filter:brightness(1.18); }
-        .sbar.dragging .sbar-thumb { cursor:grabbing; filter:brightness(1.28); }
-        .scrollreal { overflow-x:auto; overflow-y:hidden; scrollbar-width:none; -ms-overflow-style:none; }
-        .scrollreal::-webkit-scrollbar { display:none; }
+        /* The scroller itself is defined in src/ui.js, shared with the home
+           page so both tables behave the same. Only the offsets this tool adds
+           on top of it live here. */
 
         /* --- rows that centre their orphans -------------------------------- */
         .rowgrid { display:flex; flex-wrap:wrap; gap:11px; justify-content:center;
@@ -1517,40 +1509,8 @@ export default function HallOfFame() {
           box-shadow:0 8px 22px rgba(0,0,0,.34); }
 
         /* --- tables -------------------------------------------------------- */
-        table.datatable { border-collapse:collapse; font-size:12.5px; width:max-content; min-width:100%; }
-        table.datatable th, table.datatable td { padding:11px 14px; text-align:center;
-          vertical-align:middle; white-space:nowrap; }
-        table.datatable thead th { font-size:10px; font-weight:900; letter-spacing:.1em;
-          text-transform:uppercase; border-bottom:1px solid var(--line-2); cursor:pointer;
-          user-select:none; background:var(--panel-2); }
-        /* The gradient lives on an inner span, never on the th: the th declares
-           its own background, which would win on specificity and clip the label
-           to a solid fill on a same-coloured cell — rendering it invisible. */
-        table.datatable thead th .lbl {
-          background:linear-gradient(94deg,var(--ink) 10%,var(--accent) 150%);
-          -webkit-background-clip:text; background-clip:text;
-          color:transparent; -webkit-text-fill-color:transparent; }
-        table.datatable thead th:hover .lbl {
-          background:linear-gradient(94deg,var(--accent) 0%,var(--accent-2) 100%);
-          -webkit-background-clip:text; background-clip:text; }
-        table.datatable thead th .arrow { display:inline-block; margin-left:5px; font-size:8px;
-          color:var(--accent); }
-        table.datatable thead th[aria-sort="none"] .arrow { visibility:hidden; }
-        table.datatable tbody tr { border-bottom:1px solid var(--line); }
-        table.datatable tbody tr:last-child { border-bottom:0; }
-        table.datatable tbody tr:nth-child(even) { background:rgba(127,127,127,.045); }
-        table.datatable tbody tr:hover { background:var(--accent-glow); }
-        td.c-rank { font-weight:900; font-size:15px; }
-        td.c-num { color:var(--ink); font-variant-numeric:tabular-nums; font-weight:700; }
-        td.c-muted { color:var(--ink-3); font-weight:700; font-size:11.5px; }
-        td.c-key { font-weight:900; font-size:13.5px; font-variant-numeric:tabular-nums; }
-        td.c-pos { color:var(--accent); font-weight:800; font-variant-numeric:tabular-nums; }
-        td.c-neg { color:var(--flag); font-weight:800; font-variant-numeric:tabular-nums; }
-        td.c-gold { color:var(--gold); font-weight:900; }
-        th.col-team, td.col-team { text-align:left; }
-        .stname { display:flex; align-items:center; gap:9px; text-align:left; }
-        .stname .lgo { width:26px; height:26px; }
-        .stnamewrap b { font-size:12.5px; font-weight:900; }
+        /* The table itself is defined in src/ui.js, so this tool and the home
+           page draw the same thing rather than two that drift apart. */
         .inactivetag { font-size:9.5px; color:var(--ink-3); font-weight:700; }
         table.gamelog { font-size:11.5px; }
         .pfchip { font-size:8.5px; font-weight:900; letter-spacing:.06em; text-transform:uppercase;
@@ -1560,7 +1520,20 @@ export default function HallOfFame() {
         .wl.w { color:var(--accent); } .wl.l { color:var(--flag); }
 
         /* --- champions: one row, newest first, scrolled not wrapped -------- */
-        .champrow { display:flex; gap:12px; padding-bottom:2px; width:max-content; }
+        /* max-content so a long run of seasons scrolls, min-width so a short one
+           still fills the frame and can be centred in it. A league three seasons
+           old was pinned to the left edge with the rest of the row empty. */
+        /* Centred when the seasons fit, scrollable when they do not.
+           Plain centre alignment in a scroll container puts the overflow on
+           both sides, and the leading edge is then unreachable: the first card,
+           which is the season in progress, was clipped with no way to scroll
+           back to it. Safe alignment drops to the start the moment it would
+           overflow, so the row is centred while it fits and complete when it
+           does not. The unprefixed value stays as a fallback for anything that
+           does not understand the safe keyword. */
+        .champrow { display:flex; gap:12px; padding-bottom:2px;
+          width:max-content; min-width:100%;
+          justify-content:center; justify-content:safe center; }
         .champcard { flex:0 0 208px; background:var(--panel); border:1px solid var(--line);
           padding:16px 14px; position:relative; text-align:center; display:flex;
           flex-direction:column; min-height:212px; }
