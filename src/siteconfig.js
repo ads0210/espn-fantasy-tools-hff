@@ -14,6 +14,7 @@
  */
 
 import { shell, passwordField, selectField, displayTitle, esc, backAction, HISTORY_RUNNER_JS } from './ui.js';
+import { TRADE_ROWS, TRADE_GROUPS } from './traderows.js';
 
 export function siteConfigPage({ theme, reduceMotion, leagueName }) {
   const rail = `
@@ -79,6 +80,19 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
         <div class="panelhead"><span class="t">Tools</span></div>
         <div id="toolRows"></div>
         <div class="msg" id="msgTools"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panelhead"><span class="t">Trade Analyzer weighting</span></div>
+        <p class="hint">What each statistic is worth when Trade Analyzer judges a
+           deal. These become your league&rsquo;s defaults; anyone can still move the
+           adjustable ones for themselves while they are looking at a trade, and
+           their changes never touch these. Leave a row alone and it follows the
+           shipped default, including if that default changes later.</p>
+        <div id="weightRows"></div>
+        <button class="primary" id="weightSave">Save weighting</button>
+        <button class="ghost" id="weightReset" style="margin-top:11px">Reset all to defaults</button>
+        <div class="msg" id="msgWeights"></div>
       </div>
 
       <div class="panel">
@@ -152,10 +166,58 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
     .toolsel { flex:none; width:164px; }
     .toolsel .xselbtn { padding:9px 11px; }
 
+    /* Trade Analyzer weighting. A row per statistic, grouped the way the tool
+       groups them, so an administrator reads the same structure they will see
+       in the breakdown. */
+    .wgroup { margin:16px 0 6px; font-size:9px; font-weight:900; letter-spacing:.17em;
+      text-transform:uppercase; color:var(--ink-3); display:flex; align-items:center;
+      gap:8px; }
+    .wgroup::before { content:""; width:5px; height:5px; background:var(--accent-deep);
+      transform:rotate(45deg); flex:none; }
+    .wrow { display:flex; align-items:center; gap:12px; padding:7px 0;
+      border-bottom:1px solid var(--line); }
+    .wrow:last-child { border-bottom:0; }
+    .wname { flex:1 1 auto; min-width:0; font-size:12px; font-weight:800; }
+    .wname em { font-style:normal; display:block; margin-top:2px; font-size:9px;
+      font-weight:900; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); }
+    .wrow .wslide { flex:0 1 190px; min-width:120px; -webkit-appearance:none;
+      appearance:none; height:16px; background:transparent; cursor:pointer; margin:0; }
+    .wrow .wslide::-webkit-slider-runnable-track { height:3px; background:var(--line-2); }
+    .wrow .wslide::-moz-range-track { height:3px; background:var(--line-2); }
+    .wrow .wslide::-webkit-slider-thumb { -webkit-appearance:none; appearance:none;
+      width:10px; height:14px; margin-top:-5.5px; background:var(--accent); border:0;
+      box-shadow:0 0 0 1px var(--field); cursor:grab; }
+    .wrow .wslide::-moz-range-thumb { width:10px; height:14px; border-radius:0;
+      background:var(--accent); border:0; box-shadow:0 0 0 1px var(--field); }
+    .wval { flex:none; width:44px; text-align:right; font-size:12px; font-weight:900;
+      font-variant-numeric:tabular-nums; color:var(--accent); }
+    .wdef { flex:none; width:82px; text-align:right; font-size:9px; font-weight:800;
+      letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); }
+    /* Says plainly which rows this league has an opinion about. */
+    .wdef.moved { color:var(--signal); }
+    @media (max-width:640px) {
+      .wrow { flex-wrap:wrap; gap:8px 10px; }
+      .wname { flex:1 1 100%; }
+      .wrow .wslide { flex:1 1 auto; }
+      .wdef { width:auto; }
+    }
+
   `;
+
+  /* Only what the panel draws. The help text is left behind deliberately: it
+     is long, it is the tool's to explain, and it would be the one part of this
+     payload that could carry a character the template literal cares about. */
+  const weightSpec = TRADE_ROWS.map((r) => ({ id: r.id, g: r.g, n: r.n, s: r.s ? 1 : 0, w: r.w }));
 
   const js = HISTORY_RUNNER_JS + `
 var adminPw = null;
+var WEIGHT_ROWS = ${JSON.stringify(weightSpec)};
+var WEIGHT_GROUPS = ${JSON.stringify(TRADE_GROUPS)};
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
 
 document.getElementById('unlock').addEventListener('click', unlock);
 document.getElementById('adminPw').addEventListener('keydown', function (e) {
@@ -188,6 +250,7 @@ function render(r) {
   set('s2state', c.espnS2Present ? 'Set (' + c.espnS2Length + ' chars)' : 'Not set');
   set('swidstate', c.swidPresent ? (c.swidWellFormed ? 'Set' : 'Set, malformed') : 'Not set');
   renderTools(r.tools || []);
+  renderWeights((r.config || {}).tradeWeights || {});
   renderHistory(r.history || {});
   renderPrime(r.prime || {});
 }
@@ -236,6 +299,56 @@ function renderTools(tools) {
       if (r.ok && r.tools) renderTools(r.tools);
     });
   });
+}
+
+/* One row per statistic, grouped the way the tool groups them.
+   All twenty-eight, not only the eleven a member can move: the other
+   seventeen are fixed at whatever these say, so an administrator who cannot
+   reach them cannot actually set the league's weighting. */
+function renderWeights(saved) {
+  var host = document.getElementById('weightRows');
+  if (!host) return;
+  var lastGroup = null;
+  host.innerHTML = WEIGHT_ROWS.map(function (row) {
+    var value = saved[row.id] === undefined ? row.w : saved[row.id];
+    var head = '';
+    if (row.g !== lastGroup) {
+      lastGroup = row.g;
+      head = '<div class="wgroup">' + esc(WEIGHT_GROUPS[row.g] || row.g) + '</div>';
+    }
+    return head +
+      '<div class="wrow" data-row="' + row.id + '">' +
+        '<span class="wname">' + esc(row.n) +
+          (row.s ? '' : '<em>fixed for members</em>') + '</span>' +
+        '<input class="wslide" type="range" min="0" max="200" step="5"' +
+          ' value="' + Math.round(value * 100) + '"' +
+          ' aria-label="Weight for ' + esc(row.n) + '">' +
+        '<b class="wval">' + Math.round(value * 100) + '%</b>' +
+        '<span class="wdef' + (Math.abs(value - row.w) > 1e-9 ? ' moved' : '') + '">' +
+          'default ' + Math.round(row.w * 100) + '%</span>' +
+      '</div>';
+  }).join('');
+
+  host.querySelectorAll('.wrow').forEach(function (rowEl) {
+    var id = rowEl.dataset.row;
+    var def = WEIGHT_ROWS.find(function (x) { return x.id === id; });
+    var slider = rowEl.querySelector('.wslide');
+    var out = rowEl.querySelector('.wval');
+    var tag = rowEl.querySelector('.wdef');
+    slider.addEventListener('input', function () {
+      out.textContent = slider.value + '%';
+      var differs = Math.abs(Number(slider.value) / 100 - def.w) > 1e-9;
+      tag.classList.toggle('moved', differs);
+    });
+  });
+}
+
+function collectWeights() {
+  var out = {};
+  document.querySelectorAll('#weightRows .wrow').forEach(function (rowEl) {
+    out[rowEl.dataset.row] = Number(rowEl.querySelector('.wslide').value) / 100;
+  });
+  return out;
 }
 
 function renderHistory(h) {
@@ -343,6 +456,22 @@ function note(id, text, kind) {
   var el = document.getElementById(id);
   el.textContent = text; el.className = 'msg ' + (kind || 'err');
 }
+
+document.getElementById('weightSave').addEventListener('click', async function () {
+  var r = await call('/api/admin/trade-weights', { weights: collectWeights() });
+  note('msgWeights', r.ok ? 'Saved. Trade Analyzer will use this weighting.'
+    : (r.error || 'Could not save.'), r.ok ? 'ok' : 'err');
+  if (r.ok) renderWeights(r.tradeWeights || {});
+});
+
+document.getElementById('weightReset').addEventListener('click', async function () {
+  // Saving nothing is what "use the defaults" means, so this is the same call
+  // with every row at its shipped value rather than a separate path.
+  var r = await call('/api/admin/trade-weights', { weights: {} });
+  note('msgWeights', r.ok ? 'Reset to the shipped defaults.'
+    : (r.error || 'Could not save.'), r.ok ? 'ok' : 'err');
+  if (r.ok) renderWeights(r.tradeWeights || {});
+});
 
 async function call(url, body, pwOverride) {
   try {
