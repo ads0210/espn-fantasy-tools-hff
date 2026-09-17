@@ -30,6 +30,12 @@ const TOOLS = [
     css: 'app/live-matchups/styles.css',
   },
   {
+    key: 'trade-analyzer',
+    title: 'Trade Analyzer',
+    entry: 'app/trade-analyzer/main.jsx',
+    css: 'app/trade-analyzer/styles.css',
+  },
+  {
     key: 'hall-of-fame',
     title: 'Hall of Fame',
     entry: 'app/hall-of-fame/main.jsx',

@@ -234,6 +234,20 @@ export function buildPlayerDigest(doc, ctx = {}) {
 export async function buildByeWeeks(ctx) {
   const { env, teamIds, readPart } = ctx;
   const byes = {};
+  /* Every regular-season kickoff, by team and week.
+     The NFL scoreboard only ever describes the week ESPN considers current,
+     which lags the fantasy scoring period by a day or two — so on a Tuesday
+     there was no future kickoff anywhere in the system and the matchup card
+     had nothing to count down to. A team's own schedule carries the whole
+     season, so any week's kickoff is already here. */
+  const kickoffs = {};
+  /* Every regular-season fixture, by week.
+     The scoreboard only ever describes the week ESPN calls current, so on the
+     days between a scoring period rolling and the NFL week following it there
+     was no way to show the games the current fantasy week actually depends on.
+     A team's own schedule carries the whole season, and a fixture appears in
+     both teams' schedules, so they are keyed by event id and merged. */
+  const fixtures = {};
   const problems = [];
 
   for (const id of teamIds) {
@@ -245,7 +259,9 @@ export async function buildByeWeeks(ctx) {
     }
     if (!doc) { problems.push(`team ${id}: not stored`); continue; }
 
+    // Resolved before the events are walked: the kickoff map is keyed on it.
     const abbrev = (doc.team && doc.team.abbreviation) || PRO_TEAM_MAP[id];
+
     const played = new Set();
     for (const ev of doc.events || []) {
       // ESPN is inconsistent here: seasonType.type comes back as a number in
@@ -256,7 +272,49 @@ export async function buildByeWeeks(ctx) {
       const type = rawType === undefined || rawType === null ? 2 : Number(rawType);
       const rawWeek = ev.week;
       const week = Number(rawWeek && typeof rawWeek === 'object' ? rawWeek.number : rawWeek);
-      if (type === 2 && Number.isFinite(week) && week >= 1 && week <= 18) played.add(week);
+      if (type === 2 && Number.isFinite(week) && week >= 1 && week <= 18) {
+        played.add(week);
+        const comp = (ev.competitions && ev.competitions[0]) || {};
+        const at = ev.date || comp.date;
+        if (at && abbrev) {
+          if (!kickoffs[abbrev]) kickoffs[abbrev] = {};
+          kickoffs[abbrev][week] = new Date(at).toISOString();
+        }
+
+        if (!fixtures[week]) fixtures[week] = {};
+        if (at && ev.id && !fixtures[week][ev.id]) {
+          const cs = comp.competitors || [];
+          const side = (which) => {
+            const c = cs.find((x) => x.homeAway === which) || {};
+            const t = c.team || {};
+            const logos = t.logos || [];
+            return {
+              abbrev: t.abbreviation || '?',
+              logo: (logos[0] && logos[0].href) || null,
+              score: c.score && c.score.displayValue != null
+                ? String(c.score.displayValue) : null,
+            };
+          };
+          const st = (comp.status && comp.status.type) || {};
+          const home = side('home');
+          const away = side('away');
+          // Only once both sides are known: a fixture with one competitor is a
+          // payload still being written, not a game.
+          if (home.abbrev !== '?' && away.abbrev !== '?') {
+            fixtures[week][ev.id] = {
+              home: home.abbrev, away: away.abbrev,
+              homeLogo: home.logo, awayLogo: away.logo,
+              homeScore: st.state && st.state !== 'pre' ? home.score : null,
+              awayScore: st.state && st.state !== 'pre' ? away.score : null,
+              state: st.shortDetail || st.description || '',
+              inProgress: st.state === 'in',
+              final: st.state === 'post',
+              started: Boolean(st.state) && st.state !== 'pre',
+              kickoff: new Date(at).toISOString(),
+            };
+          }
+        }
+      }
     }
     if (!abbrev || played.size === 0) { problems.push(`team ${id}: no regular season games`); continue; }
 
@@ -269,6 +327,12 @@ export async function buildByeWeeks(ctx) {
     generatedAt: new Date().toISOString(),
     count: Object.keys(byes).length,
     byes,
+    kickoffs,
+    // Flattened and put in kickoff order, which is the order a ticker reads in.
+    fixtures: Object.fromEntries(Object.entries(fixtures).map(([week, byId]) => [
+      week,
+      Object.values(byId).sort((a, b) => a.kickoff.localeCompare(b.kickoff)),
+    ])),
     problems,
   };
 }
@@ -317,6 +381,10 @@ export function buildScoreboardDigest(doc) {
     generatedAt: new Date().toISOString(),
     count: games.length,
     live: games.filter((g) => g.inProgress).length,
+    /* Which week this is describing. ESPN advances its NFL week a day or two
+       after the fantasy scoring period rolls, so a reader has to be able to
+       tell whether this is the week they asked about or the one just gone. */
+    week: (doc && doc.week && doc.week.number) || null,
     kickoffs,
     games,
   };
@@ -482,6 +550,12 @@ export function buildStandingsDigest(doc, ctx = {}) {
       pointsFor: Math.round((overall.pointsFor || 0) * 10) / 10,
       pointsAgainst: Math.round((overall.pointsAgainst || 0) * 10) / 10,
       seed: t.playoffSeed || 0,
+      /* ESPN's own figure, carried through rather than recomputed. At its
+         extremes it is no longer a probability but a fact, and the table says
+         so instead of printing 100%. */
+      playoffPct: (t.currentSimulationResults
+        && typeof t.currentSimulationResults.playoffPct === 'number')
+        ? t.currentSimulationResults.playoffPct : null,
       streak: overall.streakLength && overall.streakType
         ? `${overall.streakType === 'WIN' ? 'W' : 'L'}${overall.streakLength}` : '',
     };
@@ -527,47 +601,317 @@ export function buildRosterDigest(doc) {
 }
 
 /** Adds, drops and trades, resolved to readable names. */
+/* What a transaction is doing, in the reader's terms rather than ESPN's.
+   ESPN records a waiver claim as a bid, an add and a drop; a member made one
+   move. These are the shapes that survive that translation. */
+const TX_KIND = { TRADE: 'trade', WAIVER: 'waiver', SWAP: 'swap', ADD: 'add', DROP: 'drop' };
+
+/**
+ * Where a trade currently stands.
+ *
+ * ESPN keeps one record per proposal and rewrites its status in place, which is
+ * what lets a trade occupy one row in the panel for its whole life rather than
+ * a new row every time it moves along. The two pending states are not
+ * distinguishable from the transaction record alone — both read PENDING — so
+ * they are separated by whether the other side has actually answered, which
+ * only the pending-offer payload knows.
+ */
+/* Lapsing and being turned down are different things, and ESPN records both
+   as a cancellation. What separates them is when the cancellation happened: an
+   offer nobody answered is cancelled by the clock at its expiry, while one that
+   was declined is cancelled before it. A minute of slack covers the gap between
+   an expiry instant and the sweep that acts on it. */
+const EXPIRY_GRACE_MS = 60 * 1000;
+
+/**
+ * Who ended a proposal, where that can be told.
+ *
+ * ESPN names the actor on the cancellation record. An offer that simply ran out
+ * of time is cancelled by a task rather than a person, which is what separates
+ * a lapse from somebody deciding — and once it is a person, which side they are
+ * on separates a proposer withdrawing from a recipient turning it down.
+ */
+function cancelledBySide(cancellation, proposal, membersByTeam) {
+  const member = cancellation && cancellation.memberId;
+  // Not a league member: the expiry sweep, not a decision by anybody.
+  if (!member || !/^\{?[0-9A-F]{8}-/i.test(String(member))) return 'system';
+  const proposer = proposal && proposal.teamId;
+  for (const [teamId, ids] of Object.entries(membersByTeam || {})) {
+    if (!ids.includes(member)) continue;
+    return Number(teamId) === Number(proposer) ? 'proposer' : 'recipient';
+  }
+  return 'unknown';
+}
+
+function tradeStatus(tx, cancellation, now, membersByTeam) {
+  const status = String(tx.status || '').toUpperCase();
+  if (status === 'EXECUTED') return 'completed';
+
+  /* ESPN writes a separate CANCELED record pointing back at the proposal
+     rather than rewriting it, so the cancellation carries the only timestamp
+     that says which of the two happened. */
+  if (cancellation) {
+    const at = cancellation.proposedDate || cancellation.processDate || 0;
+    if (tx.expirationDate && at >= tx.expirationDate - EXPIRY_GRACE_MS) return 'expired';
+    const by = cancelledBySide(cancellation, tx, membersByTeam);
+    if (by === 'system') return 'expired';
+    // Withdrawn by whoever offered it, as against turned down by whoever it
+    // was offered to. Different things, and members read them differently.
+    if (by === 'proposer') return 'cancelled';
+    return 'rejected';
+  }
+  if (status === 'CANCELED' || status === 'CANCELLED') {
+    // A cancellation with nothing to compare against: lapsed if its own window
+    // has closed, otherwise somebody said no.
+    return (tx.expirationDate && tx.expirationDate <= now) ? 'expired' : 'rejected';
+  }
+  if (status !== 'PENDING') return status ? status.toLowerCase() : 'completed';
+
+  // Still nominally pending, but the window has closed.
+  if (tx.expirationDate && tx.expirationDate <= now) return 'expired';
+
+  /* Answered by the other side and waiting out the review window, as against
+     sitting unanswered. A proposal records the proposer's own acceptance, so
+     this only reads true once everybody involved has acted. */
+  const acted = Object.keys(tx.teamActions || {}).map(Number);
+  const sides = new Set();
+  for (const it of tx.items || []) {
+    if (it.fromTeamId != null) sides.add(it.fromTeamId);
+    if (it.toTeamId != null) sides.add(it.toTeamId);
+  }
+  const everyoneActed = sides.size > 0 && [...sides].every((id) => acted.includes(id));
+  return everyoneActed ? 'pending_approval' : 'on_the_table';
+}
+
+/**
+ * League activity, one row per transaction.
+ *
+ * ESPN stores a transaction as a bag of items, and this used to emit a row per
+ * item. A waiver claim therefore appeared as an unrelated add and an unrelated
+ * drop, and a three-for-three trade as six separate lines naming six players
+ * and never the deal — which is not how any of it happened from the member's
+ * side. One transaction is now one entry, carrying both teams where two were
+ * involved and every player that moved.
+ *
+ * Lineup changes are excluded on purpose: this panel is for transactions, and a
+ * start/sit is a roster movement. Draft picks are excluded because a whole
+ * draft would bury a season of genuine moves.
+ */
+/**
+ * Gather every scoring period's transactions into one log.
+ *
+ * The source is split a period per part because that is the only way ESPN will
+ * answer for more than the current week. The reduction itself does not care,
+ * so it stays a pure function of one combined document and is tested as one.
+ */
+export async function buildTransactionDigestMulti(ctx) {
+  /* Keyed by id, because the windows overlap. A settled transaction belongs to
+     the period it happened in, but one still pending is returned by every
+     period asked about — so a single waiting waiver claim arrived once per part
+     and was listed eighteen times. One transaction is one row however many
+     windows can see it. */
+  const byId = new Map();
+  let anon = 0;
+  for (const part of ctx.teamIds || []) {
+    const doc = await ctx.readPart(part);
+    for (const tx of (doc && doc.transactions) || []) {
+      const key = tx && tx.id ? tx.id : `anon-${anon++}`;
+      if (!byId.has(key)) byId.set(key, tx);
+    }
+  }
+  return buildTransactionDigest({ transactions: [...byId.values()] }, ctx);
+}
+
 export function buildTransactionDigest(doc, ctx = {}) {
   const teamsDoc = (ctx.sources && ctx.sources.league_teams) || null;
   const playersDoc = (ctx.sources && ctx.sources.player_digest) || null;
+  const now = Date.now();
 
-  const teamName = {};
-  for (const t of (teamsDoc && teamsDoc.teams) || []) teamName[t.id] = t.name || `Team ${t.id}`;
+  const teamById = {};
+  for (const t of (teamsDoc && teamsDoc.teams) || []) {
+    teamById[t.id] = {
+      id: t.id,
+      name: t.name || `Team ${t.id}`,
+      abbrev: t.abbrev || null,
+      logo: teamLogoUrl(t.id, t.logo),
+    };
+  }
+  const team = (id) => (id != null && teamById[id]) || null;
 
-  const playerName = {};
-  for (const p of (playersDoc && playersDoc.players) || []) playerName[p.id] = p;
+  // Which member owns which team, so a cancellation can be attributed.
+  const membersByTeam = {};
+  for (const t of (teamsDoc && teamsDoc.teams) || []) {
+    membersByTeam[t.id] = (t.owners || []).map(String);
+  }
+
+  const playerById = {};
+  for (const p of (playersDoc && playersDoc.players) || []) playerById[p.id] = p;
+  const player = (id) => {
+    const p = playerById[id];
+    return {
+      id: id ?? null,
+      name: p ? p.name : (id ? `Player ${id}` : 'Unknown player'),
+      pos: p ? p.pos : '',
+      nfl: p ? p.nfl : '',
+    };
+  };
 
   const raw = (doc && (doc.transactions || doc.items)) || [];
+
+  /* ESPN records the end of a proposal as its own transaction pointing back at
+     the original. Those companions are events in a deal's life, not deals, so
+     they are indexed here and never listed in their own right — which is also
+     what keeps one trade to one row as its status moves on. */
+  const cancelledBy = new Map();
+  for (const tx of raw) {
+    const st = String(tx.status || '').toUpperCase();
+    if ((st === 'CANCELED' || st === 'CANCELLED') && tx.relatedTransactionId) {
+      cancelledBy.set(tx.relatedTransactionId, tx);
+    }
+  }
+  const isCompanion = new Set(
+    raw.filter((tx) => tx.relatedTransactionId
+      && cancelledBy.get(tx.relatedTransactionId) === tx).map((tx) => tx.id),
+  );
   const out = [];
 
   for (const tx of raw) {
+    const type = String(tx.type || '').toUpperCase();
+    if (type === 'DRAFT') continue;
+    // The cancellation half of a proposal is folded into the proposal itself.
+    if (isCompanion.has(tx.id)) continue;
+
+    const items = (tx.items || []).filter((it) => {
+      const k = String(it.type || '').toUpperCase();
+      return k !== 'LINEUP' && k !== 'DRAFT';
+    });
+    if (!items.length) continue;
+
+    /* A waiver claim that has not processed yet is private.
+       ESPN does not show one team's outstanding claim to the rest of the
+       league, and for good reason: knowing who is being claimed, and for how
+       much, is exactly the information a rival would use to outbid. Listing
+       them here handed every member an advantage ESPN deliberately withholds.
+       A claim appears once it has resolved — whether it went through or lost
+       out to an earlier one. */
+    const pendingClaim = String(tx.status || '').toUpperCase() === 'PENDING'
+      && !type.startsWith('TRADE');
+    if (pendingClaim) continue;
+
     const when = tx.proposedDate || tx.processDate || tx.date || null;
-    for (const item of tx.items || []) {
-      const kind = String(item.type || tx.type || '').toUpperCase();
-      // Lineup shuffles are noise, and draft picks would bury genuine roster
-      // moves under a whole draft's worth of rows. The draft has its own tool.
-      if (kind === 'LINEUP' || kind === 'DRAFT') continue;
-      const p = playerName[item.playerId] || null;
+    const isTrade = type.startsWith('TRADE')
+      || items.some((it) => String(it.type || '').toUpperCase() === 'TRADE');
+
+    if (isTrade) {
+      /* A trade is two teams and what each of them sends. Grouping by the team
+         a player is leaving is what turns six rows into one deal. */
+      const bySender = new Map();
+      for (const it of items) {
+        const from = it.fromTeamId;
+        if (from == null) continue;
+        if (!bySender.has(from)) bySender.set(from, []);
+        bySender.get(from).push(player(it.playerId));
+      }
+      const sides = [...bySender.entries()]
+        .map(([teamId, players]) => ({ team: team(teamId), players }))
+        .filter((x) => x.team);
+      if (!sides.length) continue;
       out.push({
-        id: `${tx.id || ''}-${item.playerId || ''}-${kind}`,
-        kind: kind === 'ADD' ? 'ADD' : kind === 'DROP' ? 'DROP' : kind,
-        player: p ? p.name : (item.playerId ? `Player ${item.playerId}` : 'Unknown'),
-        pos: p ? p.pos : '',
-        nfl: p ? p.nfl : '',
-        team: teamName[item.toTeamId] || teamName[item.fromTeamId] || teamName[tx.teamId] || '',
-        source: String(tx.type || '').replace(/_/g, ' ').toLowerCase(),
+        id: tx.id || `${when}-trade`,
+        kind: TX_KIND.TRADE,
+        status: tradeStatus(tx, cancelledBy.get(tx.id), now, membersByTeam),
+        // Three-team trades are legal in ESPN, so this is not assumed to be two.
+        teams: sides.map((x) => x.team),
+        sides,
+        players: sides.flatMap((x) => x.players),
+        adds: [], drops: [],
+        bid: null,
+        scoringPeriod: tx.scoringPeriodId ?? null,
         date: when ? new Date(when).toISOString() : null,
       });
+      continue;
+    }
+
+    const adds = items
+      .filter((it) => String(it.type || '').toUpperCase() === 'ADD')
+      .map((it) => player(it.playerId));
+    const drops = items
+      .filter((it) => String(it.type || '').toUpperCase() === 'DROP')
+      .map((it) => player(it.playerId));
+    if (!adds.length && !drops.length) continue;
+
+    const actor = team(tx.teamId)
+      || team(items.find((it) => it.toTeamId != null)?.toTeamId)
+      || team(items.find((it) => it.fromTeamId != null)?.fromTeamId);
+    if (!actor) continue;
+
+    const kind = type === 'WAIVER' ? TX_KIND.WAIVER
+      : (adds.length && drops.length) ? TX_KIND.SWAP
+        : adds.length ? TX_KIND.ADD : TX_KIND.DROP;
+
+    out.push({
+      id: tx.id || `${when}-${actor.id}`,
+      kind,
+      status: String(tx.status || '').toUpperCase() === 'EXECUTED' ? 'completed'
+        : String(tx.status || '').toLowerCase() || 'completed',
+      teams: [actor],
+      sides: [],
+      players: [...adds, ...drops],
+      adds,
+      drops,
+      // A winning waiver bid is the interesting part of a claim; zero is not.
+      bid: type === 'WAIVER' && tx.bidAmount ? tx.bidAmount : null,
+      scoringPeriod: tx.scoringPeriodId ?? null,
+      date: when ? new Date(when).toISOString() : null,
+    });
+  }
+
+  /* One row per deal, whatever ESPN did behind it.
+   *
+   * A proposal and its execution can arrive as two records with different ids,
+   * and the panel must not then show the same trade twice — once as pending and
+   * once as done. Deals are collapsed on the set of players that moved, keeping
+   * whichever record has travelled furthest. */
+  const RANK = { on_the_table: 0, pending_approval: 1, expired: 2, rejected: 3, completed: 4 };
+  const seen = new Map();
+  const deduped = [];
+  for (const row of out) {
+    if (row.kind !== TX_KIND.TRADE) { deduped.push(row); continue; }
+    const key = row.players.map((p) => p.id).sort().join(',');
+    const prior = seen.get(key);
+    if (!prior) { seen.set(key, row); deduped.push(row); continue; }
+    if ((RANK[row.status] ?? 0) > (RANK[prior.status] ?? 0)) {
+      prior.status = row.status;
+      prior.date = row.date || prior.date;
     }
   }
 
-  out.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  deduped.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
   return {
     generatedAt: new Date().toISOString(),
     identified: Boolean(teamsDoc) && Boolean(playersDoc),
-    count: out.length,
-    items: out.slice(0, 120),
+    count: deduped.length,
+    /* Every transaction, not a window of them. The panel is filtered by the
+       range the reader picks and by nothing else: a fixed ceiling meant a busy
+       stretch quietly stopped listing part of itself, and there is no way to
+       tell a quiet range from a truncated one by looking at it. */
+    items: deduped,
   };
+}
+
+/**
+ * Where a fantasy matchup stands.
+ *
+ * Settled means settled: a matchup with nothing scored on either side has not
+ * been played, however finished the NFL fixtures behind it look. The whole
+ * reason that matters is the scoring period rolling over a day or two before
+ * the NFL scoreboard does.
+ */
+export function matchupState({ decided, allDone, anyLive, anyPlayed, scheduleStale, scored }) {
+  if (!scored && scheduleStale) return 'pre';
+  if ((decided || allDone) && scored) return 'final';
+  if (anyLive || (anyPlayed && scored)) return 'live';
+  return 'pre';
 }
 
 /**
@@ -644,6 +988,17 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
   const teamsDoc = (ctx.sources && ctx.sources.league_teams) || null;
   const standings = (ctx.sources && ctx.sources.standings_digest) || null;
   const board = (ctx.sources && ctx.sources.scoreboard_digest) || null;
+
+  /* Whether the NFL scoreboard is still describing the week just gone.
+     It advances on its own timetable: on the Tuesday after a week the fantasy
+     scoring period has already rolled while the board still carries the games
+     just played, every one of them final. Every player's game state then
+     resolves to a finished fixture, so a week nobody has played looks complete
+     — which is what put a win banner on every game in Live Matchups and a
+     nil-nil final on the home page. When nothing on the board is still to come,
+     the board has nothing to say about this week. */
+  const boardGames = (board && board.games) || [];
+  const scheduleStale = boardGames.length > 0 && boardGames.every((g) => g.final);
   const week = Number(ctx.week || (doc && doc.scoringPeriodId) || 1);
 
   const identity = {};
@@ -836,7 +1191,15 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
         firstKickoff,
         playoff: m.playoffTierType && m.playoffTierType !== 'NONE' ? m.playoffTierType : null,
         winner: decided ? m.winner : null,
-        state: decided || allDone ? 'final' : (anyLive || anyPlayed ? 'live' : 'pre'),
+        /* Nobody has scored and the schedule on hand is last week's: this
+           week has not started, whatever the stale player states imply. A
+           genuinely live Sunday is not caught by this — its board still has
+           games to come, so `scheduleStale` is false and the first minutes of
+           a nil-nil matchup still read as live. */
+        state: matchupState({
+          decided, allDone, anyLive, anyPlayed, scheduleStale,
+          scored: home.points > 0 || away.points > 0,
+        }),
         home,
         away,
         nflGames,
@@ -1701,6 +2064,195 @@ export async function buildLeagueHistoryDigest(rawCtx) {
   };
 }
 
+/* ========================================================================== *
+ * Trade Analyzer
+ * ========================================================================== */
+
+/**
+ * Everything the Trade Analyzer needs, in one payload.
+ *
+ * The tool evaluates a trade entirely in the browser — the slider arithmetic
+ * and the ~110-candidate rebalancing neighbourhood both re-run on every drag,
+ * which is not a thing to ask a Worker for. So this digest is not an answer,
+ * it is the board the client plays on: identity, rosters with projections,
+ * ESPN's own playoff odds and the standing offers.
+ *
+ * Derived from `pending_transactions` rather than from `rosters`, because the
+ * offers are the part that changes on the minute a member proposes something,
+ * and its five-minute TTL pulls the rest along with it.
+ */
+/** Playoff places: stated by the league where it says, otherwise read off
+ *  ESPN's own odds, which sum to the number of qualifying places. */
+function playoffTeamsFrom(schedule, oddsSum) {
+  return schedule.playoffTeamCount || (oddsSum > 0 ? Math.round(oddsSum) : null);
+}
+
+export function buildTradeDigest(doc, ctx = {}) {
+  const src = ctx.sources || {};
+  const teamsDoc = src.league_teams || null;
+  const rosterDoc = src.rosters || null;
+  const standingsDoc = src.standings || null;
+  const settingsDoc = src.league_settings || null;
+
+  const status = (doc && doc.status) || (rosterDoc && rosterDoc.status) || {};
+  const settings = (settingsDoc && settingsDoc.settings) || {};
+  const schedule = settings.scheduleSettings || {};
+  const rosterSettings = settings.rosterSettings || {};
+  const tradeSettings = settings.tradeSettings || {};
+
+  /* Members carry the real names; teams carry only owner GUIDs. */
+  const memberName = {};
+  for (const m of (teamsDoc && teamsDoc.members) || (doc && doc.members) || []) {
+    const full = `${m.firstName || ''} ${m.lastName || ''}`.trim();
+    memberName[m.id] = full || m.displayName || '';
+  }
+
+  /* Season projection and ownership live on the player record inside the
+     roster payload; the identity payload has neither. */
+  const rosterOf = {};
+  for (const t of (rosterDoc && rosterDoc.teams) || []) {
+    const ordered = bySlotOrder((t.roster && t.roster.entries) || [], (e) => e.lineupSlotId);
+    rosterOf[t.id] = ordered.map((e) => {
+      const p = (e.playerPoolEntry && e.playerPoolEntry.player) || {};
+      let proj = 0;
+      for (const st of p.stats || []) {
+        // statSourceId 1 is a projection; statSplitTypeId 0 is the whole season.
+        if (st.statSourceId === 1 && st.statSplitTypeId === 0) proj = st.appliedTotal || 0;
+      }
+      return {
+        id: p.id ?? e.playerId ?? null,
+        n: p.fullName || 'Unknown Player',
+        pos: POSITION_MAP[p.defaultPositionId] || 'FLEX',
+        sl: SLOT_NAMES[e.lineupSlotId] || String(e.lineupSlotId),
+        tm: PRO_TEAM_MAP[p.proTeamId] ?? 'FA',
+        pr: Math.round((proj || 0) * 10) / 10,
+        inj: p.injuryStatus || 'ACTIVE',
+        ow: Math.round(((p.ownership && p.ownership.percentOwned) || 0) * 10) / 10,
+        bl: null,
+      };
+    });
+  }
+
+  const odds = {};
+  for (const t of (standingsDoc && standingsDoc.teams) || []) {
+    const sim = t.currentSimulationResults || {};
+    if (typeof sim.playoffPct === 'number') odds[t.id] = sim.playoffPct;
+  }
+
+  const teams = [];
+  for (const t of (teamsDoc && teamsDoc.teams) || (doc && doc.teams) || []) {
+    const block = (t.tradeBlock && t.tradeBlock.players) || {};
+    const roster = (rosterOf[t.id] || []).map((p) => (
+      block[String(p.id)] ? { ...p, bl: block[String(p.id)] } : p
+    ));
+    teams.push({
+      id: t.id,
+      name: t.name || `Team ${t.id}`,
+      abbrev: t.abbrev || null,
+      owners: (t.owners || []).map((o) => memberName[o] || '').filter(Boolean),
+      // Never ESPN's raw URL: custom uploads answer 401 without the league's
+      // own session, so every logo goes through the server-side proxy.
+      logo: teamLogoUrl(t.id, t.logo),
+      waiverRank: t.waiverRank ?? null,
+      playoffPct: typeof odds[t.id] === 'number' ? odds[t.id] : null,
+      roster,
+    });
+  }
+
+  /* A proposal is stored as a flat list of items, each naming where a player is
+     going. Sides are recovered from the items rather than assumed, because a
+     three-team trade is legal in ESPN and has to be recognised — the engine
+     evaluates two sides and says so rather than quietly mis-reading a third. */
+  const pending = [];
+  for (const tx of (doc && doc.pendingTransactions) || []) {
+    /* Trades only. This payload also carries waiver claims, which are neither
+       offers nor two-sided, and which nobody outside the claiming team is
+       entitled to see before they process. */
+    const txType = String(tx.type || '').toUpperCase();
+    if (!txType.startsWith('TRADE')) continue;
+    const sides = [];
+    for (const it of tx.items || []) {
+      for (const id of [it.fromTeamId, it.toTeamId]) {
+        if (id != null && sides.indexOf(id) < 0) sides.push(id);
+      }
+    }
+    const a = tx.teamId != null ? tx.teamId : sides[0];
+    const b = sides.find((x) => x !== a);
+    const acted = Object.keys(tx.teamActions || {}).map(Number).filter((n) => !Number.isNaN(n));
+    pending.push({
+      id: tx.id,
+      type: tx.type || 'TRADE',
+      proposer: a,
+      a,
+      b: b == null ? null : b,
+      teams: sides.length,
+      aOut: (tx.items || []).filter((i) => i.fromTeamId === a).map((i) => i.playerId),
+      bOut: (tx.items || []).filter((i) => i.fromTeamId === b).map((i) => i.playerId),
+      itemCount: (tx.items || []).length,
+      // Read, never computed: the offer window is ESPN's to set.
+      proposed: tx.proposedDate || null,
+      expires: tx.expirationDate || null,
+      acted,
+      awaiting: sides.filter((s) => acted.indexOf(s) < 0),
+      hasPicks: (tx.items || []).some((i) => (i.overallPickNumber || 0) > 0),
+    });
+  }
+
+  /* Playoff spots: from settings where the league exposes them, otherwise from
+     ESPN's own odds, which sum to the number of qualifying places by
+     construction. The fallback keeps a fork working when a setting is absent
+     rather than pinning this league's four. */
+  const oddsSum = Object.values(odds).reduce((n, v) => n + v, 0);
+  const playoffTeams = playoffTeamsFrom(schedule, oddsSum);
+
+  const lineupCounts = rosterSettings.lineupSlotCounts || {};
+  const slots = [];
+  for (const [slotId, count] of Object.entries(lineupCounts)) {
+    const name = SLOT_NAMES[Number(slotId)] || String(slotId);
+    for (let i = 0; i < (count || 0); i++) slots.push({ id: Number(slotId), name });
+  }
+  /* The cap a trade has to fit inside excludes injured reserve: an IR slot is
+     not a roster place a traded player can be put in, and counting it made the
+     tool report one fewer forced cut than a deal actually costs. */
+  const rosterCap = slots.filter((s) => s.name !== 'IR').length || null;
+
+  /* ESPN states the last scoring period on the league status where it is
+     present. Where it is not, it is the regular season plus however many
+     periods the playoff rounds span — which is two per round in a league whose
+     playoff matchups run two weeks, and is why this is computed rather than
+     assumed to be the regular season plus a fixed number. */
+  const statedFinal = status.finalScoringPeriodId
+    || (settingsDoc && settingsDoc.status && settingsDoc.status.finalScoringPeriodId)
+    || null;
+  const regular = schedule.matchupPeriodCount || null;
+  const roundLength = schedule.playoffMatchupPeriodLength || 1;
+  const rounds = playoffTeamsFrom(schedule, oddsSum)
+    ? Math.ceil(Math.log2(playoffTeamsFrom(schedule, oddsSum))) : 0;
+  const finalScoringPeriod = statedFinal
+    || (regular ? regular + rounds * roundLength : null);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    leagueName: settings.name || null,
+    season: (doc && doc.seasonId) || (rosterDoc && rosterDoc.seasonId) || null,
+    // The scoring period is on whichever payload carries the league status;
+    // mPendingTransactions does not always include one.
+    scoringPeriodId: status.latestScoringPeriod
+      || (rosterDoc && rosterDoc.scoringPeriodId)
+      || (doc && doc.scoringPeriodId) || 1,
+    finalScoringPeriod,
+    regularSeasonPeriods: schedule.matchupPeriodCount || null,
+    playoffTeams,
+    leagueSize: teams.length,
+    rosterCap,
+    slots,
+    tradeDeadline: tradeSettings.deadlineDate || null,
+    revisionHours: tradeSettings.revisionHours ?? null,
+    teams,
+    pending,
+  };
+}
+
 /**
  * Registry of derivations, keyed by the source dataset.
  *
@@ -1776,8 +2328,16 @@ export const DERIVATIONS = {
   },
   transactions: {
     target: 'transaction_digest',
-    build: buildTransactionDigest,
+    buildMulti: buildTransactionDigestMulti,
     needs: ['league_teams', 'player_digest'],
+  },
+  pending_transactions: {
+    target: 'trade_digest',
+    build: buildTradeDigest,
+    // Identity for names and logos, rosters for projections, standings for
+    // ESPN's published playoff odds, settings for roster shape and the trade
+    // deadline. All four resolved through the coordinator, never read hopefully.
+    needs: ['league_teams', 'rosters', 'standings', 'league_settings'],
   },
 };
 

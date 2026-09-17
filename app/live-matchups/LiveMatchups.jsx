@@ -2,6 +2,7 @@ import React, { useState, useMemo, useCallback, useEffect, useRef } from "react"
 import { PALETTES, BASE_CSS, BACKDROP } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
+import { weightDays, makeXOf } from "./axis.js";
 
 /**
  * Live Matchups.
@@ -269,59 +270,6 @@ function buildDaySpan(axisStart, axisEnd, tz) {
   return days;
 }
 
-/* What an idle day is still worth on the axis.
-   Enough to stay a legible band with its own marker, because a week that
-   silently omitted Friday and Saturday would misrepresent how long a matchup
-   actually ran. */
-const MIN_DAY_SHARE = 0.07;
-
-/**
- * Give each day a width proportional to how much happened in it.
- *
- * Sizing days by elapsed time is what made these charts unreadable: a Thursday
- * night game and a full Sunday carry almost all the scoring, and the two empty
- * days between them are drawn just as wide, so the parts worth looking at get
- * squeezed into a fraction of the frame while nothing occupies the rest.
- *
- * Now that repeats are no longer recorded, the number of samples in a day is a
- * direct measure of how much moved in it, so the stored data already carries
- * the weighting. Every day keeps a floor, so an idle day narrows to a band
- * rather than vanishing and the passage of time stays visible.
- *
- * Position *within* a day stays proportional to the clock, so the shape of a
- * game is never distorted — only how much of the frame each day is given.
- */
-function weightDays(days, times) {
-  const counts = days.map(() => 0);
-  let di = 0;
-  for (const t of times) {
-    while (di < days.length - 1 && t >= days[di].segEnd) di += 1;
-    counts[di] += 1;
-  }
-  const total = counts.reduce((a, b) => a + b, 0) || 1;
-  const raw = counts.map((c) => MIN_DAY_SHARE + c / total);
-  const sum = raw.reduce((a, b) => a + b, 0) || 1;
-  return days.map((d, i) => ({ ...d, samples: counts[i], w: (raw[i] / sum) * CHART_W }));
-}
-
-function makeXOf(days) {
-  return (t) => {
-    let cumX = 0;
-    for (let i = 0; i < days.length; i++) {
-      const d = days[i];
-      if (t < d.segEnd || i === days.length - 1) {
-        // Within the day, still the clock: a day's width changes, the shape of
-        // what happened inside it does not.
-        const span = Math.max(1, d.segEnd - d.start);
-        const frac = Math.min(1, Math.max(0, (t - d.start) / span));
-        return cumX + frac * d.w;
-      }
-      cumX += d.w;
-    }
-    return cumX;
-  };
-}
-
 const yOf = (v, min, max, padTop, innerH) =>
   padTop + innerH - ((v - min) / ((max - min) || 1)) * innerH;
 
@@ -441,7 +389,7 @@ function Progression({ series, tz, homeName, awayName, kickoff }) {
        reading them together only works if a vertical position means the same
        instant in all of them. They share this object rather than each deriving
        its own, which is what keeps them aligned by construction. */
-    const days = weightDays(span, times);
+    const days = weightDays(span, times, CHART_W);
     return { days, xOf: makeXOf(days) };
   }, [series, tz]);
 
@@ -1311,8 +1259,6 @@ export default function LiveMatchups() {
       <style>{`
         ${PALETTES}
         ${BASE_CSS}
-        html[data-theme="dark"] { --gold:#FFD24D; --gold-glow:rgba(255,210,77,.28); }
-        html[data-theme="light"] { --gold:#B8860B; --gold-glow:rgba(184,134,11,.22); }
         * { box-sizing:border-box; }
         button { -webkit-tap-highlight-color:transparent; font-family:inherit; }
         .wrap { display:flex; flex-direction:column; }

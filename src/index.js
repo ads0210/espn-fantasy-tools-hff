@@ -22,7 +22,7 @@ import { loginPage, dashboardPage } from './pages.js';
 import { wizardPage } from './wizard.js';
 import { siteConfigPage } from './siteconfig.js';
 import { shell, backAction, displayTitle, passwordField, esc, LOGO_FALLBACK_SVG,
-  THEME_COOKIE, TEAM_COOKIE, MOTION_COOKIE } from './ui.js';
+  THEME_COOKIE, TEAM_COOKIE, MOTION_COOKIE, FAVICON_SVG} from './ui.js';
 import { TOOLS, describeTools, applyVisibility, visibleTools, visibilityOf, VISIBILITY }
   from './tools.js';
 import { runBatch, readJob, jobStatus } from './history.js';
@@ -38,28 +38,12 @@ import { json, html, readJson, b64urlDecode } from './http.js';
 export { DatasetCoordinator } from './coordinator.js';
 export { LoginThrottle } from './throttle.js';
 export { ScoreTimelineDO } from './scoretimeline.js';
+import { RELEASE_NOTE_ITEMS } from './release.js';
+import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r82';
+const BUILD_MARKER = 'r116';
 
-/**
- * What changed in this version, shown once per browser after an update.
- *
- * Bumped in the same edit as BUILD_MARKER, because a version number that moved
- * without the notes moving is how a reader ends up being told about the last
- * release twice. An empty list is a valid state: the popup then says only that
- * the site was updated, which is the honest thing to say about a build whose
- * changes nobody outside the repo would notice.
- */
-const RELEASE_NOTE_ITEMS = [
-  'Lineups now read in the same order everywhere: QB, RB, RB, WR, WR, TE, FLEX, D/ST, K, then the bench.',
-  "Live Matchups shows each bench player's projection, and a projected total for the whole bench.",
-  'The setup wizard now shows each tool\u2019s icon when you pick which ones to run.',
-  'Hall of Fame team and head-to-head cards now show an arrow marking that they open.',
-  'The site has its own browser tab icon.',
-  'General update compatibility.',
-  'Rescaled Score Progression graphs on Live Matchups.',
-  'Various bug fixes due to no test surface existing for in-flight matchups prior to Week 1.',
-];
+
 
 /**
  * Whether this release needs the *historical* pull re-run, as opposed to the
@@ -279,9 +263,18 @@ async function route(request, env, ctx) {
    * first: the login page and the setup wizard. It is a static file that holds
    * no league data and triggers no upstream fetch, so serving it unauthenticated
    * gives nothing away — the same reasoning that already exempts /api/health. */
-  if (path === '/favicon.svg') {
-    if (env.ASSETS) return env.ASSETS.fetch(request);
-    return new Response('not found', { status: 404 });
+  /* Both spellings. A browser asks for /favicon.ico of its own accord when the
+     declared icon is not used, and behind the gate that request answered 401 —
+     which is a page, not an image, so the tab fell back to nothing. */
+  if (path === '/favicon.svg' || path === '/favicon.ico') {
+    return new Response(FAVICON_SVG, {
+      headers: {
+        'content-type': 'image/svg+xml; charset=utf-8',
+        // Long-lived but revalidated, so a browser that cached the earlier
+        // absence picks the icon up rather than holding the miss for a year.
+        'cache-control': 'public, max-age=3600, must-revalidate',
+      },
+    });
   }
 
 
@@ -391,6 +384,7 @@ async function route(request, env, ctx) {
   }
 
   if (path === '/api/hof') return hallOfFame(env, ctx);
+  if (path === '/api/trade') return tradeAnalyzer(env, ctx);
 
   if (path === '/api/img') return serveImage(request, url, ctx);
 
@@ -817,6 +811,25 @@ async function handleAdmin(request, env, cfg, path) {
     return json({ ok: true });
   }
 
+  if (path === '/api/admin/trade-weights') {
+    const next = {};
+    for (const row of TRADE_ROWS) {
+      const raw = body.weights && body.weights[row.id];
+      if (raw === undefined || raw === null || raw === '') continue;
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value < 0 || value > 2) {
+        return json({ ok: false, error: `${row.id} must be between 0% and 200%` }, 400);
+      }
+      // Rounded to the step the panel offers, so a stored value always matches
+      // a position the slider can actually return to.
+      const snapped = Math.round(value * 20) / 20;
+      // Only what differs from the shipped default is kept.
+      if (Math.abs(snapped - row.w) > 1e-9) next[row.id] = snapped;
+    }
+    const saved = await saveConfig(env, { tradeWeights: next });
+    return json({ ok: true, tradeWeights: saved.tradeWeights || {} });
+  }
+
   if (path === '/api/admin/tool-visibility') {
     const result = applyVisibility(cfg, body.tool, body.visibility);
     if (!result.ok) return json({ ok: false, error: result.error }, 400);
@@ -965,6 +978,29 @@ async function liveH2h(env, ctx) {
  * nothing to put here, and the tool renders its own designed empty state for
  * that rather than an apology.
  */
+/**
+ * The Trade Analyzer's board.
+ *
+ * One digest, resolved through the coordinator like every other read path. The
+ * evaluation itself is not here and deliberately so: the sliders recompute a
+ * weighted sum on every drag and the rebalancing pass re-scores roughly a
+ * hundred neighbouring trades each time, which belongs in the browser holding
+ * the data rather than in a round trip per pixel.
+ */
+async function tradeAnalyzer(env, ctx) {
+  const empty = { ok: true, ready: false, teams: [], pending: [] };
+  const obj = await ensureDataset(env, 'trade_digest', ctx);
+  if (!obj) return json(empty);
+  let digest = null;
+  try { digest = await obj.json(); } catch { digest = null; }
+  if (!digest || !Array.isArray(digest.teams) || !digest.teams.length) return json(empty);
+  /* The league's own weighting, if it has set one. Sent alongside the board
+     rather than baked into it: the digest is shared by every member and this is
+     a setting, not data. */
+  const cfg = await loadConfig(env);
+  return json({ ok: true, ready: true, adminWeights: cfg.tradeWeights || null, ...digest });
+}
+
 async function hallOfFame(env, ctx) {
   const empty = { ok: true, ready: false, rows: [], pairs: {}, records: {}, champions: [], seasonMeta: {} };
   const bookObj = await ensureDataset(env, 'league_history_digest', ctx);
@@ -1077,17 +1113,85 @@ async function dashboardStatus(env, ctx) {
   return json(await dashboardPayload(env, ctx));
 }
 
-async function dashboardPayload(env, ctx) {
-  const [scoreboard, matchups] = await Promise.all([
+/**
+ * Which matchups are finished, by team.
+ *
+ * ESPN does not set a winner until the scoring period closes, so a fixture
+ * whose every player finished on Sunday evening still reports UNDECIDED for the
+ * best part of two days. Reading `winner` therefore calls a settled matchup
+ * live, which is what the home page was doing while Live Matchups — which
+ * treats a matchup as over once no starter has a game left to play — correctly
+ * showed it as final. Both now read the same field, so the same fixture cannot
+ * be described two ways on two surfaces.
+ */
+/**
+ * A settled matchup has points in it.
+ *
+ * At a period rollover every player's game status still resolves to last
+ * week's finished NFL fixtures, so the live digest can report a week nobody has
+ * played as complete. A fantasy matchup where neither side has scored anything
+ * has not been played, whatever the game states say, and calling it final
+ * produced a nil-nil tie on the home page for a week that had not started.
+ */
+function settled(state, a, b) {
+  if (state !== 'final') return state;
+  return ((a || 0) > 0 || (b || 0) > 0) ? 'final' : 'pre';
+}
+
+function matchupStates(live, period) {
+  const byTeam = new Map();
+  for (const g of (live && live.games) || []) {
+    /* Only the week being asked about. The live digest lags a period rollover
+       by one refresh, and without this guard last week's finished states were
+       joined onto this week's fixtures — a matchup nobody had played yet read
+       as final, nil-nil, tied. */
+    if (period != null && g.period != null && g.period !== period) continue;
+    const state = settled(g.state, g.home && g.home.points, g.away && g.away.points);
+    for (const side of [g.home, g.away]) {
+      if (side && side.teamId != null) byTeam.set(side.teamId, state);
+    }
+  }
+  return byTeam;
+}
+
+export async function dashboardPayload(env, ctx) {
+  const [scoreboard, matchups, live, schedules] = await Promise.all([
     readDigest(env, 'scoreboard_digest', ctx),
     readDigest(env, 'matchup_digest', ctx),
+    readDigest(env, 'live_scoring_digest', ctx),
+    readDigest(env, 'bye_weeks', ctx),
   ]);
+  const states = matchupStates(live, matchups && matchups.matchupPeriod);
 
-  const nflGames = (scoreboard && scoreboard.games) || [];
+  /* The fantasy week decides which NFL games are shown.
+     ESPN advances its own NFL week a day or two after the scoring period
+     rolls, so for part of every week the two disagree — and during it the
+     strip was showing the games just played beside a fantasy strip already on
+     the next week. The fantasy week is the one the reader is looking at, so
+     the fixtures follow it. The scoreboard is preferred whenever it is
+     describing that same week, because it is the fresher of the two and the
+     only one with a live clock in it. */
+  const fantasyWeek = matchups && matchups.matchupPeriod;
+  const boardWeek = scoreboard && scoreboard.week;
+  const scheduled = ((schedules && schedules.fixtures) || {})[fantasyWeek] || [];
+  const boardMatchesWeek = boardWeek == null || fantasyWeek == null
+    || Number(boardWeek) === Number(fantasyWeek);
+  const nflGames = (boardMatchesWeek || !scheduled.length)
+    ? ((scoreboard && scoreboard.games) || [])
+    : scheduled;
   const nflLive = nflGames.filter((g) => g.inProgress).length;
 
-  const fanGames = (matchups && matchups.games) || [];
-  const fanLive = fanGames.filter((g) => g.started && !g.winner).length;
+  /* The matchup digest is built from the scoring payload and cannot know
+     whether the NFL games behind a fixture have finished, so the state is
+     joined on from the live digest and only falls back to the old reading
+     where there is no live entry to join against. */
+  const fanGames = ((matchups && matchups.games) || []).map((g) => {
+    const state = states.get(g.home && g.home.teamId)
+      || states.get(g.away && g.away.teamId)
+      || (g.winner ? 'final' : (g.started ? 'live' : 'pre'));
+    return { ...g, state };
+  });
+  const fanLive = fanGames.filter((g) => g.state === 'live').length;
 
   return {
     ok: true,
@@ -1127,7 +1231,7 @@ export async function boardPayload(env, ctx, teamId) {
   revalidate(env, 'league_settings', ctx);
   revalidate(env, 'league_teams', ctx);
 
-  const [standings, matchups, rosters, injuries, transactions, scoreboard, live] =
+  const [standings, matchups, rosters, injuries, transactions, scoreboard, live, schedules] =
     await Promise.all([
       readDigest(env, 'standings_digest', ctx),
       readDigest(env, 'matchup_digest', ctx),
@@ -1138,6 +1242,9 @@ export async function boardPayload(env, ctx, teamId) {
       // Projections and win probability live here rather than in the matchup
       // digest, and the card wants them the moment the first game is under way.
       readDigest(env, 'live_scoring_digest', ctx),
+      // Whole-season kickoff times. The scoreboard only knows the week ESPN
+      // calls current, which lags the scoring period.
+      readDigest(env, 'bye_weeks', ctx),
     ]);
 
   const out = {
@@ -1177,10 +1284,21 @@ export async function boardPayload(env, ctx, teamId) {
   // only one side made the same fixture show two different times depending on
   // which team you had selected, which is plainly wrong for a shared event.
   const kickoffs = (scoreboard && scoreboard.kickoffs) || {};
+  const seasonKickoffs = (schedules && schedules.kickoffs) || {};
+  const thisWeek = matchups && matchups.matchupPeriod;
+  /* The team's own schedule first, because it covers the whole season and the
+     scoreboard covers only whichever week ESPN currently calls this one. The
+     scoreboard is still the fallback: it is the fresher of the two once the
+     two agree, and a fork with no schedule pulled yet still gets a countdown. */
+  const kickoffAt = (abbrev) => {
+    const forTeam = seasonKickoffs[abbrev];
+    const scheduled = forTeam && thisWeek != null ? forTeam[thisWeek] : null;
+    return scheduled || kickoffs[abbrev] || null;
+  };
   const earliestFor = (lineup) => {
     let first = null;
     for (const p of lineup) {
-      const k = kickoffs[p.nfl];
+      const k = kickoffAt(p.nfl);
       if (!k) continue;
       if (!first || k < first) first = k;
     }
@@ -1211,9 +1329,14 @@ export async function boardPayload(env, ctx, teamId) {
    * digests are built from different payloads and need not agree on order. */
   let liveMe = null;
   let liveOpp = null;
+  let liveGame = null;
   for (const g of (live && live.games) || []) {
-    if (g.home && g.home.teamId === id) { liveMe = g.home; liveOpp = g.away; break; }
-    if (g.away && g.away.teamId === id) { liveMe = g.away; liveOpp = g.home; break; }
+    // Same guard as above: a live entry from a period that has already rolled
+    // describes a different fixture entirely.
+    if (matchup && matchup.game && g.period != null
+      && matchup.game.period != null && g.period !== matchup.game.period) continue;
+    if (g.home && g.home.teamId === id) { liveMe = g.home; liveOpp = g.away; liveGame = g; break; }
+    if (g.away && g.away.teamId === id) { liveMe = g.away; liveOpp = g.home; liveGame = g; break; }
   }
 
   /* Whether this matchup is under way.
@@ -1223,7 +1346,16 @@ export async function boardPayload(env, ctx, teamId) {
    * showing a countdown to a kickoff that had already happened. Kickoff having
    * passed is what makes a matchup live; points are what it is worth so far. */
   const kickedOff = Boolean(earliest) && Date.parse(earliest) <= Date.now();
-  const inPlay = Boolean(matchup && (matchup.game.started || kickedOff));
+  /* Kickoff having passed is only evidence about this week if the kickoff
+     belongs to this week. At a period rollover the scoreboard still describes
+     last week's fixtures, so every kickoff reads as long past and a matchup
+     nobody has played showed as live, nil-nil, with a win-probability dial on
+     it. A live entry for the current period is what confirms the week is
+     actually under way; points on the board settle it either way. */
+  const liveState = liveGame
+    ? settled(liveGame.state, matchup.me.points, matchup.opp.points) : null;
+  const inPlay = Boolean(matchup
+    && (matchup.game.started || (liveState ? liveState !== 'pre' : kickedOff)));
 
   out.myTeam = {
     teamId: id,
@@ -1253,6 +1385,11 @@ export async function boardPayload(env, ctx, teamId) {
       oppProjected: liveOpp ? liveOpp.projected : null,
       myWinProb: liveMe ? liveMe.winProb : null,
       winner: matchup.game.winner,
+      /* Settled, which is not the same as having a winner recorded. See
+         matchupStates above. */
+      final: liveGame
+        ? settled(liveGame.state, matchup.me.points, matchup.opp.points) === 'final'
+        : Boolean(matchup.game.winner),
       period: matchup.game.period,
     } : null,
   };

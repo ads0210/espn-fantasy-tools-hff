@@ -29,6 +29,25 @@ export const TZ_COOKIE = 'eft_tz';
 export const GITHUB_URL = 'https://github.com/shortcutsbin-netizen';
 export const GITHUB_LABEL = 'GitHub - shortcutsbin-netizen';
 
+/**
+ * The tab icon.
+ *
+ * Held in source rather than as a file under public/ so that a fork has it by
+ * virtue of running this code. As an asset it was only present if that
+ * particular fork happened to carry the file — which depends on when it forked
+ * and on its sync bringing the file across — and a fork that updated into a
+ * release containing it could still end up without one.
+ */
+export const FAVICON_SVG = `<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <rect width="32" height="32" rx="7" fill="#070A08"/>
+  <text x="16" y="20" text-anchor="middle"
+        font-family="Arial,Helvetica,ui-sans-serif,sans-serif" font-weight="900"
+        font-size="13.5" letter-spacing="-0.6">
+    <tspan fill="#E6F2E4">E</tspan><tspan fill="#63FF4A">F</tspan><tspan fill="#E6F2E4">T</tspan>
+  </text>
+  <rect x="8" y="24" width="16" height="2.4" rx="1.2" fill="#63FF4A"/>
+</svg>`;
+
 export const PALETTES = `
   html[data-theme="dark"] {
     --field:#070A08; --field-2:#0B100C; --panel:#111713; --panel-2:#161D18;
@@ -39,6 +58,10 @@ export const PALETTES = `
     --flag:#FF5C5C; --flag-soft:rgba(255,92,92,.13);
     --signal:#FFB020; --signal-soft:rgba(255,176,32,.13);
     --sky:#5BA8FF;
+    /* The settled-result colour. Defined once here rather than per tool: the
+       dashboard needs it for a finished matchup and two tools already had
+       their own copy of the same two values. */
+    --gold:#FFD24D; --gold-glow:rgba(255,210,77,.28);
     --grid-opacity:.55; --ghost-opacity:.05; --bloom-a:.20; --bloom-b:.13;
     --scan:rgba(255,255,255,.016); --mote:rgba(190,255,180,.62); --grain-opacity:.055;
     color-scheme:dark;
@@ -52,6 +75,7 @@ export const PALETTES = `
     --flag:#BF2231; --flag-soft:rgba(191,34,49,.08);
     --signal:#8A5406; --signal-soft:rgba(138,84,6,.10);
     --sky:#20629E;
+    --gold:#B8860B; --gold-glow:rgba(184,134,11,.22);
     --grid-opacity:1; --ghost-opacity:.08; --bloom-a:.22; --bloom-b:.16;
     --scan:rgba(0,0,0,.018); --mote:rgba(18,118,46,.5); --grain-opacity:.05;
     color-scheme:light;
@@ -199,7 +223,94 @@ export const BASE_CSS = `
      wizard and the client-rendered tools alike. Draft Helper set this by hand
      and everything else picked its own, so two tabs at the same viewport were
      visibly different widths. */
-  .wrap { position:relative; z-index:1; width:100%; max-width:1180px; margin:0 auto;
+  
+/* ---------------------------------------------------------------- tables --
+ * One standings table, wherever it appears.
+ *
+ * The all-time table in Hall of Fame is the original and stays the reference;
+ * the home page shows this season through the same component language rather
+ * than a lookalike built beside it. Defined here so there is one copy: the two
+ * had already drifted on header treatment and row weight.
+ */
+/* A scroller with a bar you can always see.
+ *
+ * The native one is an overlay on most platforms: it fades out when idle and on
+ * touch never appears until a finger is already moving, so a table that scrolls
+ * sideways gave no sign it had more to show. This draws its own bar above the
+ * content, always present while there is somewhere to go. */
+.scrollwrap { position: relative; }
+.sbar { position: relative; height: 8px; margin-bottom: 8px; background: var(--inset);
+  border: 1px solid var(--line); cursor: pointer;
+  touch-action: none; user-select: none; }
+.sbar[hidden] { display: none; }
+.sbar-thumb { position: absolute; top: 0; bottom: 0; left: 0; min-width: 32px;
+  background: linear-gradient(90deg, var(--accent-deep), var(--accent));
+  cursor: grab; transition: filter .16s ease; }
+.sbar-thumb:hover { filter: brightness(1.18); }
+.sbar.dragging .sbar-thumb { cursor: grabbing; filter: brightness(1.28); }
+.scrollreal { overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; -ms-overflow-style: none; }
+.scrollreal::-webkit-scrollbar { display: none; }
+
+table.datatable { border-collapse: collapse; font-size: 12.5px;
+  width: max-content; min-width: 100%; }
+table.datatable th, table.datatable td { padding: 11px 14px; text-align: center;
+  vertical-align: middle; white-space: nowrap; }
+table.datatable thead th { font-size: 10px; font-weight: 900; letter-spacing: .1em;
+  text-transform: uppercase; border-bottom: 1px solid var(--line-2); cursor: pointer;
+  user-select: none; background: var(--panel-2); }
+/* The gradient lives on an inner span, never on the th: the th declares its own
+   background, which would win on specificity and clip the label to a solid fill
+   on a same-coloured cell — rendering it invisible. */
+table.datatable thead th .lbl {
+  background: linear-gradient(94deg, var(--ink) 10%, var(--accent) 150%);
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent; -webkit-text-fill-color: transparent; }
+table.datatable thead th:hover .lbl {
+  background: linear-gradient(94deg, var(--accent) 0%, var(--accent-2) 100%);
+  -webkit-background-clip: text; background-clip: text; }
+table.datatable thead th .arrow { display: inline-block; margin-left: 5px;
+  font-size: 8px; color: var(--accent); }
+table.datatable thead th[aria-sort="none"] .arrow { visibility: hidden; }
+table.datatable tbody tr { border-bottom: 1px solid var(--line); }
+table.datatable tbody tr:last-child { border-bottom: 0; }
+table.datatable tbody tr:nth-child(even) { background: rgba(127,127,127,.045); }
+table.datatable tbody tr:hover { background: var(--accent-glow); }
+td.c-rank { font-weight: 900; font-size: 15px; }
+td.c-num { color: var(--ink); font-variant-numeric: tabular-nums; font-weight: 700; }
+td.c-muted { color: var(--ink-3); font-weight: 700; font-size: 11.5px; }
+td.c-key { font-weight: 900; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+td.c-pos { color: var(--accent); font-weight: 800; font-variant-numeric: tabular-nums; }
+td.c-neg { color: var(--flag); font-weight: 800; font-variant-numeric: tabular-nums; }
+td.c-gold { color: var(--gold); font-weight: 900; }
+th.col-team, td.col-team { text-align: left; }
+.stname { display: flex; align-items: center; gap: 9px; text-align: left; }
+.stname .lgo, .stname img { width: 26px; height: 26px; flex: none; object-fit: contain; }
+.stnamewrap { min-width: 0; }
+/* Every standings table draws a team name in the site's gradient. */
+.stnamewrap b { display: block; font-size: 12.5px; font-weight: 900;
+  background: linear-gradient(94deg, var(--ink) 30%, var(--accent) 165%);
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent; -webkit-text-fill-color: transparent; }
+.stnamewrap em { display: block; margin-top: 2px; font-style: normal; font-size: 9.5px;
+  font-weight: 700; color: var(--ink-3); letter-spacing: .04em; }
+
+.scrollpane { scrollbar-width: thin; scrollbar-gutter: stable;
+  scrollbar-color: var(--line-2) var(--inset);
+  overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth; }
+.scrollpane::-webkit-scrollbar { width: 8px; height: 8px; }
+.scrollpane::-webkit-scrollbar-track { background: var(--inset);
+  border-left: 1px solid var(--line); }
+.scrollpane::-webkit-scrollbar-thumb { background: var(--line-2);
+  border: 2px solid var(--inset);
+  transition: background .16s cubic-bezier(.22,.7,.3,1); }
+.scrollpane:hover::-webkit-scrollbar-thumb { background: var(--accent-deep); }
+.scrollpane::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+.scrollpane::-webkit-scrollbar-corner { background: var(--inset); }
+html.stillness .scrollpane { scroll-behavior: auto; }
+
+.wrap { position:relative; z-index:1; width:100%; max-width:1180px; margin:0 auto;
     padding:clamp(18px,3.2vw,42px) clamp(16px,3.4vw,46px) 12px;
     min-height:100svh; display:flex; flex-direction:column; }
   .pagegrid { display:grid; grid-template-columns:1fr; gap:clamp(18px,2.6vw,40px);
