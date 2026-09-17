@@ -35,6 +35,13 @@ export const TOOLS = [
     href: '/apps/hall-of-fame/',
     defaultVisibility: VISIBILITY.VISIBLE,
   },
+  {
+    key: 'trade-analyzer',
+    name: 'Trade Analyzer',
+    description: 'Every offer on the table, broken down for both sides.',
+    href: '/apps/trade-analyzer/',
+    defaultVisibility: VISIBILITY.VISIBLE,
+  },
 ];
 
 /**
