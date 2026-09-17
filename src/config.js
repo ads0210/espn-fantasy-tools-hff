@@ -84,6 +84,11 @@ function normalise(raw) {
     sessionSecret: c.sessionSecret || null,
     setupCompletedAt: c.setupCompletedAt || null,
     toolVisibility: c.toolVisibility || {},
+    /* The league's own Trade Analyzer weighting, holding only the rows an
+       administrator has an opinion about. Absent means "use the shipped
+       defaults", which is where every league starts. */
+    tradeWeights: (c.tradeWeights && typeof c.tradeWeights === 'object')
+      ? c.tradeWeights : {},
     // The build this site last confirmed its datasets against. Internal
     // bookkeeping for the post-update re-pull banner: deliberately absent from
     // describeConfig, because it describes the deployment rather than the league.
@@ -159,7 +164,7 @@ export async function saveConfig(env, patch) {
   const allowed = [
     'leagueId', 'espnS2', 'swid', 'season', 'leaguePrivate', 'historySeasons',
     'leaguePasswordHash', 'adminPasswordHash', 'sessionSecret', 'setupCompletedAt',
-    'toolVisibility', 'datasetsCheckedVersion',
+    'toolVisibility', 'datasetsCheckedVersion', 'tradeWeights',
   ];
   for (const field of allowed) {
     if (patch[field] === undefined) continue;
@@ -183,6 +188,12 @@ export function describeConfig(cfg) {
     swidPresent: Boolean(cfg.swid),
     swidWellFormed: cfg.swid ? /^\{[0-9A-Fa-f-]{36}\}$/.test(cfg.swid) : false,
     historySeasons: cfg.historySeasons,
+    /* Only the rows the administrator actually moved. Storing all twenty-eight
+       would freeze this league's weighting against the shipped defaults, so a
+       later change to a default nobody had opinions about would never reach
+       them. An empty object means "use the defaults", which is also what every
+       new league starts with. */
+    tradeWeights: cfg.tradeWeights || {},
     historyDiscovered: Array.isArray(cfg.historySeasons) && cfg.historySeasons.length > 0,
     leaguePasswordSet: Boolean(cfg.leaguePasswordHash),
     adminPasswordSet: Boolean(cfg.adminPasswordHash),
