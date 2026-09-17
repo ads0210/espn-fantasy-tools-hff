@@ -49,6 +49,11 @@ export function fallbackHistorySeasons(season) {
   return [end - 2, end - 1, end].filter((y) => Number.isFinite(y) && y > 2000);
 }
 
+/* Regular season plus the postseason weeks. The league's own last scoring
+   period is not knowable here — this runs before any payload is read — and a
+   period that does not exist simply answers with nothing. */
+const SCORING_PERIODS = 18;
+
 export function historySeasons(cfg) {
   if (Array.isArray(cfg.historySeasons) && cfg.historySeasons.length) {
     return cfg.historySeasons;
@@ -180,7 +185,13 @@ export const DATASETS = [
     ttl: TTL.MIN_5,
     auth: true,
     tier: 'core',
-    parts: (cfg) => [{ part: 'main', url: `${leagueBase(cfg)}?view=mStandings` }],
+    // mTeam as well as mStandings: the win-loss record is on the team, not in
+    // the standings view, and reading it from mStandings alone left every row
+    // at nil and the panel claiming the season had not started.
+    parts: (cfg) => [{
+      part: 'main',
+      url: `${leagueBase(cfg)}?view=mStandings&view=mTeam`,
+    }],
     expect: 'teams',
   },
   {
@@ -208,9 +219,17 @@ export const DATASETS = [
     ttl: TTL.MIN_5,
     auth: true,
     tier: 'core',
-    parts: (cfg) => [
-      { part: 'main', url: `${leagueBase(cfg)}?view=mTransactions2` },
-    ],
+    /* One part per scoring period, because mTransactions2 answers for exactly
+       the period asked for and for no other. Fetched without one it returns
+       whatever period the league is currently in — which is empty for most of
+       a week, so the whole activity log silently vanished the moment week one
+       rolled over. A past period cannot change, so the repeat fetches cost
+       little and the full season stays readable however far into it a fork
+       arrives. */
+    parts: (cfg) => Array.from({ length: SCORING_PERIODS }, (unused, i) => ({
+      part: `sp${i + 1}`,
+      url: `${leagueBase(cfg)}?view=mTransactions2&scoringPeriodId=${i + 1}`,
+    })),
     expect: 'status',
   },
   {
@@ -355,6 +374,20 @@ export const DATASETS = [
     derivedFrom: 'league_history',
     parts: () => [{ part: 'main', url: null }],
     notes: 'Deliberately separate from h2h_digest, which caps each pair at 24 games for Live Matchups.',
+  },
+  {
+    key: 'trade_digest',
+    label: 'Trade Analyzer board (teams, rosters, odds, offers)',
+    group: 'derived',
+    // Follows its source. Pending offers are the part that changes the minute
+    // somebody proposes something, and the rosters and odds ride along with it.
+    ttl: TTL.MIN_5,
+    auth: true,
+    // Core because a shipped tool is empty without it, which is exactly what
+    // the cold-start check is for.
+    tier: 'core',
+    derivedFrom: 'pending_transactions',
+    parts: () => [{ part: 'main', url: null }],
   },
   {
     key: 'league_history_digest',
