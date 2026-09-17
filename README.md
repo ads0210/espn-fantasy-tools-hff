@@ -103,8 +103,8 @@ icon at the top right to edit it. Two values change:
 
 | Find | Replace with | Roughly |
 |---|---|---|
-| the `"name"` value | whatever you want your site called | line 3 |
-| `PLACE_YOUR_KV_NAMESPACE_HERE` | the KV ID you copied in step 6 | line 20 |
+| the `"name"` value | whatever you want your site called | line 2 |
+| `PLACE_YOUR_KV_NAMESPACE_HERE` | the KV ID you copied in step 6 | line 16 |
 
 The name you choose becomes your web address:
 `https://<name>.<your-cloudflare-subdomain>.workers.dev`
