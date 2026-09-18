@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import { PALETTES, BASE_CSS, BACKDROP } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
+import Instructions from "../shared/Instructions.jsx";
 
 /**
  * Hall of Fame — the league's record book.
@@ -1844,23 +1845,8 @@ export default function HallOfFame() {
       </div>
 
       {showHelp && (
-        <div className="instr" role="dialog" aria-modal="true" aria-label="How to use the Hall of Fame">
-          <div className="instrwrap">
-            <div className="instrhead">
-              <h2>How this works</h2>
-              <button className="ctlbtn" onClick={() => setShowHelp(false)} aria-label="Close" type="button">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M5 5l14 14M19 5L5 19" /></svg>
-              </button>
-            </div>
-            {HELP_STEPS.map(([n, title, body]) => (
-              <div className="istep" key={n}>
-                <span className="inum">{n}</span>
-                <span><b>{title}</b><p>{body}</p></span>
-              </div>
-            ))}
-            <button className="primary" onClick={() => setShowHelp(false)} type="button">Got it</button>
-          </div>
-        </div>
+        <Instructions open steps={HELP_STEPS} onClose={() => setShowHelp(false)}
+          label="How to use the Hall of Fame" />
       )}
     </div>
   );
