@@ -14,10 +14,12 @@ export const DASHBOARD_CSS = `
     .uplayer { position:fixed; inset:0; z-index:90; padding:20px;
       background:rgba(3,6,4,.66); }
     .uplayer:not([hidden]) { display:flex; align-items:center; justify-content:center; }
-    .upbox { width:min(440px,100%); max-height:min(78vh,620px); overflow-y:auto;
+    .upbox { width:min(440px,100%); max-height:min(78vh,620px); overflow:hidden;
       background:var(--panel,#111713); color:var(--ink,#E6F2E4);
       border:1px solid var(--line-2,#2C3B2E); border-radius:14px;
-      padding:20px 20px 18px; box-shadow:0 24px 60px rgba(0,0,0,.55); }
+      box-shadow:0 24px 60px rgba(0,0,0,.55); }
+    .upbody { max-height:min(78vh,620px); padding:20px 20px 18px; }
+    .upbox .vbar { top:8px; bottom:8px; right:5px; }
     .uphead { display:flex; align-items:flex-start; gap:12px; margin-bottom:14px; }
     .uphead h2 { flex:1; margin:0; font-size:16px; font-weight:900;
       letter-spacing:-.01em; color:var(--ink,#E6F2E4); }
@@ -39,14 +41,16 @@ export const DASHBOARD_CSS = `
     .dot.live { background:var(--accent); animation:pip 1.9s ease-in-out infinite; }
     @keyframes pip { 0%,100% { opacity:1; } 50% { opacity:.35; } }
 
-    /* Fixed metric widths keep every copy the same length, so a score changing
-       mid-scroll cannot shift the loop and introduce a seam. */
+    /* Fixed widths for the metrics, never for the names. A score changing
+       mid-scroll must not shift the loop, so the numbers and the state keep a
+       reserved width; a team's name is as long as it is, and a cell simply
+       runs wider to hold it. The loop measures the strip after it is laid out,
+       so cells of different widths cost it nothing. */
     .tk { display:flex; align-items:center; gap:9px; padding:7px 18px;
           border-right:1px solid var(--line); white-space:nowrap; }
     .tkside { display:flex; align-items:center; gap:6px; }
     .tklogo { width:19px; height:19px; object-fit:contain; flex:none; }
-    .tkab { font-size:12.5px; font-weight:900; letter-spacing:.01em;
-            max-width:19ch; overflow:hidden; text-overflow:ellipsis; }
+    .tkab { font-size:12.5px; font-weight:900; letter-spacing:.01em; }
     .tkpts { font-size:12.5px; font-weight:900; font-variant-numeric:tabular-nums;
              color:var(--accent); letter-spacing:.02em;
              min-width:4.2ch; text-align:right; display:inline-block; }
@@ -177,6 +181,9 @@ export const DASHBOARD_CSS = `
     .medal.g { background:var(--gold); box-shadow:0 0 12px -2px var(--gold-glow); }
     .medal.s { background:#C8D2D6; }
     .medal.b { background:#CD8A4D; }
+    /* Silver is light enough that the site's own ink disappears on it in the
+       light theme; the number is set dark on that one badge only. */
+    .medal.s { color:#1C2B24; }
     .stflag { display:inline-block; font-size:8.5px; font-weight:900; letter-spacing:.11em;
               text-transform:uppercase; padding:3px 8px; border:1px solid currentColor; }
     .stflag.in { color:var(--accent); }
@@ -215,8 +222,8 @@ export const DASHBOARD_CSS = `
     .txwho { display:flex; align-items:center; gap:7px; min-width:0; }
     .txteam { display:flex; align-items:center; gap:6px; min-width:0; }
     .txteam .tklogo, .txteam .lgo { width:20px; height:20px; flex:none; }
-    .txteam b { font-size:12px; font-weight:900; letter-spacing:-.01em; white-space:nowrap;
-                overflow:hidden; text-overflow:ellipsis; max-width:150px; }
+    .txteam b { font-size:12px; font-weight:900; letter-spacing:-.01em;
+                overflow-wrap:anywhere; }
     .txswap { flex:none; color:var(--accent-deep); font-weight:900; font-size:12px; }
 
     .txbody { display:flex; align-items:center; gap:6px 12px; flex-wrap:wrap; min-width:0; }
@@ -304,21 +311,7 @@ export const DASHBOARD_CSS = `
                text-transform:uppercase; color:var(--ink-3); margin-top:3px; }
 
     .teampanel::after { display:none; }
-    .teamrow { display:flex; align-items:stretch; flex-wrap:wrap; }
-    .teamlab { flex:none; display:flex; align-items:center; gap:8px; font-size:11px;
-      font-weight:900; letter-spacing:.16em; text-transform:uppercase; padding:0 15px;
-      border:1px solid var(--line-2); border-right:0;
-      background:linear-gradient(94deg,var(--ink) 10%,var(--accent) 150%);
-      -webkit-background-clip:text; background-clip:text;
-      color:transparent; -webkit-text-fill-color:transparent; }
-    .teamlab i { width:6px; height:6px; background:var(--accent); transform:rotate(45deg);
-                 flex:none; -webkit-text-fill-color:initial; }
-    .teamsel { flex:1; min-width:200px; }
-    .teamsel .xselbtn { border-left:0; }
-    @media (max-width:520px) {
-      .teamlab { border-right:1px solid var(--line-2); padding:9px 13px; width:100%; }
-      .teamsel { min-width:100%; }
-    }
+    /* The picker itself (.teamrow, .teamlab, .teamsel) is shared, in ui.js. */
 
     .cardname { font-size:11px !important; font-weight:900; letter-spacing:.16em;
       text-transform:uppercase;
