@@ -5,7 +5,7 @@
  * an upstream fetch: anything this page loads is something the open internet
  * can make the site do.
  */
-import { shell, passwordField, displayTitle, selectField, esc, LOGO_FALLBACK_SVG, TEAM_COOKIE, CLOSE }
+import { shell, passwordField, displayTitle, selectField, esc, LOGO_FALLBACK_SVG, TEAM_COOKIE }
   from '../ui.js';
 import { TOOLS, SITE_CONFIG_TOOL } from '../tools.js';
 
@@ -55,9 +55,9 @@ pw.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); }
        'Everyone in the league signs in with the same League Password. Whoever set the site up has it.'],
       ['02', 'Type it, do not paste it',
        'The field is deliberately paste-proof, and the eye icon reveals what you typed so a stray character cannot lock you out.'],
-      ['03', 'Nothing loads until you are in',
-       'This page fetches nothing from ESPN and shows no league data. That is why it says so little before you sign in.'],
+      ['03', 'You stay signed in',
+       'Signing in lasts about eight hours on this device, so you will not be asked again every time you open a tool.'],
       ['04', 'Trouble getting in',
-       'Repeated wrong attempts are slowed down from your connection. Wait a moment and try again, or ask whoever runs the site.'],
+       'Several wrong attempts in a row slow the next ones down. Wait a moment and try again, or ask whoever runs the site.'],
     ] });
 }
