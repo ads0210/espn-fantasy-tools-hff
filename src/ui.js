@@ -21,6 +21,8 @@
  *   fetched before the League Password gate has run.
  */
 
+import { VSCROLL_JS } from './vscroll.js';
+
 export const THEME_COOKIE = 'eft_theme';
 export const TEAM_COOKIE = 'eft_team';
 export const MOTION_COOKIE = 'eft_motion';
@@ -248,9 +250,23 @@ export const BASE_CSS = `
   cursor: grab; transition: filter .16s ease; }
 .sbar-thumb:hover { filter: brightness(1.18); }
 .sbar.dragging .sbar-thumb { cursor: grabbing; filter: brightness(1.28); }
+/* The vertical counterpart, same thumb, drawn where the native bar would sit. */
+.vwrap { position: relative; }
+.vscroll { overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none; }
+.vscroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.vbar { position: absolute; top: 0; right: 0; bottom: 0; width: 8px; background: var(--inset);
+  border: 1px solid var(--line); cursor: pointer; touch-action: none; user-select: none;
+  z-index: 2; }
+.vbar[hidden] { display: none; }
+.vbar-thumb { position: absolute; left: 0; right: 0; top: 0; min-height: 28px;
+  background: linear-gradient(180deg, var(--accent-deep), var(--accent));
+  cursor: grab; transition: filter .16s ease; will-change: transform; }
+.vbar-thumb:hover { filter: brightness(1.18); }
+.vbar.dragging .vbar-thumb { cursor: grabbing; filter: brightness(1.28); }
+
 .scrollreal { overflow-x: auto; overflow-y: hidden;
   scrollbar-width: none; -ms-overflow-style: none; }
-.scrollreal::-webkit-scrollbar { display: none; }
+.scrollreal::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
 table.datatable { border-collapse: collapse; font-size: 12.5px;
   width: max-content; min-width: 100%; }
@@ -295,19 +311,38 @@ th.col-team, td.col-team { text-align: left; }
 .stnamewrap em { display: block; margin-top: 2px; font-style: normal; font-size: 9.5px;
   font-weight: 700; color: var(--ink-3); letter-spacing: .04em; }
 
-.scrollpane { scrollbar-width: thin; scrollbar-gutter: stable;
-  scrollbar-color: var(--line-2) var(--inset);
+/* --- scrollbars ------------------------------------------------------------
+   One treatment, everywhere a scrollbar can appear: the page, a dialog, a
+   listbox, a pane inside a tool. The platform's own is an overlay on most
+   systems — it fades when idle and on touch never shows until a finger is
+   already moving — so anything with more below it reads as something that ends
+   there. This draws in the same place the native bar would have sat, in the
+   site's own colours, and matches the thumb the drawn horizontal scroller uses
+   under a wide table. The drawn horizontal scroller still opts out entirely:
+   that one is
+   replaced by a drawn bar of its own. */
+/* The pseudo-element form comes first and on its own: naming scrollbar-width
+   or scrollbar-color on an element makes Chrome ignore these rules and fall
+   back to its overlay bar, which is the fading, invisible-until-touched one
+   this is here to replace. Firefox, which has no pseudo-elements, gets the
+   standard properties below instead. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--inset); }
+::-webkit-scrollbar-thumb { background: linear-gradient(180deg, var(--accent-deep), var(--accent));
+  border: 2px solid var(--inset);
+  transition: filter .16s cubic-bezier(.22,.7,.3,1); }
+::-webkit-scrollbar-thumb:horizontal { background: linear-gradient(90deg, var(--accent-deep), var(--accent)); }
+::-webkit-scrollbar-thumb:hover { filter: brightness(1.2); }
+::-webkit-scrollbar-corner { background: var(--inset); }
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: var(--accent-deep) var(--inset); }
+}
+
+/* A pane that scrolls inside the page keeps its room reserved, so content does
+   not shift the moment it becomes scrollable. */
+.scrollpane { scrollbar-gutter: stable;
   overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
   scroll-behavior: smooth; }
-.scrollpane::-webkit-scrollbar { width: 8px; height: 8px; }
-.scrollpane::-webkit-scrollbar-track { background: var(--inset);
-  border-left: 1px solid var(--line); }
-.scrollpane::-webkit-scrollbar-thumb { background: var(--line-2);
-  border: 2px solid var(--inset);
-  transition: background .16s cubic-bezier(.22,.7,.3,1); }
-.scrollpane:hover::-webkit-scrollbar-thumb { background: var(--accent-deep); }
-.scrollpane::-webkit-scrollbar-thumb:hover { background: var(--accent); }
-.scrollpane::-webkit-scrollbar-corner { background: var(--inset); }
 html.stillness .scrollpane { scroll-behavior: auto; }
 
 .wrap { position:relative; z-index:1; width:100%; max-width:1180px; margin:0 auto;
@@ -373,11 +408,19 @@ html.stillness .scrollpane { scroll-behavior: auto; }
 
   /* The instructions overlay. Same shape on every surface, including the tools,
      so "how this works" is one thing the reader learns once. */
-  .instr { position:fixed; inset:0; z-index:80; background:var(--field); overflow-y:auto; }
+  /* A dialog over the page, not a sheet that replaces it: the same treatment
+     the update notice gets, so the site stays visible behind it. */
+  .instr { position:fixed; inset:0; z-index:80; padding:20px; overflow-y:auto;
+    background:rgba(3,6,4,.66); }
   .instr[hidden] { display:none !important; }
-  .instrwrap { max-width:640px; margin:0 auto; padding:26px 18px 40px; }
-  .instrhead { display:flex; align-items:center; gap:12px; margin-bottom:20px; }
-  .instrhead h2 { flex:1; margin:0; font-size:20px; font-weight:900; letter-spacing:-.02em;
+  .instr:not([hidden]) { display:flex; align-items:center; justify-content:center; }
+  .instrwrap { width:min(560px,100%); max-height:min(84vh,760px); margin:auto;
+    background:var(--panel); border:1px solid var(--line-2); border-radius:14px;
+    box-shadow:0 24px 60px rgba(0,0,0,.55); overflow:hidden; }
+  .instrbody { max-height:min(84vh,760px); padding:20px 22px 18px; }
+  .instrwrap .vbar { top:8px; bottom:8px; right:5px; }
+  .instrhead { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
+  .instrhead h2 { flex:1; margin:0; font-size:16px; font-weight:900; letter-spacing:-.01em;
     background:linear-gradient(96deg,var(--ink) 30%,var(--accent) 130%);
     -webkit-background-clip:text; background-clip:text;
     color:transparent; -webkit-text-fill-color:transparent; }
@@ -602,6 +645,33 @@ html.stillness .scrollpane { scroll-behavior: auto; }
   .xsellist li.on { border-left-color:var(--accent); color:var(--accent); }
   .xsellist li small { margin-left:auto; font-size:10.5px; font-weight:800;
     letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); }
+  .xsello { flex:none; width:22px; height:22px; }
+  .xsellogo { flex:none; display:flex; }
+  .xsellist li.key { background:var(--accent-glow); border-left-color:var(--accent); }
+  .xsellist li.off { opacity:.38; cursor:not-allowed; }
+  .xsellist li.off:hover { background:none; border-left-color:transparent; }
+
+  /* --- team picker -----------------------------------------------------------
+     The one way a team is chosen anywhere on the site: a labelled strip with
+     the listbox beside it. Server pages build it with teamPickerField(), the
+     React tools with app/shared/TeamSelect.jsx, and both emit this markup, so
+     a picker cannot drift into a plain native select again. */
+  .teamrow { display:flex; align-items:stretch; flex-wrap:wrap; min-width:0; }
+  .teamlab { flex:none; display:flex; align-items:center; gap:8px; font-size:11px;
+    font-weight:900; letter-spacing:.16em; text-transform:uppercase; padding:0 15px;
+    border:1px solid var(--line-2); border-right:0; white-space:nowrap;
+    background:linear-gradient(94deg,var(--ink) 10%,var(--accent) 150%);
+    -webkit-background-clip:text; background-clip:text;
+    color:transparent; -webkit-text-fill-color:transparent; }
+  .teamlab i { width:6px; height:6px; background:var(--accent); transform:rotate(45deg);
+    flex:none; -webkit-text-fill-color:initial; }
+  .teamsel { flex:1; min-width:min(200px, 100%); }
+  .teamsel .xselbtn { border-left:0; }
+  @media (max-width:520px) {
+    .teamlab { border-right:1px solid var(--line-2); padding:9px 13px; width:100%; }
+    .teamsel { min-width:100%; }
+    .teamsel .xselbtn { border-left:1px solid var(--line-2); border-top:0; }
+  }
 
   /* --- messages --------------------------------------------------------------------- */
   .msg { margin-top:15px; font-size:13px; padding:11px 13px; display:none;
@@ -740,7 +810,6 @@ html.stillness .scrollpane { scroll-behavior: auto; }
 
 const SUN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.6v2.1M12 19.3v2.1M4.6 4.6l1.5 1.5M17.9 17.9l1.5 1.5M2.6 12h2.1M19.3 12h2.1M4.6 19.4l1.5-1.5M17.9 6.1l1.5-1.5"/></svg>`;
 const MOON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.6A8.4 8.4 0 1 1 9.6 4.2a6.7 6.7 0 0 0 10.4 10.4z"/></svg>`;
-export const CLOSE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>`;
 const HELP = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.4"/><path d="M9.2 9.3a2.8 2.8 0 1 1 3.9 2.9c-.9.5-1.4 1-1.4 2.1"/><circle cx="12" cy="17.2" r=".55" fill="currentColor" stroke="none"/></svg>`;
 const GEAR = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"/><path d="M19.1 14.6a1.5 1.5 0 0 0 .3 1.7l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.5 1.5 0 0 0-1.7-.3 1.5 1.5 0 0 0-.9 1.4v.2a2 2 0 1 1-4 0v-.1a1.5 1.5 0 0 0-1-1.4 1.5 1.5 0 0 0-1.7.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.5 1.5 0 0 0 .3-1.7 1.5 1.5 0 0 0-1.4-.9H3a2 2 0 1 1 0-4h.1a1.5 1.5 0 0 0 1.4-1 1.5 1.5 0 0 0-.3-1.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.5 1.5 0 0 0 1.7.3H9a1.5 1.5 0 0 0 .9-1.4V3a2 2 0 1 1 4 0v.1a1.5 1.5 0 0 0 .9 1.4 1.5 1.5 0 0 0 1.7-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.5 1.5 0 0 0-.3 1.7V9a1.5 1.5 0 0 0 1.4.9h.2a2 2 0 1 1 0 4h-.1a1.5 1.5 0 0 0-1.4.9z"/></svg>`;
 const EYE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M1.8 12S5.5 5.2 12 5.2 22.2 12 22.2 12 18.5 18.8 12 18.8 1.8 12 1.8 12z"/><circle cx="12" cy="12" r="3"/></svg>`;
@@ -823,19 +892,47 @@ export const LOGO_FALLBACK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBo
   + '<path d="M14 20h12M20 14v12" stroke="#5A6A5C" stroke-width="2.4" stroke-linecap="round"/>'
   + '</svg>';
 
+/**
+ * A team logo as markup, with the shield standing in when there is no image or
+ * the image will not load. The same treatment app/shared/TeamLogo.jsx gives it.
+ */
+export function logoMarkup(url, alt = '', cls = '') {
+  const c = `lgo${cls ? ` ${cls}` : ''}`;
+  if (!url) return `<span class="${c} lgofail">${LOGO_FALLBACK_SVG}</span>`;
+  return `<span class="${c}"><img src="${esc(url)}" alt="${esc(alt)}"`
+    + ` referrerpolicy="no-referrer" loading="lazy" onerror="this.hidden=true">`
+    + `${LOGO_FALLBACK_SVG}</span>`;
+}
+
 export function selectField({ id, value = '', placeholder = 'Select', options = [] }) {
   const current = options.find((o) => String(o.value) === String(value));
+  // A picker only carries logos if its options do, so a non-team listbox is
+  // unchanged.
+  const logos = options.some((o) => 'logo' in o);
+  const badge = (o) => (logos ? logoMarkup(o && o.logo, '', 'xsello') : '');
   return `
   <div class="xsel${current ? '' : ' empty'}" id="${id}" data-value="${esc(value)}">
     <button type="button" class="xselbtn" aria-haspopup="listbox" aria-expanded="false">
+      ${logos ? `<span class="xsellogo">${badge(current)}</span>` : ''}
       <span class="xselval">${esc(current ? current.label : placeholder)}</span>
       <span class="xselchev" aria-hidden="true"></span>
     </button>
     <ul class="xsellist" role="listbox">
       ${options.map((o) => `<li role="option" data-v="${esc(o.value)}"
-        class="${String(o.value) === String(value) ? 'on' : ''}">${esc(o.label)}
+        class="${String(o.value) === String(value) ? 'on' : ''}">${badge(o)}${esc(o.label)}
         ${o.note ? `<small>${esc(o.note)}</small>` : ''}</li>`).join('')}
     </ul>
+  </div>`;
+}
+
+/**
+ * The site's team picker: a labelled strip beside a listbox. The React tools
+ * render the same markup through app/shared/TeamSelect.jsx.
+ */
+export function teamPickerField({ id, label = 'My team', value = '', placeholder = 'Select your team', options = [] }) {
+  return `<div class="teamrow">
+    <span class="teamlab"><i></i>${esc(label)}</span>
+    <div class="teamsel">${selectField({ id, value, placeholder, options })}</div>
   </div>`;
 }
 
@@ -901,20 +998,23 @@ function instructionsDialog(steps) {
   return `
   <div class="instr" id="instr" hidden role="dialog" aria-modal="true"
        aria-label="How this page works">
-    <div class="instrwrap">
-      <div class="instrhead">
-        <h2>How this works</h2>
-        <button class="ctlbtn" id="instrClose" aria-label="Close">${CLOSE}</button>
+    <div class="instrwrap vwrap">
+      <div class="instrbody vscroll" data-vscroll>
+        <div class="instrhead">
+          <h2>How this works</h2>
+        </div>
+        ${steps.map(([n, t, b]) => `
+        <div class="istep"><span class="inum">${esc(n)}</span>
+          <span><b>${esc(t)}</b><p>${esc(b)}</p></span></div>`).join('')}
+        <button class="primary" id="instrDone">Got it</button>
       </div>
-      ${steps.map(([n, t, b]) => `
-      <div class="istep"><span class="inum">${esc(n)}</span>
-        <span><b>${esc(t)}</b><p>${esc(b)}</p></span></div>`).join('')}
-      <button class="primary" id="instrDone">Got it</button>
+      <div class="vbar" hidden><div class="vbar-thumb"></div></div>
     </div>
   </div>`;
 }
 
 export const SHARED_JS = `
+${VSCROLL_JS}
 (function () {
   var SUN = ${JSON.stringify(SUN)}, MOON = ${JSON.stringify(MOON)};
   var root = document.documentElement;
@@ -1079,13 +1179,25 @@ export const SHARED_JS = `
   function showInstr(open) {
     if (!instr) return;
     instr.hidden = !open;
-    document.body.style.overflow = open ? 'hidden' : '';
+    // A pane measures nothing while hidden; the drawn bar sizes itself once the
+    // dialog is actually on screen.
+    if (open) {
+      window.dispatchEvent(new Event('resize'));
+      // Focus follows the dialog, or a keyboard reader is left behind the page
+      // it just opened.
+      var done = document.getElementById('instrDone');
+      if (done) done.focus();
+    } else if (help) {
+      help.focus();
+    }
   }
   if (help) help.addEventListener('click', function () { showInstr(true); });
-  var instrClose = document.getElementById('instrClose');
   var instrDone = document.getElementById('instrDone');
-  if (instrClose) instrClose.addEventListener('click', function () { showInstr(false); });
   if (instrDone) instrDone.addEventListener('click', function () { showInstr(false); });
+  // Clicking the page behind it dismisses it, the way the update notice does.
+  if (instr) {
+    instr.addEventListener('click', function (e) { if (e.target === instr) showInstr(false); });
+  }
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && instr && !instr.hidden) showInstr(false);
   });
@@ -1231,8 +1343,14 @@ export const SHARED_JS = `
       var v = opt.dataset.v;
       sel.dataset.value = v;
       sel.classList.toggle('empty', !v);
-      sel.querySelector('.xselval').textContent =
-        opt.childNodes[0].textContent.trim() || opt.textContent.trim();
+      var lbl = opt.querySelector('.xsello')
+        ? (opt.querySelector('.xsello').nextSibling || {}).textContent || ''
+        : opt.childNodes[0].textContent;
+      sel.querySelector('.xselval').textContent = lbl.trim() || opt.textContent.trim();
+      // Carry the chosen team's logo onto the closed control.
+      var slot = sel.querySelector('.xselbtn .xsellogo');
+      var badge = opt.querySelector('.xsello');
+      if (slot && badge) slot.innerHTML = badge.outerHTML;
       sel.querySelectorAll('li').forEach(function (li) {
         li.classList.toggle('on', li === opt);
       });
@@ -1242,12 +1360,67 @@ export const SHARED_JS = `
     }
   });
 
+  /* The listbox from the keyboard.
+   *
+   * It opened on Enter and then went nowhere: the options are list items, so
+   * there was no way to reach one without a pointer. Arrow keys now walk the
+   * list, Enter or Space takes the highlighted one, Escape closes, and the
+   * highlight is announced through aria-activedescendant. */
+  function xselOptions(host) {
+    return Array.prototype.slice.call(host.querySelectorAll('.xsellist li'))
+      .filter(function (li) { return li.getAttribute('aria-disabled') !== 'true'; });
+  }
+  function xselMark(host, li) {
+    host.querySelectorAll('.xsellist li').forEach(function (o) { o.classList.toggle('key', o === li); });
+    if (li) {
+      if (!li.id) li.id = 'xo-' + Math.random().toString(36).slice(2, 9);
+      host.querySelector('.xselbtn').setAttribute('aria-activedescendant', li.id);
+      if (li.scrollIntoView) li.scrollIntoView({ block: 'nearest' });
+    }
+  }
+  function xselClose(host) {
+    host.classList.remove('open');
+    var b = host.querySelector('.xselbtn');
+    if (b) { b.setAttribute('aria-expanded', 'false'); b.removeAttribute('aria-activedescendant'); }
+    host.querySelectorAll('.xsellist li.key').forEach(function (o) { o.classList.remove('key'); });
+  }
+
   document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Escape') return;
-    document.querySelectorAll('.xsel.open').forEach(function (x) {
-      x.classList.remove('open');
-      x.querySelector('.xselbtn').setAttribute('aria-expanded', 'false');
-    });
+    var host = e.target.closest ? e.target.closest('.xsel') : null;
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.xsel.open').forEach(xselClose);
+      if (host) { var hb = host.querySelector('.xselbtn'); if (hb) hb.focus(); }
+      return;
+    }
+    if (!host) return;
+    var opts = xselOptions(host);
+    if (!opts.length) return;
+    var current = host.querySelector('.xsellist li.key')
+      || host.querySelector('.xsellist li.on');
+    var at = opts.indexOf(current);
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+      e.preventDefault();
+      if (!host.classList.contains('open')) {
+        host.classList.add('open');
+        host.querySelector('.xselbtn').setAttribute('aria-expanded', 'true');
+      }
+      var next = e.key === 'Home' ? 0
+        : e.key === 'End' ? opts.length - 1
+          : e.key === 'ArrowDown' ? Math.min(at + 1, opts.length - 1) : Math.max(at - 1, 0);
+      if (at < 0) next = e.key === 'ArrowUp' ? opts.length - 1 : 0;
+      xselMark(host, opts[next]);
+      return;
+    }
+    if ((e.key === 'Enter' || e.key === ' ') && host.classList.contains('open')) {
+      var pick = host.querySelector('.xsellist li.key');
+      if (pick) {
+        e.preventDefault();
+        pick.click();
+        var btn2 = host.querySelector('.xselbtn');
+        if (btn2) btn2.focus();
+      }
+    }
   });
 })();
 `;
