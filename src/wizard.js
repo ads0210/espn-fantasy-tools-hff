@@ -11,7 +11,7 @@
  * drive down the field is the metaphor the rest of the site already uses.
  */
 
-import { shell, passwordField, displayTitle, esc, HISTORY_RUNNER_JS } from './ui.js';
+import { shell, passwordField, displayTitle, selectField, esc, HISTORY_RUNNER_JS } from './ui.js';
 import { TOOL_ICONS } from './pages.js';
 
 const STEPS = [
@@ -131,10 +131,14 @@ export function wizardPage({ theme, reduceMotion, codeRequired, step = 1, league
         </div>
         <div class="field-row">
           <label for="privacy">League type</label>
-          <select id="privacy">
-            <option value="true" selected>Private — needs my ESPN sign-in</option>
-            <option value="false">Public — anyone can view it</option>
-          </select>
+          ${selectField({
+            id: 'privacy',
+            value: 'true',
+            options: [
+              { value: 'true', label: 'Private \u2014 needs my ESPN sign-in' },
+              { value: 'false', label: 'Public \u2014 anyone can view it' },
+            ],
+          })}
           <p class="hint">Most leagues are private.</p>
         </div>
         <div id="cookieFields">
@@ -302,8 +306,8 @@ function busy(btn, on, label) {
   else if (btn.dataset.label) btn.textContent = btn.dataset.label;
 }
 
-document.getElementById('privacy').addEventListener('change', function () {
-  document.getElementById('cookieFields').hidden = this.value !== 'true';
+document.getElementById('privacy').addEventListener('xselect', function () {
+  document.getElementById('cookieFields').hidden = this.dataset.value !== 'true';
 });
 
 document.querySelectorAll('[data-next]').forEach(function (btn) {
@@ -337,7 +341,7 @@ async function handle(step, btn) {
   }
 
   if (step === 3) {
-    var priv = document.getElementById('privacy').value === 'true';
+    var priv = document.getElementById('privacy').dataset.value === 'true';
     var payload = {
       leagueId: document.getElementById('leagueId').value.trim(),
       leaguePrivate: priv,
@@ -546,9 +550,11 @@ if (${step} >= 4) loadTools();`;
        'The League Password is shared with everyone who uses the site. The Admin Password is yours and is asked for on every administrative change.'],
       ['03', 'Private leagues need your cookies',
        'ESPN only serves a private league to a signed-in session. The two values are stored server-side and are never sent back to a browser.'],
-      ['04', 'Both pulls matter',
-       'The first fills the site so nothing is empty when you arrive. The second fetches past seasons, which several tools read.'],
-      ['05', 'Leave the tab open',
+      ['04', 'Choose what your league sees',
+       'Every tool can be switched on for the league, kept for admins only, or hidden. You can change any of it later in Site Configuration.'],
+      ['05', 'Both pulls matter',
+       'The first fills the site so nothing is empty when you arrive. The second fetches past seasons, which the record book and several other tools read.'],
+      ['06', 'Leave the tab open',
        'Both pulls run from this page. It holds the screen awake and keeps going on its own \u2014 you do not need to nudge it along.'],
     ] });
 }
