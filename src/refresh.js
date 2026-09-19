@@ -289,9 +289,18 @@ export async function refreshDataset(env, cfg, dataset, { force = false } = {}) 
          * other surfaces and the cron keep them current anyway. */
         const fresh = Array.isArray(derivation.freshNeeds) ? derivation.freshNeeds : null;
         for (const key of derivation.needs) {
-          const o = fresh && !fresh.includes(key)
-            ? await getPart(env, key, 'main')
-            : await ensureSource(env, key);
+          /* Read as stored means read as stored, never read as absent.
+           *
+           * A need nobody has fetched yet has no stored copy, and a digest
+           * built from that gap is written with a section simply missing —
+           * then kept, because nothing about it is stale. That is how a site
+           * that had just primed ended up with an empty schedule in its
+           * export: the export was built during the pass, before the schedule
+           * had been fetched, and the end-of-pass rebuild had nothing to
+           * consider stale. So a missing need is always fetched; only a merely
+           * ageing one is taken as it stands. */
+          let o = fresh && !fresh.includes(key) ? await getPart(env, key, 'main') : null;
+          if (!o) o = await ensureSource(env, key);
           if (o) {
             try { ctx.sources[key] = await o.json(); } catch { /* leave absent */ }
           }

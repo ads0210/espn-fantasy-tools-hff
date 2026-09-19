@@ -8,7 +8,7 @@
  * assets are reached only through env.ASSETS, and only after the gate passes.
  */
 
-import { llmExportPayload } from './llmexport.js';
+import { llmExportPayload, applyLiveScoring } from './llmexport.js';
 import { DATASETS, getDataset, planBatches, PARAM_DATASETS } from './datasets.js';
 import { loadConfig, saveConfig, describeConfig, isConfigured, isSetupFinished, canCallEspn } from './config.js';
 import { coordinatorRefresh } from './dedupe.js';
@@ -42,7 +42,7 @@ export { ScoreTimelineDO } from './scoretimeline.js';
 import { RELEASE_NOTE_ITEMS } from './release.js';
 import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r131';
+const BUILD_MARKER = 'r132';
 
 
 
