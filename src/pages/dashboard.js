@@ -5,7 +5,7 @@
  * drive it. Panel order is deliberate: the week, this week's matchup, the
  * standings, the tools, then the news.
  */
-import { shell, passwordField, displayTitle, selectField, esc, LOGO_FALLBACK_SVG, TEAM_COOKIE, CLOSE }
+import { shell, passwordField, displayTitle, teamPickerField, esc, LOGO_FALLBACK_SVG, TEAM_COOKIE }
   from '../ui.js';
 import { TOOLS, SITE_CONFIG_TOOL } from '../tools.js';
 import { TOOL_ICONS } from './icons.js';
@@ -76,15 +76,17 @@ export function dashboardPage({
      not part of. */
   const updatePopup = version ? `
   <div class="uplayer" id="updatepop"${updateOpen ? '' : ' hidden'}>
-    <div class="upbox" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
-      <div class="uphead">
-        <h2 id="updateTitle">Site updated \u2014 v${esc(version)}</h2>
-        <button class="ctlbtn" id="updateClose" aria-label="Close">${CLOSE}</button>
+    <div class="upbox vwrap" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+      <div class="upbody vscroll" data-vscroll>
+        <div class="uphead">
+          <h2 id="updateTitle">Site updated \u2014 v${esc(version)}</h2>
+        </div>
+        ${releaseItems.length
+          ? `<ul class="uplist">${releaseItems.map((i) => `<li>${linkTools(i)}</li>`).join('')}</ul>`
+          : '<p class="hint" style="margin:0 0 14px">This site was updated.</p>'}
+        <button class="primary" id="updateDone">Got it</button>
       </div>
-      ${releaseItems.length
-        ? `<ul class="uplist">${releaseItems.map((i) => `<li>${linkTools(i)}</li>`).join('')}</ul>`
-        : '<p class="hint" style="margin:0 0 14px">This site was updated.</p>'}
-      <button class="primary" id="updateDone">Got it</button>
+      <div class="vbar" hidden><div class="vbar-thumb"></div></div>
     </div>
   </div>` : '';
 
@@ -100,11 +102,11 @@ export function dashboardPage({
       <span class="tilearrow" aria-hidden="true">&rarr;</span>
     </a>`).join('');
 
-  const teamPicker = selectField({
+  const teamPicker = teamPickerField({
     id: 'team',
     value: selectedTeamId,
     placeholder: 'Select your team',
-    options: teams.map((t) => ({ value: t.id, label: t.name, note: t.owner })),
+    options: teams.map((t) => ({ value: t.id, label: t.name, note: t.owner, logo: t.logo || null })),
   });
 
   const rail = displayTitle(leagueName || 'Fantasy Football',
@@ -140,10 +142,7 @@ export function dashboardPage({
     </div>
 
     <div class="panel tight reveal teampanel">
-      <div class="teamrow">
-        <span class="teamlab"><i></i>My team</span>
-        <div class="teamsel">${teamPicker}</div>
-      </div>
+      ${teamPicker}
     </div>
 
     <div class="panel reveal" id="cardPanel" hidden>
@@ -192,15 +191,17 @@ export function dashboardPage({
     overlays: updatePopup,
     instructions: [
       ['01', 'Pick your team first',
-       'Choose your team above and the whole page follows it: your matchup, your injuries, your activity. The choice is shared with every tool.'],
-      ['02', 'The strips across the top',
-       'Fantasy matchups and this week\u2019s NFL games. Both keep scrolling even with reduce motion on, because they carry information rather than decoration.'],
-      ['03', 'Injury watch is yours only',
-       'It lists players on your roster, starters and bench alike, who are carrying a designation. An empty panel means nobody on your roster has one.'],
-      ['04', 'Tools live below',
-       'Each tile opens a tool. Which ones appear is set in Site Configuration, so your league may show more or fewer than another.'],
-      ['05', 'Settings follow you',
-       'Theme, motion and time zone are under the gear on every page, and every time on the site is shown in the zone you pick there.'],
+       'Choose your team and the whole page follows it: your matchup card, your injury watch, your side of the standings. The choice is shared with every tool, so you only make it once.'],
+      ['02', 'The two strips at the top',
+       'Your league\u2019s matchups this week, then the NFL games behind them. Both keep moving while games are on, with live scores and projections.'],
+      ['03', 'Your matchup, then the table',
+       'The card shows this week\u2019s score, projection and win chance for you and your opponent. Below it the full standings, sortable on any column, with playoff odds.'],
+      ['04', 'Tools',
+       'Each tile opens one. Which tiles appear is up to whoever runs the league, so your league may show more or fewer than another.'],
+      ['05', 'News, further down',
+       'Injuries on your own roster, everything the league has done lately \u2014 waiver claims, adds, drops and trades \u2014 and headlines from around the NFL. League activity starts at the last seven days; change the range to see further back.'],
+      ['06', 'Settings follow you',
+       'Theme, motion and time zone live under the gear on every page. Every time on the site is shown in the zone you pick there.'],
     ],
     // The dashboard is home, so its wordmark is not a link, and its one
     // page-level action is the way out of the site rather than back into it.
