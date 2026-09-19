@@ -771,13 +771,16 @@ ${idleAwarePoller('loadStatus', 15000)}
     pop.hidden = true;
     remember();
   }
+  function open() {
+    pop.hidden = false;
+    // The drawn bar cannot measure a hidden pane; it sizes itself on the resize.
+    window.dispatchEvent(new Event('resize'));
+  }
 
   /* Dismissal is wired before anything decides whether to open, so a dialog
      that arrives already open — which diagnostics can render — can still be
      closed. Wiring it after the checks below left those buttons inert. */
-  var x = document.getElementById('updateClose');
   var done = document.getElementById('updateDone');
-  if (x) x.addEventListener('click', close);
   if (done) done.addEventListener('click', close);
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && !pop.hidden) close();
@@ -791,6 +794,6 @@ ${idleAwarePoller('loadStatus', 15000)}
 
   if (seen === null || seen === undefined) { remember(); return; }
   if (seen === VERSION) return;
-  pop.hidden = false;
+  open();
 })();`;
 }
