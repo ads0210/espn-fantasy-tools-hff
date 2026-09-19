@@ -41,6 +41,12 @@ const TOOLS = [
     entry: 'app/hall-of-fame/main.jsx',
     css: 'app/hall-of-fame/styles.css',
   },
+  {
+    key: 'llm-export',
+    title: 'LLM Data Export',
+    entry: 'app/llm-export/main.jsx',
+    css: 'app/llm-export/styles.css',
+  },
 ];
 
 /**
