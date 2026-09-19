@@ -7,6 +7,9 @@ import {
 } from "lucide-react";
 import { PALETTES, BASE_CSS, BACKDROP } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
+import TeamSelect from "../shared/TeamSelect.jsx";
+import Instructions from "../shared/Instructions.jsx";
+import { teamLogoUrl } from "../../src/teamlogo.js";
 
 // color tokens — dark and light themes
 // Values mirror the shared design tokens exactly, so the tool sits inside the
@@ -165,7 +168,7 @@ function deriveTeams(rostersData) {
   return (rostersData.teams || []).map((t) => {
     const owner = membersById[(t.owners || [])[0]];
     return {
-      id: t.id, name: t.name, abbrev: t.abbrev,
+      id: t.id, name: t.name, abbrev: t.abbrev, logo: teamLogoUrl(t.id, t.logo),
       owner: owner ? `${owner.firstName} ${owner.lastName}` : "Unknown Owner",
     };
   });
@@ -364,42 +367,6 @@ function Panel({ id, title, glyph, badge, right, open, onToggle, children, flush
 /** Empty states are marked-out field, never a bare sentence. */
 function Blank({ title, sub }) {
   return <div className="placeholder"><b>{title}</b>{sub && <span>{sub}</span>}</div>;
-}
-
-/** Listbox matching the site's, implemented in React for this bundle. */
-function Listbox({ value, options, placeholder, onChange, disabled }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-  useEffect(() => {
-    if (!open) return undefined;
-    const away = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    const esc = (e) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("click", away);
-    document.addEventListener("keydown", esc);
-    return () => { document.removeEventListener("click", away); document.removeEventListener("keydown", esc); };
-  }, [open]);
-
-  const current = options.find((o) => String(o.value) === String(value));
-  return (
-    <div className={"xsel" + (open ? " open" : "") + (current ? "" : " empty")} ref={ref}>
-      <button type="button" className="xselbtn focus-ring" disabled={disabled}
-        aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <span className="xselval">{current ? current.label : placeholder}</span>
-        <span className="xselchev" aria-hidden="true" />
-      </button>
-      {open && (
-        <ul className="xsellist" role="listbox">
-          {options.map((o) => (
-            <li key={String(o.value)} role="option" aria-selected={String(o.value) === String(value)}
-              className={String(o.value) === String(value) ? "on" : ""}
-              onClick={() => { onChange(o.value); setOpen(false); }}>
-              {o.label}{o.note && <small>{o.note}</small>}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
 }
 
 /** A roster slot: filled reads as a card, empty reads as a gap to fill. */
@@ -777,7 +744,8 @@ export default function DraftHelper() {
           opacity:.5; transition:width .5s cubic-bezier(.3,.8,.4,1); }
 
         /* ---- board ---- */
-        .boardscroll { overflow-x:auto; padding:0 15px 15px; scrollbar-width:thin; }
+        /* The scrollbar treatment is the shared one, in ui.js. */
+        .boardscroll { overflow-x:auto; padding:0 15px 15px; }
         .board { border-collapse:collapse; font-size:10px; width:100%; }
         .board th { position:sticky; top:0; font-size:8.5px; font-weight:900; letter-spacing:.1em;
           text-transform:uppercase; color:var(--ink-3); padding:6px 4px; white-space:nowrap;
@@ -860,13 +828,15 @@ export default function DraftHelper() {
         {/* team selection */}
         <div className="dhpanel open" style={{ padding: "13px 15px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-            <span className="dhtitle" style={{ flex: "none" }}>My team</span>
-            <div style={{ flex: 1, minWidth: 200 }}>
-              <Listbox
+            <div style={{ flex: "1 1 320px", minWidth: 0 }}>
+              <TeamSelect
+                label="My team"
                 value={selectedTeamId ?? ""}
                 placeholder={teams.length ? "Select your team" : "Loading teams"}
                 disabled={teams.length === 0}
-                options={teamsDropdown.map((t) => ({ value: t.id, label: t.name, note: t.owner }))}
+                options={teamsDropdown.map((t) => ({
+                  value: t.id, label: t.name, note: t.owner, logo: t.logo,
+                }))}
                 onChange={(v) => {
                   const id = v ? Number(v) : null;
                   setSelectedTeamId(id); writeTeamCookie(id); setPreviewTeamId(null);
@@ -1160,56 +1130,18 @@ export default function DraftHelper() {
         </div>
       </div>
 
-      {showInstructions && <Instructions onClose={() => setShowInstructions(false)} />}
+      <Instructions open={showInstructions} steps={HELP_STEPS}
+        onClose={() => setShowInstructions(false)} label="How to use Draft Helper" />
     </div>
   );
 }
 
-function Instructions({ onClose }) {
-  const steps = [
-    ["01", "Pick your team", "Choose your team once. The roster, needs and targets all follow it, and the choice is shared with every other tool."],
-    ["02", "Watch the clock", "Before the draft it counts down. During it, the panel names whoever is on the clock and which pick they are on."],
-    ["03", "Work the targets", "Available players sit in ADP order. Star anyone you want to remember, hide anyone you never want to see again."],
-    ["04", "Lean a position", "Emphasis floats one position to the top without hiding the rest, for when you know what you need next."],
-    ["05", "Read the board", "Your picks are highlighted. Empty cells show the overall pick number so you can count forward to your next turn."],
-  ];
-  return (
-    <div className="instr" role="dialog" aria-modal="true" aria-label="How to use Draft Helper">
-      <style>{`
-        .instr { position:fixed; inset:0; z-index:80; background:var(--field);
-          overflow-y:auto; animation:dhopen .22s ease; }
-        .instrwrap { max-width:640px; margin:0 auto; padding:26px 18px 40px; }
-        .instrhead { display:flex; align-items:center; gap:12px; margin-bottom:20px; }
-        .instrhead h2 { flex:1; margin:0; font-size:20px; font-weight:900; letter-spacing:-.02em;
-          background:linear-gradient(96deg,var(--ink) 30%,var(--accent) 130%);
-          -webkit-background-clip:text; background-clip:text;
-          color:transparent; -webkit-text-fill-color:transparent; }
-        .istep { display:flex; gap:14px; padding:15px 0; border-bottom:1px solid var(--line); }
-        .istep:last-of-type { border-bottom:0; }
-        .inum { flex:none; font-size:22px; font-weight:900; color:var(--ink); opacity:.2;
-          font-variant-numeric:tabular-nums; letter-spacing:-.04em; }
-        .istep b { display:block; font-size:11px; font-weight:900; letter-spacing:.16em;
-          text-transform:uppercase; margin-bottom:5px;
-          background:linear-gradient(94deg,var(--ink) 10%,var(--accent) 160%);
-          -webkit-background-clip:text; background-clip:text;
-          color:transparent; -webkit-text-fill-color:transparent; }
-        .istep p { margin:0; font-size:13.5px; color:var(--ink-2); line-height:1.6; }
-      `}</style>
-      <div className="instrwrap">
-        <div className="instrhead">
-          <h2>How this works</h2>
-          <button className="ctlbtn focus-ring" onClick={onClose} aria-label="Close" type="button">
-            <X size={19} />
-          </button>
-        </div>
-        {steps.map(([n, title, body]) => (
-          <div className="istep" key={n}>
-            <span className="inum">{n}</span>
-            <span><b>{title}</b><p>{body}</p></span>
-          </div>
-        ))}
-        <button className="primary" onClick={onClose} type="button">Got it</button>
-      </div>
-    </div>
-  );
-}
+/* Draft Helper's own help, rendered by the shared dialog like every other
+   tool's. */
+const HELP_STEPS = [
+  ["01", "Pick your team", "Choose your team once. The roster, needs and targets all follow it, and the choice is shared with every other tool."],
+  ["02", "Watch the clock", "Before the draft it counts down. During it, the panel names whoever is on the clock and which pick they are on."],
+  ["03", "Work the targets", "Available players sit in ADP order. Star anyone you want to remember, hide anyone you never want to see again."],
+  ["04", "Lean a position", "Emphasis floats one position to the top without hiding the rest, for when you know what you need next."],
+  ["05", "Read the board", "Your picks are highlighted. Empty cells show the overall pick number so you can count forward to your next turn."],
+];

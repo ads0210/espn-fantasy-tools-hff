@@ -42,6 +42,13 @@ export const TOOLS = [
     href: '/apps/trade-analyzer/',
     defaultVisibility: VISIBILITY.VISIBLE,
   },
+  {
+    key: 'llm-export',
+    name: 'LLM Data Export',
+    description: 'For those who wish to outsource their thinking.',
+    href: '/apps/llm-export/',
+    defaultVisibility: VISIBILITY.VISIBLE,
+  },
 ];
 
 /**

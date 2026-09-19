@@ -14,18 +14,18 @@
  * outside the repo would notice.
  */
 export const RELEASE_NOTE_ITEMS = [
-  'New tool: Trade Analyzer. Every offer on the table, broken down statistic by '
-  + 'statistic for both sides, with a verdict on how balanced the deal is \u2014 '
-  + 'and you can build your own between any two teams.',
-  'Your matchup card now puts each team\u2019s score either side of the win-chance '
-  + 'dial, so you can see where the week stands at a glance.',
-  'A finished matchup shows as final, with the winning score and the margin, '
-  + 'instead of looking like a game still in progress.',
-  'Further rescaled Score Progression graphs on Live Matchups to increase '
-  + 'readability.',
-  'League activity reads as one entry per move: a waiver claim is a single row '
-  + 'instead of an unrelated add and drop, and a trade is one row showing both '
-  + 'teams, everyone involved, and whether it is on the table, accepted, '
-  + 'completed, rejected or expired.',
+  'New tool: LLM Data Export \u2014 everything an AI assistant needs to be a real '
+  + 'fantasy co-manager. A prompt you copy, and your whole league as one file you '
+  + 'attach to it. Pick your team, copy, attach, and it can talk about your roster, '
+  + 'your matchup, the waiver wire and your league\u2019s own rules.',
+  'The season standings on the home page now carry points per game, points '
+  + 'difference and playoff odds, mark who has clinched or been eliminated, and '
+  + 'sort on any column you tap.',
+  'Looking back at a week already played in Live Matchups shows its score '
+  + 'progression charts and its finished games again.',
+  'Choosing your team looks and works the same on every page, and every list now '
+  + 'shows team logos.',
+  'A shared Trade Analyzer link now opens the trade it was shared with rather '
+  + 'than an empty builder.',
   'Various bug fixes.',
 ];

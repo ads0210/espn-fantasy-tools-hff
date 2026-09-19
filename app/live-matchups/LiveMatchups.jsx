@@ -3,6 +3,7 @@ import { PALETTES, BASE_CSS, BACKDROP } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
 import { weightDays, makeXOf } from "./axis.js";
+import Instructions from "../shared/Instructions.jsx";
 
 /**
  * Live Matchups.
@@ -101,7 +102,12 @@ function useWeek(week, idle) {
          browser tool used to inspect this page cannot sign in and never sees an
          XHR result. Same hook the Hall of Fame uses, and inert without it. */
       if (typeof window !== "undefined" && window.__LM_PREVIEW__) {
-        setState({ data: window.__LM_PREVIEW__, error: null, at: new Date(), loading: false });
+        // A preview payload that says it is not ready is shown as such, the
+        // same way a live one would be, rather than as an empty week.
+        const seeded = window.__LM_PREVIEW__;
+        setState(seeded && seeded.ok === false
+          ? { data: null, error: seeded.error || 'Could not load this week.', at: null, loading: false }
+          : { data: seeded, error: null, at: new Date(), loading: false });
         return;
       }
       if (!quiet) setState((s) => ({ ...s, loading: true }));
@@ -1176,10 +1182,10 @@ function OptimalPair({ g }) {
 
 const HELP_STEPS = [
   ["01", "Your matchup first", "Whichever team you picked on the dashboard is sorted to the top. The choice is shared with every other tool."],
-  ["02", "Read the bar", "The split bar is ESPN's own win probability, not a calculation of ours. It moves as games do."],
-  ["03", "Open a breakdown", "Full breakdown opens lineups, position scoring, boom and bust, and the NFL games your players are in."],
-  ["04", "Watch the shape", "Score progression is recorded once a minute all week, so you can see where a matchup turned even if you missed it."],
-  ["05", "Look back", "The week selector walks back through completed weeks. A finished week is stored once and never changes."],
+  ["02", "Read the bar", "The split bar is ESPN's own win chance, not a calculation of ours. It moves as the games do."],
+  ["03", "Open a breakdown", "Full breakdown opens both lineups, scoring by position, the week's booms and busts, the NFL games your players are in, and your record against that opponent."],
+  ["04", "Watch the shape", "Score and win chance are recorded every minute all week, so you can see where a matchup turned even if you missed it. Quiet stretches are squeezed up so the games fill the chart."],
+  ["05", "Look back", "The arrows either side of the week walk back through weeks already played, with their final scores and their charts."],
 ];
 
 export default function LiveMatchups() {
@@ -1325,8 +1331,10 @@ export default function LiveMatchups() {
         .mlogo { flex:none; width:44px; height:44px;
           background:var(--inset); border:1px solid var(--line-2); }
         .mteam-info { display:flex; flex-direction:column; gap:1px; min-width:0; }
+        /* A team's name is never shortened: the line wraps and the block grows
+           rather than ending in an ellipsis nobody can read. */
         .mname { font-size:13.5px; font-weight:900; letter-spacing:-.01em;
-          overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          overflow-wrap:anywhere; }
         .mownerfull { font-size:10px; color:var(--ink-2); font-weight:700;
           overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .mrecline { font-size:9.5px; color:var(--ink-3); font-weight:700; letter-spacing:.03em; }
@@ -1440,7 +1448,7 @@ export default function LiveMatchups() {
         .hlgridouter { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:8px; }
         .hlteamname { grid-column:span 2; text-align:center; font-size:11px; font-weight:900;
           letter-spacing:.08em; text-transform:uppercase; color:var(--ink-2); padding-bottom:6px;
-          overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          overflow-wrap:anywhere; }
         .hlcell { background:var(--inset); border:1px solid var(--line); padding:11px 6px;
           text-align:center; display:flex; flex-direction:column; align-items:center;
           justify-content:center; gap:4px; min-width:0; }
@@ -1534,8 +1542,9 @@ export default function LiveMatchups() {
 
         .gaugerow { display:flex; gap:24px; justify-content:center; margin-top:4px; }
         .gauge { flex:1; max-width:170px; text-align:center; min-width:0; }
+        /* The gauge sizes to its label rather than cutting a team's name. */
         .gaugelabel { font-size:10.5px; font-weight:900; letter-spacing:.08em; text-transform:uppercase;
-          color:var(--ink-2); margin-bottom:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          color:var(--ink-2); margin-bottom:8px; overflow-wrap:anywhere; }
         .gaugewrap { position:relative; filter:drop-shadow(0 3px 8px rgba(0,0,0,.35)); }
         .gaugewrap svg { width:100%; height:auto; transform:rotate(-90deg); display:block; overflow:visible; }
         .gaugeframe { fill:none; stroke:var(--accent-deep); stroke-width:.6; opacity:.55; }
@@ -1560,7 +1569,7 @@ export default function LiveMatchups() {
         .seasonmini { text-align:center; min-width:0; }
         .seasonmini .seasonteam { font-size:11px; font-weight:900; letter-spacing:.08em;
           text-transform:uppercase; color:var(--ink-2); margin-bottom:6px;
-          overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          overflow-wrap:anywhere; }
         .seasonmini .rec { font-size:22px; font-weight:900; font-variant-numeric:tabular-nums;
           background:linear-gradient(94deg,var(--ink) 10%,var(--accent) 150%);
           -webkit-background-clip:text; background-clip:text;
@@ -1578,7 +1587,7 @@ export default function LiveMatchups() {
         .h2hside { display:flex; flex-direction:column; gap:2px; min-width:0; }
         .h2hside.away { text-align:right; }
         .h2hteam { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase;
-          color:var(--ink-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          color:var(--ink-2); overflow-wrap:anywhere; }
         .h2hbig { font-size:30px; font-weight:900; line-height:1; font-variant-numeric:tabular-nums;
           background:linear-gradient(94deg,var(--ink) 10%,var(--accent) 150%);
           -webkit-background-clip:text; background-clip:text;
@@ -1629,8 +1638,7 @@ export default function LiveMatchups() {
           -webkit-background-clip:text; background-clip:text;
           color:transparent; -webkit-text-fill-color:transparent; margin-bottom:1px; }
         .nflproj { font-size:9.5px; color:var(--ink-3); font-weight:700; margin-bottom:6px; }
-        .nflteamtag { font-size:11px; font-weight:900; overflow:hidden;
-          text-overflow:ellipsis; white-space:nowrap; }
+        .nflteamtag { font-size:11px; font-weight:900; overflow-wrap:anywhere; }
         .nflteamtag.home { color:var(--accent); }
         .nflteamtag.away { color:var(--sky); }
 
@@ -1760,23 +1768,8 @@ export default function LiveMatchups() {
       </div>
 
       {showHelp && (
-        <div className="instr" role="dialog" aria-modal="true" aria-label="How to use Live Matchups">
-          <div className="instrwrap">
-            <div className="instrhead">
-              <h2>How this works</h2>
-              <button className="ctlbtn" onClick={() => setShowHelp(false)} aria-label="Close" type="button">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M5 5l14 14M19 5L5 19" /></svg>
-              </button>
-            </div>
-            {HELP_STEPS.map(([n, title, body]) => (
-              <div className="istep" key={n}>
-                <span className="inum">{n}</span>
-                <span><b>{title}</b><p>{body}</p></span>
-              </div>
-            ))}
-            <button className="primary" onClick={() => setShowHelp(false)} type="button">Got it</button>
-          </div>
-        </div>
+        <Instructions open steps={HELP_STEPS} onClose={() => setShowHelp(false)}
+          label="How to use Live Matchups" />
       )}
     </div>
   );

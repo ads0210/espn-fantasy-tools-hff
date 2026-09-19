@@ -38,51 +38,78 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
     </section>
 
     <section id="panel" hidden>
-      <div class="panel">
-        <div class="panelhead"><span class="t">League connection</span></div>
-        <div class="row"><span>League ID</span><b id="leagueId">&mdash;</b></div>
-        <div class="row"><span>Season</span><b id="season">&mdash;</b></div>
-        <div class="row"><span>League type</span><b id="privacy">&mdash;</b></div>
-        <div class="row"><span>History seasons</span><b id="history">&mdash;</b></div>
-        <p class="hint" style="margin-bottom:0">League ID is fixed after setup.</p>
-      </div>
-
-      <div class="panel">
-        <div class="panelhead"><span class="t">ESPN cookies</span></div>
-        <div class="row"><span>espn_s2</span><b id="s2state">&mdash;</b></div>
-        <div class="row"><span>SWID</span><b id="swidstate">&mdash;</b></div>
-        <p class="hint">Replace these if league data stops loading.</p>
-        <div class="field-row">
-          <label for="newS2">New espn_s2</label>
-          <input id="newS2" type="text" autocomplete="off" spellcheck="false"
-                 placeholder="Leave blank to keep">
+      <!-- The short panels flow into balanced columns on a wide window; the
+           weighting list, far longer than the rest, runs full width beneath them
+           with its own rows in columns. On a narrow screen the wrapper
+           dissolves and every panel keeps its reading order. -->
+      <div class="cfgflow">
+        <div class="panel p-conn">
+          <div class="panelhead"><span class="t">League connection</span></div>
+          <div class="row"><span>League ID</span><b id="leagueId">&mdash;</b></div>
+          <div class="row"><span>Season</span><b id="season">&mdash;</b></div>
+          <div class="row"><span>League type</span><b id="privacy">&mdash;</b></div>
+          <div class="row"><span>History seasons</span><b id="history">&mdash;</b></div>
+          <p class="hint" style="margin-bottom:0">League ID is fixed after setup.</p>
         </div>
-        <div class="field-row">
-          <label for="newSwid">New SWID</label>
-          <input id="newSwid" type="text" autocomplete="off" spellcheck="false"
-                 placeholder="Leave blank to keep">
+
+        <div class="panel p-cookies">
+          <div class="panelhead"><span class="t">ESPN cookies</span></div>
+          <div class="row"><span>espn_s2</span><b id="s2state">&mdash;</b></div>
+          <div class="row"><span>SWID</span><b id="swidstate">&mdash;</b></div>
+          <p class="hint">Replace these if league data stops loading.</p>
+          <div class="field-row">
+            <label for="newS2">New espn_s2</label>
+            <input id="newS2" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="Leave blank to keep">
+          </div>
+          <div class="field-row">
+            <label for="newSwid">New SWID</label>
+            <input id="newSwid" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="Leave blank to keep">
+          </div>
+          <button class="primary" data-action="cookies">Test and save</button>
+          <div class="msg" id="msgCookies"></div>
         </div>
-        <button class="primary" data-action="cookies">Test and save</button>
-        <div class="msg" id="msgCookies"></div>
+
+        <div class="panel p-pw">
+          <div class="panelhead"><span class="t">Passwords</span></div>
+          ${passwordField({ id: 'newLeaguePw', label: 'New League Password',
+            hint: 'Leave blank to keep the current one. Everyone will need the new one.' })}
+          ${passwordField({ id: 'newAdminPw', label: 'New Admin Password',
+            hint: 'Leave blank to keep the current one.' })}
+          <button class="primary" data-action="passwords">Save passwords</button>
+          <div class="msg" id="msgPasswords"></div>
+        </div>
+
+        <div class="panel p-tools">
+          <div class="panelhead"><span class="t">Tools</span></div>
+          <div id="toolRows"></div>
+          <div class="msg" id="msgTools"></div>
+        </div>
+
+        <div class="panel p-data">
+          <div class="panelhead"><span class="t">League data</span></div>
+          <div class="row"><span>Status</span><b id="primeState">&mdash;</b></div>
+          <div class="bar"><i id="primeBar"></i></div>
+          <p class="hint">Fetches every dataset once. Run this if a page is showing
+             blanks, or after replacing your ESPN cookies.</p>
+          <button class="primary" id="primeRun">Refresh all league data</button>
+          <div class="msg" id="msgPrime"></div>
+        </div>
+
+        <div class="panel p-hist">
+          <div class="panelhead"><span class="t">League history</span></div>
+          <div class="row"><span>Status</span><b id="histState">&mdash;</b></div>
+          <div class="bar"><i id="histBar"></i></div>
+          <p class="hint" id="histDetail">Only re-pull when you need to. This may take a
+         few minutes: please do not close or refresh this tab.</p>
+          <button class="primary" id="histRun">Re-pull league history</button>
+          <button class="ghost" id="histResume" style="margin-top:11px" hidden>Resume an interrupted pull</button>
+          <div class="msg" id="msgHistory"></div>
+        </div>
       </div>
 
-      <div class="panel">
-        <div class="panelhead"><span class="t">Passwords</span></div>
-        ${passwordField({ id: 'newLeaguePw', label: 'New League Password',
-          hint: 'Leave blank to keep the current one. Everyone will need the new one.' })}
-        ${passwordField({ id: 'newAdminPw', label: 'New Admin Password',
-          hint: 'Leave blank to keep the current one.' })}
-        <button class="primary" data-action="passwords">Save passwords</button>
-        <div class="msg" id="msgPasswords"></div>
-      </div>
-
-      <div class="panel">
-        <div class="panelhead"><span class="t">Tools</span></div>
-        <div id="toolRows"></div>
-        <div class="msg" id="msgTools"></div>
-      </div>
-
-      <div class="panel">
+      <div class="panel p-weights">
         <div class="panelhead"><span class="t">Trade Analyzer weighting</span></div>
         <p class="hint">What each statistic is worth when Trade Analyzer judges a
            deal. These become your league&rsquo;s defaults; anyone can still move the
@@ -90,30 +117,11 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
            their changes never touch these. Leave a row alone and it follows the
            shipped default, including if that default changes later.</p>
         <div id="weightRows"></div>
-        <button class="primary" id="weightSave">Save weighting</button>
-        <button class="ghost" id="weightReset" style="margin-top:11px">Reset all to defaults</button>
+        <div class="wactions">
+          <button class="primary" id="weightSave">Save weighting</button>
+          <button class="ghost" id="weightReset">Reset all to defaults</button>
+        </div>
         <div class="msg" id="msgWeights"></div>
-      </div>
-
-      <div class="panel">
-        <div class="panelhead"><span class="t">League data</span></div>
-        <div class="row"><span>Status</span><b id="primeState">&mdash;</b></div>
-        <div class="bar"><i id="primeBar"></i></div>
-        <p class="hint">Fetches every dataset once. Run this if a page is showing
-           blanks, or after replacing your ESPN cookies.</p>
-        <button class="primary" id="primeRun">Refresh all league data</button>
-        <div class="msg" id="msgPrime"></div>
-      </div>
-
-      <div class="panel">
-        <div class="panelhead"><span class="t">League history</span></div>
-        <div class="row"><span>Status</span><b id="histState">&mdash;</b></div>
-        <div class="bar"><i id="histBar"></i></div>
-        <p class="hint" id="histDetail">Only re-pull when you need to. This may take a
-       few minutes: please do not close or refresh this tab.</p>
-        <button class="primary" id="histRun">Re-pull league history</button>
-        <button class="ghost" id="histResume" style="margin-top:11px" hidden>Resume an interrupted pull</button>
-        <div class="msg" id="msgHistory"></div>
       </div>
 
     </section>`;
@@ -137,13 +145,33 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
        reads as a control surface rather than one tall ribbon. Each panel keeps
        its own internal rhythm; only the arrangement changes. */
     /* Scoped so the grid never contradicts the hidden attribute. */
-    #panel:not([hidden]) { display:grid; grid-template-columns:1fr; gap:0; align-items:start; }
-    #panel > * { min-width:0; }
+    #panel:not([hidden]) { display:grid; grid-template-columns:minmax(0,1fr); gap:0; align-items:start; }
+    #panel .panel { min-width:0; }
+    /* One column: the wrapper dissolves and the panels keep their reading order. */
+    .cfgflow { display:contents; }
+    .p-conn { order:1; } .p-cookies { order:2; } .p-pw { order:3; } .p-tools { order:4; }
+    .p-weights { order:5; } .p-data { order:6; } .p-hist { order:7; }
+    .wactions { display:flex; flex-direction:column; gap:11px; }
     @media (min-width:900px) {
-      #panel:not([hidden]) { grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 clamp(18px,2.2vw,32px); }
+      /* Balanced columns rather than a grid: panels of different heights stack
+         independently, so none leaves a gap beside a taller neighbour. */
+      .cfgflow { display:block; columns:2; column-gap:clamp(18px,2.2vw,32px); order:1; }
+      .cfgflow .panel { break-inside:avoid; -webkit-column-break-inside:avoid; }
+      /* A column break truncates the trailing margin of the tallest column's
+         last panel, so the weighting panel below carried its own spacing or sat
+         flush against whichever column ran longest. */
+      .p-weights { order:2; margin-top:14px; }
+      .wactions { flex-direction:row; flex-wrap:wrap; }
+      .wactions button { width:auto; flex:0 1 260px; margin:0; }
+    }
+    @media (min-width:1100px) {
+      #weightRows { columns:2; column-gap:40px; }
+      #weightRows .wrow { break-inside:avoid; -webkit-column-break-inside:avoid; }
+      #weightRows .wgroup { break-after:avoid; -webkit-column-break-after:avoid; }
+      #weightRows > :first-child { margin-top:0; }
     }
     @media (min-width:1320px) {
-      #panel:not([hidden]) { grid-template-columns:repeat(3,minmax(0,1fr)); }
+      .cfgflow { columns:3; }
     }
     #gate { max-width:520px; }
 
@@ -492,13 +520,17 @@ async function call(url, body, pwOverride) {
     action: backAction(), title: 'Site Configuration', theme, reduceMotion, rail, body,
     settings: true, stack: true, centred: true, extraCss: css, extraJs: js,
     instructions: [
-      ['01', 'The Admin Password gates everything here',
-       'It is asked for on each change rather than kept in a session, so leaving this page open grants nobody anything.'],
-      ['02', 'Tool visibility has three states',
-       'Visible to the league, hidden from everyone, or admin-only. Every tool is always built \u2014 this only controls who sees it.'],
-      ['03', 'Re-run a pull any time',
-       'Both the full data pull and the historical seasons pull can be run again from here. Neither loses anything by being repeated.'],
-      ['04', 'Time zone is per person',
-       'The zone under the gear is yours alone. It is stored in your browser, not in the league settings.'],
+      ['01', 'The Admin Password is asked for every time',
+       'It is needed for each change rather than held onto, so leaving this page open gives nobody else the run of it.'],
+      ['02', 'Keeping the league connected',
+       'League connection shows what the site is pointed at. If pages start coming up empty, replace your ESPN cookies here and save \u2014 that is almost always the cause.'],
+      ['03', 'Tools have three settings',
+       'Visible to the league, admin-only, or hidden. Admin-only tools still appear on the home page with a lock, so the league can see they exist.'],
+      ['04', 'Trade Analyzer weighting',
+       'Sets what each statistic is worth when the tool judges a deal for your league. Anyone can still move the adjustable ones while they look at a trade; that never changes what you save here.'],
+      ['05', 'Re-run a pull any time',
+       'Refreshing league data, and re-pulling past seasons, can both be run again whenever you like. Neither loses anything by being repeated.'],
+      ['06', 'Time zone is per person',
+       'The zone under the gear is yours alone, not a league setting. Everyone picks their own.'],
     ] });
 }

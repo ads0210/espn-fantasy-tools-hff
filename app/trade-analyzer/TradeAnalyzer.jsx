@@ -5,6 +5,9 @@ import { PALETTES, BASE_CSS, BACKDROP, TEAM_COOKIE } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
 import { createEngine } from "./engine.js";
+import TeamSelect from "../shared/TeamSelect.jsx";
+import { shareLinkFor, parseSharedBuild, parseSharedOffer } from "./sharelink.js";
+import Instructions from "../shared/Instructions.jsx";
 
 /* ==========================================================================
  * Trade Analyzer
@@ -252,8 +255,7 @@ html[data-theme="light"] .pos-DST, html[data-theme="light"] .pos-FLEX { color:#5
 .meterends { display:flex; justify-content:space-between; gap:var(--sp-2);
   margin-top:var(--sp-1); font-size:var(--fs-micro); font-weight:900;
   letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); }
-.meterends span { min-width:0; overflow:hidden; text-overflow:ellipsis;
-  white-space:nowrap; }
+.meterends span { min-width:0; overflow-wrap:anywhere; }
 .meterends .mid { flex:none; color:var(--accent); }
 
 .vtot { display:flex; align-items:flex-start; justify-content:center; gap:var(--sp-3);
@@ -475,10 +477,8 @@ input[type=range].wslider:focus-visible { outline:1px solid var(--accent);
 .bcol { padding:var(--sp-2); }
 .bsplit { display:flex; align-items:center; justify-content:center;
   border-left:1px solid var(--line); border-right:1px solid var(--line); }
-.bhead { display:flex; align-items:center; gap:var(--sp-1); }
-.bhead .lgo { width:26px; height:26px; flex:none; }
-.bhead select { flex:1 1 auto; min-width:0; font-size:var(--fs-base);
-  padding:9px 32px 9px 11px; text-overflow:ellipsis; }
+/* The picker is the site's own (TeamSelect); this only gives it the column. */
+.bhead { min-width:0; }
 .bctx { display:flex; flex-wrap:wrap; gap:6px 11px; margin:var(--sp-1) 0 var(--sp-2);
   font-size:var(--fs-micro); font-weight:800; letter-spacing:.08em;
   text-transform:uppercase; color:var(--ink-3); }
@@ -602,6 +602,7 @@ const INSTRUCTIONS = [
   ["06", "Colour means imbalance, not good or bad", "Red at either end of the meter means the same thing: a long way from even. A trade can be perfectly even and still leave both sides worse off, which is why the verdict also says whether anyone is actually gaining."],
   ["07", "Suggestions aim at fairness", "Where a deal leans far enough to be worth fixing, up to three single changes are offered that bring it closer to even. One of them may make the trade worse for you. That is the point of them."],
   ["08", "Some rows have nothing to say yet", "A few need about three games played. Until then they show greyed and contributing nothing, rather than quietly disappearing."],
+  ["09", "Share what you are looking at", "Copy link hands someone the exact trade on screen, whether it is a standing offer or one you built. Opening that link brings it up for them just as it is for you."],
 ];
 
 /* ==========================================================================
@@ -779,10 +780,8 @@ function Analysis({ engine, trade, surfaceKey, weights, onWeights, onOpenInBuild
     ...weights, session: { ...weights.session, [id]: value },
   });
 
-  const shareLink = trade.source === "pending" && trade.id
-    ? `${location.origin}/apps/trade-analyzer/?offer=${trade.id}`
-    : `${location.origin}/apps/trade-analyzer/?a=${trade.a}&b=${trade.b}`
-      + `&ao=${trade.aOut.join(".")}&bo=${trade.bOut.join(".")}`;
+  const shareLink = shareLinkFor(trade,
+    typeof location !== "undefined" ? location.origin : "");
 
   const copy = () => {
     try { navigator.clipboard.writeText(shareLink); } catch { /* no clipboard */ }
@@ -1301,15 +1300,16 @@ export default function TradeAnalyzer() {
     return list;
   }, [engine]);
 
-  const params = typeof window !== "undefined"
-    ? new URLSearchParams(location.search) : new URLSearchParams();
+  const search = typeof window !== "undefined" ? location.search : "";
+  const params = new URLSearchParams(search);
   const expandAll = (typeof window !== "undefined" && window.__TRADE_EXPAND__)
     || params.get("expand") === "1";
 
-  const [openId, setOpenId] = useState(() => params.get("offer") || null);
+  const [openId, setOpenId] = useState(() => parseSharedOffer(search));
   useEffect(() => {
     if (expandAll && offers.length && !openId) setOpenId(offers[0].id);
   }, [expandAll, offers, openId]);
+
 
   const [weights, setWeights] = useState({ source: "developer", session: {} });
 
@@ -1326,13 +1326,32 @@ export default function TradeAnalyzer() {
      pick. */
   const seatA = myTeam || (engine ? (engine.DATA.teams[0] || {}).id : null);
 
+  /* A shared builder link.
+   *
+   * Copy link writes the two teams and the players each is sending into the
+   * query, and this is what reads them back: without it a shared link opened an
+   * empty builder, which looked exactly like arriving from the home page. Ids
+   * are checked against the rosters as they stand now, so a link shared before
+   * somebody was traded away opens with whoever is still there rather than
+   * inventing a player. */
+  const sharedBuild = useMemo(
+    () => (engine ? parseSharedBuild(search, engine.teamById) : null), [engine]);
+
+  /* Diagnostics: what a shared link actually resolved to, since a link that
+     resolves to nothing looks the same as no link at all. */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__TA_SHARED__ = sharedBuild ? { ...sharedBuild } : null;
+  }, [sharedBuild]);
+
   const [build, setBuild] = useState(null);
   useEffect(() => {
     if (!engine || build) return;
+    if (sharedBuild) { setBuild(sharedBuild); return; }
     const a = seatA || engine.DATA.teams[0].id;
     const b = (engine.DATA.teams.find((t) => t.id !== a) || {}).id;
     setBuild({ a, b, aOut: [], bOut: [] });
-  }, [engine, seatA, build]);
+  }, [engine, seatA, build, sharedBuild]);
 
   const [buildOpen, setBuildOpen] = useState(true);
   const buildBodyRef = useRef(null);
@@ -1484,29 +1503,8 @@ export default function TradeAnalyzer() {
           </div>
         </div>
       {showInstr ? (
-        <div className="instr" role="dialog" aria-modal="true"
-          aria-label="How to use the Trade Analyzer">
-          <div className="instrwrap">
-            <div className="instrhead">
-              <h2>How this works</h2>
-              <button className="ctlbtn" type="button" aria-label="Close"
-                onClick={() => setShowInstr(false)}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                  strokeWidth="2" strokeLinecap="round">
-                  <path d="M5 5l14 14M19 5L5 19" />
-                </svg>
-              </button>
-            </div>
-            {INSTRUCTIONS.map(([n, title, body]) => (
-              <div className="istep" key={n}>
-                <span className="inum">{n}</span>
-                <span><b>{title}</b><p>{body}</p></span>
-              </div>
-            ))}
-            <button className="primary" type="button"
-              onClick={() => setShowInstr(false)}>Got it</button>
-          </div>
-        </div>
+        <Instructions open steps={INSTRUCTIONS} onClose={() => setShowInstr(false)}
+          label="How to use the Trade Analyzer" />
       ) : null}
       </React.Fragment>
     );
@@ -1527,14 +1525,12 @@ export default function TradeAnalyzer() {
     return (
       <div className="bcol">
         <div className="bhead">
-          <TeamLogo src={team.logo} alt="" />
-          <select aria-label="Choose a team" value={team.id}
-            onChange={(e) => pickTeam(side, Number(e.target.value))}>
-            {engine.DATA.teams.map((t) => (
-              <option key={t.id} value={t.id}
-                disabled={t.id === (side === "a" ? build.b : build.a)}>{t.n}</option>
-            ))}
-          </select>
+          <TeamSelect label={side === "a" ? "Side A" : "Side B"} value={team.id}
+            options={engine.DATA.teams.map((t) => ({
+              value: t.id, label: t.n, note: engine.ownerOf(t), logo: t.logo || null,
+              disabled: t.id === (side === "a" ? build.b : build.a),
+            }))}
+            onChange={(v) => pickTeam(side, Number(v))} />
         </div>
         <div className="bctx">
           {side === "a" && myTeam === team.id
@@ -1669,29 +1665,8 @@ export default function TradeAnalyzer() {
       </div>
 
       {showInstr ? (
-        <div className="instr" role="dialog" aria-modal="true"
-          aria-label="How to use the Trade Analyzer">
-          <div className="instrwrap">
-            <div className="instrhead">
-              <h2>How this works</h2>
-              <button className="ctlbtn" type="button" aria-label="Close"
-                onClick={() => setShowInstr(false)}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                  strokeWidth="2" strokeLinecap="round">
-                  <path d="M5 5l14 14M19 5L5 19" />
-                </svg>
-              </button>
-            </div>
-            {INSTRUCTIONS.map(([n, title, body]) => (
-              <div className="istep" key={n}>
-                <span className="inum">{n}</span>
-                <span><b>{title}</b><p>{body}</p></span>
-              </div>
-            ))}
-            <button className="primary" type="button"
-              onClick={() => setShowInstr(false)}>Got it</button>
-          </div>
-        </div>
+        <Instructions open steps={INSTRUCTIONS} onClose={() => setShowInstr(false)}
+          label="How to use the Trade Analyzer" />
       ) : null}
 
       {buildReady ? (

@@ -8,6 +8,7 @@
  * assets are reached only through env.ASSETS, and only after the gate passes.
  */
 
+import { llmExportPayload } from './llmexport.js';
 import { DATASETS, getDataset, planBatches, PARAM_DATASETS } from './datasets.js';
 import { loadConfig, saveConfig, describeConfig, isConfigured, isSetupFinished, canCallEspn } from './config.js';
 import { coordinatorRefresh } from './dedupe.js';
@@ -28,7 +29,7 @@ import { TOOLS, describeTools, applyVisibility, visibleTools, visibilityOf, VISI
 import { runBatch, readJob, jobStatus } from './history.js';
 import { runPrimeBatch, primeStatus, missingDatasetKeys } from './prime.js';
 import { fetchPart } from './espn.js';
-import { buildLiveScoringDigest } from './derive.js';
+import { buildLiveScoringDigest, teamLogoUrl } from './derive.js';
 import { putPart } from './store.js';
 import { timelineAppend, timelineRead } from './timeline.js';
 import { refreshLogos, logoObjectKey, LOGO_REFRESH_MS } from './logos.js';
@@ -41,7 +42,7 @@ export { ScoreTimelineDO } from './scoretimeline.js';
 import { RELEASE_NOTE_ITEMS } from './release.js';
 import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r116';
+const BUILD_MARKER = 'r131';
 
 
 
@@ -385,6 +386,7 @@ async function route(request, env, ctx) {
 
   if (path === '/api/hof') return hallOfFame(env, ctx);
   if (path === '/api/trade') return tradeAnalyzer(env, ctx);
+  if (path === '/api/llm-export') return llmExport(env, ctx, url);
 
   if (path === '/api/img') return serveImage(request, url, ctx);
 
@@ -568,7 +570,7 @@ document.getElementById('adminPw').addEventListener('keydown', function (e) {
       ['01', 'This tool is restricted',
        'Someone set it to admin-only in Site Configuration. It stays listed on the dashboard so the league can see it exists.'],
       ['02', 'The Admin Password opens it',
-       'The same password that opens Site Configuration. It is checked on the server and never stored in the page.'],
+       'The same one that opens Site Configuration. Whoever runs the league has it.'],
       ['03', 'The unlock is short-lived',
        'It lasts thirty minutes and applies only to this tool. Nothing else on the site is unlocked by it.'],
     ],
@@ -884,57 +886,77 @@ async function handleLive(env, cfg, rest, url, ctx) {
  * bytes, on a path that runs at most once per week per deployment.
  */
 async function liveWeek(env, cfg, url, ctx) {
+  const out = await liveWeekPayload(env, cfg, Number(url.searchParams.get('w') || 0), ctx);
+  return json(out.body, out.status);
+}
+
+/**
+ * One week of Live Matchups, as the route serves it. Exported so the dev
+ * preview shows exactly what the page would, rebuilds included.
+ */
+export async function liveWeekPayload(env, cfg, asked, ctx) {
+  const reply = (body, status = 200) => ({ body, status });
   const current = await ensureDataset(env, 'live_scoring_digest', ctx);
   let live = null;
   if (current) {
     try { live = await current.json(); } catch { live = null; }
   }
   if (!live) {
-    return json({ ok: false, error: 'live scoring is not available yet' }, 503);
+    // Written for whoever is looking at it: the cause is almost always that
+    // the league pull has not run on this site yet.
+    return reply({ ok: false, error: 'League data has not been pulled yet, so there is nothing to show. '
+      + 'Whoever runs the league can start it from Site Configuration.' }, 503);
   }
 
-  const asked = Number(url.searchParams.get('w') || 0);
   const currentWeek = Number(live.matchupPeriod || 1);
   const week = Number.isFinite(asked) && asked > 0 ? asked : currentWeek;
 
   if (week === currentWeek) {
-    return json({ ok: true, week, current: currentWeek, live: true, digest: live });
+    return reply({ ok: true, week, current: currentWeek, live: true, digest: live });
   }
   if (week > currentWeek) {
-    return json({ ok: false, error: 'that week has not been played yet', current: currentWeek }, 400);
+    return reply({ ok: false, error: 'that week has not been played yet', current: currentWeek }, 400);
   }
 
+  /* A past week is built once and kept. One built before the fixture fix took
+     the scoreboard's week, which by then was the next one, so it is rebuilt
+     rather than served; so is one whose schedule had not yet caught up with a
+     final score. Everything else is served as stored. */
   const part = `w${week}`;
   const cached = await getPart(env, 'live_scoring_digest', part);
   if (cached) {
     try {
-      return json({ ok: true, week, current: currentWeek, live: false, digest: await cached.json() });
+      const stored = await cached.json();
+      const b = stored && stored.board;
+      if (b && b.version === 2 && b.complete) {
+        return reply({ ok: true, week, current: currentWeek, live: false, digest: stored });
+      }
     } catch { /* fall through and rebuild */ }
   }
 
   const spec = PARAM_DATASETS.live_scoring_week;
   const res = await fetchPart(cfg, { url: spec.url(cfg, week) }, { auth: true });
   if (!res.ok || !res.buffer) {
-    return json({ ok: false, error: `ESPN did not return week ${week}`, status: res.status }, 502);
+    return reply({ ok: false, error: `ESPN did not return week ${week}`, status: res.status }, 502);
   }
 
   let doc;
   try {
     doc = JSON.parse(new TextDecoder().decode(res.buffer));
   } catch {
-    return json({ ok: false, error: `week ${week} came back unreadable` }, 502);
+    return reply({ ok: false, error: `week ${week} came back unreadable` }, 502);
   }
 
-  // The same three joins the live digest uses, resolved the same way.
+  // The same joins the live digest uses, resolved the same way.
   const sources = {};
-  for (const key of ['league_teams', 'standings_digest', 'scoreboard_digest']) {
+  for (const key of ['league_teams', 'standings_digest', 'scoreboard_digest', 'bye_weeks', 'league_settings']) {
     const obj = await ensureDataset(env, key, ctx);
     if (obj) {
       try { sources[key] = await obj.json(); } catch { /* leave absent */ }
     }
   }
 
-  const digest = buildLiveScoringDigest(doc, { sources, week, matchupPeriod: week });
+  const digest = buildLiveScoringDigest(doc, { sources, week, matchupPeriod: week, past: true });
   const body = new TextEncoder().encode(JSON.stringify(digest));
   await putPart(env, 'live_scoring_digest', part, body.buffer, {
     fetchedAt: new Date().toISOString(),
@@ -943,7 +965,7 @@ async function liveWeek(env, cfg, url, ctx) {
     bytes: body.byteLength,
   });
 
-  return json({ ok: true, week, current: currentWeek, live: false, built: true, digest });
+  return reply({ ok: true, week, current: currentWeek, live: false, built: true, digest });
 }
 
 /**
@@ -999,6 +1021,51 @@ async function tradeAnalyzer(env, ctx) {
      a setting, not data. */
   const cfg = await loadConfig(env);
   return json({ ok: true, ready: true, adminWeights: cfg.tradeWeights || null, ...digest });
+}
+
+/**
+ * The LLM Data Export's document.
+ *
+ * One league-wide digest, served as built. The reader's team and the compact
+ * form are applied in the browser, so this answer is the same for every member.
+ */
+async function llmExport(env, ctx, url) {
+  /* Two speeds.
+   *
+   * A page load takes what is stored and refreshes behind it, because waiting
+   * several seconds on a rebuild to look at a page is the wrong trade. Copy and
+   * Download ask with ?fresh=1 and wait, because a file handed to an assistant
+   * has to describe the league as it stands. */
+  const wantFresh = url && url.searchParams.get('fresh') === '1';
+  return llmExportRoute(env, ctx, wantFresh);
+}
+
+async function llmExportRoute(env, ctx, wantFresh = false) {
+  /* The stored export, refreshed behind the answer either way.
+   *
+   * A full rebuild reads every roster, the free-agent pool and half a dozen
+   * digests, and takes several seconds; nobody should wait that for a page.
+   * When a file is being handed over, this week's scoring — the only thing
+   * that moves minute to minute — is laid over the stored copy instead, which
+   * costs a moment. */
+  const digest = await llmExportDigest(env, ctx);
+  if (!wantFresh || !digest) return json(llmExportPayload(digest));
+  const obj = await ensureDataset(env, 'live_scoring_digest', ctx);
+  let live = null;
+  if (obj) {
+    try { live = await obj.json(); } catch { live = null; }
+  }
+  return json(llmExportPayload(applyLiveScoring(digest, live)));
+}
+
+/**
+ * The stored export. With no request context the rebuild is awaited; with one
+ * it happens behind the answer.
+ */
+export async function llmExportDigest(env, ctx = null) {
+  const obj = await ensureDataset(env, 'llm_export_digest', ctx);
+  if (!obj) return null;
+  try { return await obj.json(); } catch { return null; }
 }
 
 async function hallOfFame(env, ctx) {
@@ -1674,7 +1741,7 @@ async function getTeams(env, ctx) {
       const ownerName = owner
         ? (`${owner.firstName || ''} ${owner.lastName || ''}`.trim() || owner.displayName || 'Unknown owner')
         : 'Unknown owner';
-      return { id: t.id, name: t.name || `Team ${t.id}`, owner: ownerName };
+      return { id: t.id, name: t.name || `Team ${t.id}`, owner: ownerName, logo: teamLogoUrl(t.id, t.logo) };
     });
     teams.sort((a, b) => a.owner.localeCompare(b.owner));
     teamsCache = teams; teamsAt = Date.now();
