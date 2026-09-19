@@ -105,6 +105,32 @@ const playerFilter = (limit) =>
     },
   });
 
+/* The LLM Data Export's free-agent shortlist: how deep it goes at each
+   position, and the lineup slot ESPN filters that position on. */
+export const FREE_AGENT_DEPTH = { QB: 15, RB: 25, WR: 25, TE: 15, 'D/ST': 15, K: 15 };
+const FREE_AGENT_SLOTS = [
+  { part: 'QB', slot: 0, pos: 'QB' },
+  { part: 'RB', slot: 2, pos: 'RB' },
+  { part: 'WR', slot: 4, pos: 'WR' },
+  { part: 'TE', slot: 6, pos: 'TE' },
+  { part: 'DST', slot: 16, pos: 'D/ST' },
+  { part: 'K', slot: 17, pos: 'K' },
+];
+
+/* Available players at one position, best first by ESPN's rest-of-season
+   projection. No scoring period is named, so ESPN answers for the current one
+   and each player carries this week's projection as well as the season's. The
+   sort key names the season: "12" is a projection over the rest of it. */
+const freeAgentFilter = (season, slot, limit) =>
+  JSON.stringify({
+    players: {
+      filterStatus: { value: ['FREEAGENT', 'WAIVERS'] },
+      filterSlotIds: { value: [slot] },
+      limit,
+      sortAppliedStatTotal: { sortAsc: false, sortPriority: 1, value: `12${season}` },
+    },
+  });
+
 /** Convenience: a dataset that is one single call. */
 const one = (url, headers) => () => [{ part: 'main', url, headers }];
 
@@ -242,6 +268,34 @@ export const DATASETS = [
     parts: (cfg) => [
       { part: 'main', url: `${leagueBase(cfg)}?view=mPendingTransactions` },
     ],
+  },
+  {
+    key: 'free_agent_pool',
+    label: 'Best available players by position (this week)',
+    group: 'fantasy',
+    ttl: TTL.MIN_30,
+    auth: true,
+    tier: 'core',
+    parts: (cfg) => FREE_AGENT_SLOTS.map((s) => ({
+      part: s.part,
+      url: `${leagueBase(cfg)}?view=kona_player_info`,
+      headers: { 'X-Fantasy-Filter': freeAgentFilter(cfg.season, s.slot, FREE_AGENT_DEPTH[s.pos]) },
+    })),
+    expect: 'players',
+    notes: 'Feeds the LLM Data Export. One part per position, so every position gets its full depth.',
+  },
+  {
+    key: 'season_schedule',
+    label: 'Season schedule & results (lightweight)',
+    group: 'fantasy',
+    ttl: TTL.MIN_30,
+    auth: true,
+    tier: 'core',
+    /* The matchup view without rosters: a tenth the size of `matchups`, which
+       is what the export needs when all it wants is who plays whom and the
+       final scores. */
+    parts: (cfg) => [{ part: 'main', url: `${leagueBase(cfg)}?view=mMatchupScore` }],
+    expect: 'schedule',
   },
   {
     key: 'league_status',
@@ -387,6 +441,17 @@ export const DATASETS = [
     // the cold-start check is for.
     tier: 'core',
     derivedFrom: 'pending_transactions',
+    parts: () => [{ part: 'main', url: null }],
+  },
+  {
+    key: 'llm_export_digest',
+    label: 'LLM Data Export (whole league, one document)',
+    group: 'derived',
+    ttl: TTL.MIN_5,
+    auth: true,
+    // Core: the tool is empty without it.
+    tier: 'core',
+    derivedFrom: 'free_agent_pool',
     parts: () => [{ part: 'main', url: null }],
   },
   {
