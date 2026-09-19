@@ -279,8 +279,19 @@ export async function refreshDataset(env, cfg, dataset, { force = false } = {}) 
       const ctx = {};
       if (Array.isArray(derivation.needs) && derivation.needs.length) {
         ctx.sources = {};
+        /* A need is refreshed before it is read, unless the derivation says it
+         * will take what is stored.
+         *
+         * Refreshing every need can cascade: one of them costs eighteen calls
+         * to ESPN, and a build that waits on all of them took the better part
+         * of a minute. A derivation that names `freshNeeds` refreshes only
+         * those and reads the rest as they stand, which is right where the
+         * other surfaces and the cron keep them current anyway. */
+        const fresh = Array.isArray(derivation.freshNeeds) ? derivation.freshNeeds : null;
         for (const key of derivation.needs) {
-          const o = await ensureSource(env, key);
+          const o = fresh && !fresh.includes(key)
+            ? await getPart(env, key, 'main')
+            : await ensureSource(env, key);
           if (o) {
             try { ctx.sources[key] = await o.json(); } catch { /* leave absent */ }
           }
