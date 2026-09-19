@@ -15,6 +15,10 @@
  * 210KB in 314ms wall, comfortably inside the CPU budget.
  */
 
+// A function declaration, so the import cycle with llmexport.js is safe in
+// either load order: nothing from it is read while this module evaluates.
+import { buildLlmExportDigest } from './llmexport.js';
+
 /**
  * Team logos.
  *
@@ -50,42 +54,8 @@ export function logoUrl(raw) {
  * `fantasy.espn.com.example.test` do not match. Exported so the fetch path and
  * its tests share one definition rather than two that can drift apart.
  */
-export function isEspnFantasyHost(host) {
-  return /(^|\.)fantasy\.espn\.com$/.test(String(host || ''));
-}
-
-/**
- * A short, stable fingerprint of a logo's source URL (FNV-1a, 32-bit).
- *
- * Used as a cache-busting version, not as a security primitive. ESPN mints a
- * new UUID for every upload, so a changed source URL is a changed logo, and
- * hashing the URL gives a version that moves exactly when the image does.
- */
-export function logoVersion(raw) {
-  let h = 0x811c9dc5;
-  const s = String(raw || '');
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h.toString(36);
-}
-
-/**
- * Where a surface should load a fantasy team's logo from.
- *
- * Always the Worker's own store, never ESPN: a custom upload is behind ESPN's
- * session and a browser cannot fetch it. Null when the team has no logo, so the
- * caller renders the shield rather than requesting an image that cannot exist.
- *
- * The `v` parameter lets the response be cached immutably while still changing
- * the moment the team changes their logo.
- */
-export function teamLogoUrl(teamId, raw) {
-  if (teamId === null || teamId === undefined || teamId === '') return null;
-  if (!raw || typeof raw !== 'string') return null;
-  return `/api/logo/${encodeURIComponent(String(teamId))}?v=${logoVersion(raw)}`;
-}
+export { isEspnFantasyHost, logoVersion, teamLogoUrl } from './teamlogo.js';
+import { teamLogoUrl } from './teamlogo.js';
 
 /** Entries older than this are dropped, bounding growth over a long season. */
 const MAX_AGE_DAYS = 30;
@@ -248,6 +218,9 @@ export async function buildByeWeeks(ctx) {
      A team's own schedule carries the whole season, and a fixture appears in
      both teams' schedules, so they are keyed by event id and merged. */
   const fixtures = {};
+  /* Name, record and division standing per team, for the LLM Data Export.
+     Carried here because this is already the one place all 32 schedules meet. */
+  const teams = {};
   const problems = [];
 
   for (const id of teamIds) {
@@ -261,6 +234,13 @@ export async function buildByeWeeks(ctx) {
 
     // Resolved before the events are walked: the kickoff map is keyed on it.
     const abbrev = (doc.team && doc.team.abbreviation) || PRO_TEAM_MAP[id];
+    if (abbrev && doc.team) {
+      teams[abbrev] = {
+        name: doc.team.displayName || '',
+        record: doc.team.recordSummary || '',
+        standing: doc.team.standingSummary || '',
+      };
+    }
 
     const played = new Set();
     for (const ev of doc.events || []) {
@@ -328,6 +308,7 @@ export async function buildByeWeeks(ctx) {
     count: Object.keys(byes).length,
     byes,
     kickoffs,
+    teams,
     // Flattened and put in kickoff order, which is the order a ticker reads in.
     fixtures: Object.fromEntries(Object.entries(fixtures).map(([week, byId]) => [
       week,
@@ -1001,6 +982,54 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
   const scheduleStale = boardGames.length > 0 && boardGames.every((g) => g.final);
   const week = Number(ctx.week || (doc && doc.scoringPeriodId) || 1);
 
+  /* Which NFL week the fixtures must come from.
+   *
+   * The scoreboard only ever describes the week ESPN calls current. A past
+   * week built from it took the *next* week's fixtures once the board had
+   * rolled: every player read as not started and every kickoff sat in the
+   * future, so the progression charts, which open at the first kickoff, drew
+   * nothing at all. The result was cached for good, which is how a fork that
+   * first opened last week after the board moved lost its charts while a site
+   * that opened it a day earlier kept them.
+   *
+   * So the board is used only when it is describing one of this matchup's
+   * scoring periods. Otherwise the fixtures come from the season schedule,
+   * which carries every week. A past week's games are over by definition. */
+  const settingsDoc = (ctx.sources && ctx.sources.league_settings) || null;
+  const spanOf = Number(ctx.matchupPeriod
+    || (doc && doc.status && doc.status.currentMatchupPeriod) || week);
+  const span = settingsDoc && settingsDoc.settings && settingsDoc.settings.scheduleSettings
+    && settingsDoc.settings.scheduleSettings.matchupPeriods
+    ? settingsDoc.settings.scheduleSettings.matchupPeriods[spanOf] : null;
+  const periods = (Array.isArray(ctx.scoringPeriods) && ctx.scoringPeriods.length ? ctx.scoringPeriods
+    : Array.isArray(span) && span.length ? span : [week]).map(Number);
+  const schedule = (ctx.sources && ctx.sources.bye_weeks) || null;
+  const boardWeek = board && Number(board.week) ? Number(board.week) : null;
+  const boardFits = boardGames.length > 0
+    && (boardWeek === null ? !ctx.past : periods.includes(boardWeek));
+  let fixtureGames = boardGames;
+  let boardSource = 'scoreboard';
+  if (!boardFits) {
+    if (schedule && schedule.fixtures) {
+      boardSource = 'schedule';
+      const byTeam = new Map();
+      for (const p of periods) {
+        for (const f of schedule.fixtures[p] || []) {
+          for (const abbr of [f.home, f.away]) {
+            // The first scoring period wins, so a two-week matchup opens at its
+            // first kickoff; a team on bye that week falls through to the next.
+            if (!byTeam.has(abbr)) byTeam.set(abbr, f);
+          }
+        }
+      }
+      fixtureGames = [...new Set(byTeam.values())].map((f) => (ctx.past
+        ? { ...f, final: true, inProgress: false } : f));
+    } else {
+      boardSource = 'none';
+      fixtureGames = [];
+    }
+  }
+
   const identity = {};
   if (teamsDoc) {
     const members = {};
@@ -1022,7 +1051,7 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
   // NFL game state, by team abbreviation. A player's live/final/upcoming dot and
   // the "NFL games" section both resolve through this one map.
   const gameByTeam = {};
-  for (const g of (board && board.games) || []) {
+  for (const g of fixtureGames) {
     const entry = {
       key: `${g.away}@${g.home}`,
       away: g.away, home: g.home,
@@ -1179,10 +1208,21 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
         .map((p) => ({ ...p, delta: Math.round(((p.points - p.proj) / p.proj) * 100) }))
         .filter((p) => (p.delta > 0 ? true : p.gameStatus === 'final'));
 
+      /* The chart opens at the first kickoff of the matchup's first scoring
+         period. Read from the season schedule where it is available, so a
+         two-week postseason matchup still opens in its first week while the
+         board is describing its second. */
       let firstKickoff = null;
+      const kickoffs = (schedule && schedule.kickoffs) || null;
       for (const p of [...home.starters, ...away.starters]) {
-        if (!p.kickoff) continue;
-        if (!firstKickoff || p.kickoff < firstKickoff) firstKickoff = p.kickoff;
+        let at = p.kickoff;
+        if (kickoffs && kickoffs[p.nfl]) {
+          for (const wk of periods) {
+            if (kickoffs[p.nfl][wk]) { at = kickoffs[p.nfl][wk]; break; }
+          }
+        }
+        if (!at) continue;
+        if (!firstKickoff || Date.parse(at) < Date.parse(firstKickoff)) firstKickoff = at;
       }
 
       return {
@@ -1224,6 +1264,16 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
     // arrived, so a surface says so rather than rendering "Team 1".
     identified: Boolean(teamsDoc),
     seasonContext: Boolean(standings),
+    /* Where the NFL fixtures came from. A past week is cached once built, so
+       the route rebuilds one whose fixtures were not the right week's, or were
+       missing a final score, rather than serving it for ever. */
+    board: {
+      version: 2,
+      source: boardSource,
+      weeks: periods,
+      complete: boardSource !== 'none'
+        && (!ctx.past || fixtureGames.every((g) => g.homeScore != null && g.awayScore != null)),
+    },
     count: games.length,
     games,
   };
@@ -2324,12 +2374,30 @@ export const DERIVATIONS = {
     // Identity for the team join, standings for the season context strip, and
     // the NFL scoreboard for every live/final/upcoming state in the tool. All
     // three are resolved through the coordinator rather than read hopefully.
-    needs: ['league_teams', 'standings_digest', 'scoreboard_digest'],
+    // The season schedule and the settings let a week the scoreboard is not
+    // describing still take its own fixtures and its own first kickoff.
+    needs: ['league_teams', 'standings_digest', 'scoreboard_digest', 'bye_weeks', 'league_settings'],
   },
   transactions: {
     target: 'transaction_digest',
     buildMulti: buildTransactionDigestMulti,
     needs: ['league_teams', 'player_digest'],
+  },
+  free_agent_pool: {
+    target: 'llm_export_digest',
+    buildMulti: buildLlmExportDigest,
+    // Settings and rosters are small or already fetched for other tools; every
+    // other input is a digest, so the export never parses a large raw payload
+    // it does not need. Resolved through the coordinator, never read hopefully.
+    needs: [
+      'league_settings', 'rosters', 'season_schedule', 'standings_digest', 'live_scoring_digest',
+      'transaction_digest', 'injuries_digest', 'bye_weeks', 'league_history_digest',
+      'scoreboard_digest',
+    ],
+    /* Scores in flight are the only thing that has to be current at the moment
+       the file is built; everything else is read as stored, so building it
+       never waits on a full transactions refresh. */
+    freshNeeds: ['live_scoring_digest', 'scoreboard_digest', 'rosters'],
   },
   pending_transactions: {
     target: 'trade_digest',
