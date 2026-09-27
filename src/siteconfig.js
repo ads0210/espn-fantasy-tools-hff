@@ -15,27 +15,13 @@
 
 import { shell, passwordField, selectField, displayTitle, esc, backAction, HISTORY_RUNNER_JS } from './ui.js';
 import { TRADE_ROWS, TRADE_GROUPS } from './traderows.js';
+import { adminGateRail, adminGateSection, ADMIN_GATE_CSS } from './admingate.js';
 
 export function siteConfigPage({ theme, reduceMotion, leagueName }) {
-  const rail = `
-    <p class="eyebrow">Restricted</p>
-    ${displayTitle('Site Config')}
-`;
+  // The shared gate (src/admingate.js): the same header, panel and note as an admin-only tool's.
+  const rail = adminGateRail('Site Config');
 
-  const body = `
-    <section id="gate">
-      <div class="panel">
-        <span class="ghostmark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" stroke-width="1.6"><rect x="4" y="10.5" width="16" height="11"/>
-          <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/><circle cx="12" cy="16" r="1.4"/></svg></span>
-        ${passwordField({
-          id: 'adminPw', label: 'Admin Password', autofocus: true,
-          autocomplete: 'current-password',
-        })}
-        <button class="primary" id="unlock">Unlock</button>
-        <div class="msg" id="gateMsg"></div>
-      </div>
-    </section>
+  const body = `${adminGateSection()}
 
     <section id="panel" hidden>
       <!-- The short panels flow into balanced columns on a wide window; the
@@ -85,6 +71,15 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
           <div class="panelhead"><span class="t">Tools</span></div>
           <div id="toolRows"></div>
           <div class="msg" id="msgTools"></div>
+        </div>
+
+        <div class="panel p-order">
+          <div class="panelhead"><span class="t">Home page order</span></div>
+          <p class="hint">The order the tiles appear in on the home page. A tool that is not
+             visible keeps its place for when it is.</p>
+          <ol id="orderRows" class="orderlist"></ol>
+          <button class="ghost" id="orderReset" hidden>Reset to the default order</button>
+          <div class="msg" id="msgOrder"></div>
         </div>
 
         <div class="panel p-data">
@@ -142,19 +137,8 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
     </section>`;
 
   const css = `
-    /* The gate is a single question on an otherwise empty page, so it is
-       centred rather than left-aligned under a rail that has nothing in it.
-       The header centres with it — a restricted-page title hanging off to one
-       side of a centred prompt reads as two unrelated things. */
-    .pagegrid.stack .rail { max-width:none; }
-    .pagegrid.stack .railtext, .pagegrid.stack .titlebar { text-align:center; }
-    .pagegrid.stack .railmark { margin:0 auto; }
-    .pagegrid.stack .railtext .display { margin:0 auto; }
-    .pagegrid.stack .railtext .eyebrow { justify-content:center; }
-    body:has(#gate:not([hidden])) .main { display:flex; justify-content:center; }
-    body:has(#gate:not([hidden])) #gate { width:min(100%,420px); }
-    #gate .panel { text-align:center; }
-    #gate .panel .fieldwrap, #gate .panel .msg { text-align:left; }
+    /* The gate's own layout comes from src/admingate.js, shared with admin-only tools. */
+    ${ADMIN_GATE_CSS}
 
     /* Panels flow into columns once there is room for them, so a wide window
        reads as a control surface rather than one tall ribbon. Each panel keeps
@@ -165,7 +149,7 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
     /* One column: the wrapper dissolves and the panels keep their reading order. */
     .cfgflow { display:contents; }
     .p-conn { order:1; } .p-cookies { order:2; } .p-pw { order:3; } .p-tools { order:4; }
-    .p-weights { order:5; } .p-data { order:6; } .p-hist { order:7; }
+    .p-order { order:5; } .p-weights { order:6; } .p-data { order:7; } .p-hist { order:8; } .p-ft { order:9; }
     .wactions { display:flex; flex-direction:column; gap:11px; }
     @media (min-width:900px) {
       /* Balanced columns rather than a grid: panels of different heights stack
@@ -188,7 +172,6 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
     @media (min-width:1320px) {
       .cfgflow { columns:3; }
     }
-    #gate { max-width:520px; }
 
     .row { display:flex; justify-content:space-between; gap:14px; padding:9px 0;
            border-bottom:1px solid var(--line); font-size:13.5px; }
@@ -207,6 +190,24 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
       -webkit-background-clip:text; background-clip:text;
       color:transparent; -webkit-text-fill-color:transparent; }
     .toolsel { flex:none; width:164px; }
+
+    /* Home page order: a numbered list, each row moved one place at a time. */
+    .orderlist { list-style:none; margin:4px 0 12px; padding:0; }
+    .orow { display:flex; align-items:center; gap:12px; padding:9px 0; border-bottom:1px solid var(--line); }
+    .orow:last-child { border-bottom:0; }
+    .oidx { flex:none; width:20px; font-size:10px; font-weight:900; color:var(--ink-3);
+      font-variant-numeric:tabular-nums; }
+    .oname { flex:1; min-width:0; font-size:11px; font-weight:900; letter-spacing:.14em; text-transform:uppercase; }
+    .oname b { font-weight:900; background:linear-gradient(94deg,var(--ink) 10%,var(--accent) 150%);
+      -webkit-background-clip:text; background-clip:text; color:transparent; -webkit-text-fill-color:transparent; }
+    .oname em { display:block; margin-top:3px; font-style:normal; font-size:9px; letter-spacing:.1em; color:var(--ink-3); }
+    .orow.off .oname b { opacity:.55; }
+    .omove { flex:none; display:flex; gap:6px; }
+    .omove button { width:34px; height:34px; display:grid; place-items:center; padding:0; margin:0;
+      background:var(--inset); border:1px solid var(--line); color:var(--ink-2); cursor:pointer; }
+    .omove button:hover:not(:disabled) { color:var(--accent); border-color:var(--accent-deep); }
+    .omove button:disabled { opacity:.3; cursor:default; }
+    .omove svg { width:15px; height:15px; }
     .toolsel .xselbtn { padding:9px 11px; }
 
     /* Trade Analyzer weighting. A row per statistic, grouped the way the tool
@@ -293,6 +294,7 @@ function render(r) {
   set('s2state', c.espnS2Present ? 'Set (' + c.espnS2Length + ' chars)' : 'Not set');
   set('swidstate', c.swidPresent ? (c.swidWellFormed ? 'Set' : 'Set, malformed') : 'Not set');
   renderTools(r.tools || []);
+  renderOrder(r.order || { tiles: [], custom: false });
   renderWeights((r.config || {}).tradeWeights || {});
   renderHistory(r.history || {});
   renderPrime(r.prime || {});
@@ -339,10 +341,71 @@ function renderTools(tools) {
       var r = await call('/api/admin/tool-visibility',
         { tool: sel.dataset.toolkey, visibility: e.detail.value });
       note('msgTools', r.ok ? 'Saved.' : (r.error || 'Could not save.'), r.ok ? 'ok' : 'err');
-      if (r.ok && r.tools) renderTools(r.tools);
+      if (r.ok && r.tools) {
+        renderTools(r.tools);
+        // The order panel says which tiles reach the home page, so it follows a visibility change.
+        var vis = {};
+        r.tools.forEach(function (t) { vis[t.key] = t.visibility; });
+        ORDER.tiles.forEach(function (t) { if (vis[t.key]) t.visibility = vis[t.key]; });
+        renderOrder(ORDER);
+      }
     });
   });
 }
+
+var ORDER = { tiles: [], custom: false };
+var CHEV = {
+  up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>',
+  down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>'
+};
+var VIS_NOTE = { admin: 'Admin only', hidden: 'Not visible, so not on the home page', always: 'Admin only, always' };
+
+function renderOrder(o, focus) {
+  ORDER = o;
+  var host = document.getElementById('orderRows');
+  var n = o.tiles.length;
+  host.innerHTML = o.tiles.map(function (t, i) {
+    var noteText = VIS_NOTE[t.visibility] || '';
+    return '<li class="orow' + (t.visibility === 'hidden' ? ' off' : '') + '" data-key="' + esc(t.key) + '">'
+      + '<span class="oidx">' + String(i + 1).padStart(2, '0') + '</span>'
+      + '<span class="oname"><b>' + esc(t.name) + '</b>' + (noteText ? '<em>' + esc(noteText) + '</em>' : '') + '</span>'
+      + '<span class="omove">'
+      + '<button type="button" data-move="-1" aria-label="Move ' + esc(t.name) + ' up"' + (i === 0 ? ' disabled' : '') + '>' + CHEV.up + '</button>'
+      + '<button type="button" data-move="1" aria-label="Move ' + esc(t.name) + ' down"' + (i === n - 1 ? ' disabled' : '') + '>' + CHEV.down + '</button>'
+      + '</span></li>';
+  }).join('');
+  document.getElementById('orderReset').hidden = !o.custom;
+  if (focus) {
+    var row = host.querySelector('[data-key="' + focus.key + '"]');
+    var btn = row && row.querySelector('[data-move="' + focus.dir + '"]');
+    if (btn && btn.disabled) btn = row.querySelector('[data-move="' + (-focus.dir) + '"]');
+    if (btn) btn.focus({ preventScroll: true });
+  }
+}
+
+document.getElementById('orderRows').addEventListener('click', async function (e) {
+  var btn = e.target.closest('[data-move]');
+  if (!btn || btn.disabled) return;
+  var key = btn.closest('.orow').dataset.key;
+  var dir = Number(btn.dataset.move);
+  var keys = ORDER.tiles.map(function (t) { return t.key; });
+  var i = keys.indexOf(key), j = i + dir;
+  if (i < 0 || j < 0 || j >= keys.length) return;
+  keys[i] = keys[j]; keys[j] = key;
+  // Drawn at once, then confirmed by what the server kept.
+  var byKey = {};
+  ORDER.tiles.forEach(function (t) { byKey[t.key] = t; });
+  renderOrder({ tiles: keys.map(function (k) { return byKey[k]; }), custom: true }, { key: key, dir: dir });
+  var r = await call('/api/admin/tool-order', { order: keys });
+  note('msgOrder', r.ok ? 'Saved.' : (r.error || 'Could not save.'), r.ok ? 'ok' : 'err');
+  if (r.ok && r.order) renderOrder(r.order, { key: key, dir: dir });
+});
+
+document.getElementById('orderReset').addEventListener('click', async function () {
+  var r = await call('/api/admin/tool-order', { reset: true });
+  note('msgOrder', r.ok ? 'Back to the default order.' : (r.error || 'Could not save.'), r.ok ? 'ok' : 'err');
+  if (r.ok && r.order) renderOrder(r.order);
+});
 
 /* One row per statistic, grouped the way the tool groups them.
    All twenty-eight, not only the eleven a member can move: the other
@@ -579,13 +642,15 @@ async function call(url, body, pwOverride) {
        'League connection shows what the site is pointed at. If pages start coming up empty, replace your ESPN cookies here and save \u2014 that is almost always the cause.'],
       ['03', 'Tools have three settings',
        'Visible to the league, admin-only, or hidden. Admin-only tools still appear on the home page with a lock, so the league can see they exist.'],
-      ['04', 'Trade Analyzer weighting',
+      ['04', 'Home page order',
+       'Move a tile up or down and the home page follows at once. Reset puts the shipped order back.'],
+      ['05', 'Trade Analyzer weighting',
        'Sets what each statistic is worth when the tool judges a deal for your league. Anyone can still move the adjustable ones while they look at a trade; that never changes what you save here.'],
-      ['05', 'Fortune Teller',
+      ['06', 'Fortune Teller',
        'Switch it on and it builds the map by itself as soon as the league is close enough to the end of the regular season, then moves on each week. Check now asks it to look straight away; Rebuild starts the map again from scratch.'],
-      ['05', 'Re-run a pull any time',
+      ['07', 'Re-run a pull any time',
        'Refreshing league data, and re-pulling past seasons, can both be run again whenever you like. Neither loses anything by being repeated.'],
-      ['06', 'Time zone is per person',
+      ['08', 'Time zone is per person',
        'The zone under the gear is yours alone, not a league setting. Everyone picks their own.'],
     ] });
 }
