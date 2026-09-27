@@ -162,7 +162,7 @@ export function wizardPage({ theme, reduceMotion, codeRequired, step = 1, league
     <section class="step" data-step="4" hidden>
       <p class="eyebrow">Step 04</p>
       <h2 class="stepttl">Choose your tools</h2>
-      <p class="sub">Change these any time in Site Configuration.</p>
+      <p class="sub">Visible to the league, for admins only, or hidden. Change these any time in Site Configuration.</p>
       <div class="panel">
         <span class="ghostnum">04</span>
         <div id="toolList"></div>
@@ -264,12 +264,25 @@ export function wizardPage({ theme, reduceMotion, codeRequired, step = 1, league
     .readyrow span { color:var(--ink-2); }
     .readyrow b { color:var(--ink); text-align:right; }
 
-    .toolpick { display:flex; gap:11px; align-items:flex-start; padding:12px 0;
-                border-bottom:1px solid var(--line); cursor:pointer;
+    .toolpick { display:flex; flex-wrap:wrap; gap:9px 11px; align-items:flex-start; padding:12px 0;
+                border-bottom:1px solid var(--line);
                 text-transform:none; letter-spacing:0; font-size:14px;
                 font-weight:500; color:var(--ink); margin:0; }
     .toolpick:last-child { border-bottom:0; }
-    .toolpick input { width:auto; margin-top:3px; accent-color:var(--accent); }
+    .tpinfo { flex:1 1 200px; min-width:0; }
+    /* Visible, admin only or hidden: three buttons in one strip, each a real radio. */
+    .tpvis { flex:none; display:flex; margin-left:37px; border:1px solid var(--line); }
+    @media (min-width:640px) { .tpvis { margin-left:0; } }
+    .tpvis label { position:relative; margin:0; cursor:pointer; text-transform:none; letter-spacing:.02em; }
+    .tpvis input { position:absolute; opacity:0; width:1px; height:1px; margin:0; pointer-events:none; }
+    .tpvis span { display:block; padding:7px 10px; font-size:11.5px; font-weight:700; color:var(--ink-2);
+                  white-space:nowrap; border-left:1px solid var(--line); }
+    .tpvis label:first-child span { border-left:0; }
+    .tpvis input:checked + span { color:var(--ink); background:color-mix(in srgb,var(--accent) 16%,transparent);
+                  box-shadow:inset 0 -2px 0 var(--accent); }
+    .tpvis input[value="admin"]:checked + span { background:color-mix(in srgb,var(--signal) 16%,transparent); box-shadow:inset 0 -2px 0 var(--signal); }
+    .tpvis input[value="hidden"]:checked + span { background:color-mix(in srgb,var(--ink) 8%,transparent); box-shadow:inset 0 -2px 0 var(--line-2); }
+    .tpvis input:focus-visible + span { outline:2px solid var(--accent); outline-offset:-2px; }
     /* The dashboard tile's icon treatment, so a tool is recognisable here as
        the tile it becomes. */
     .toolglyph { flex:none; width:26px; height:26px; color:var(--accent); margin-top:1px; }
@@ -360,12 +373,12 @@ async function handle(step, btn) {
   }
 
   if (step === 4) {
-    var picked = [];
-    document.querySelectorAll('[data-tool]').forEach(function (c) {
-      if (c.checked) picked.push(c.dataset.tool);
+    var visibility = {};
+    document.querySelectorAll('[data-tool]:checked').forEach(function (c) {
+      visibility[c.dataset.tool] = c.value;
     });
     busy(btn, true, 'Saving');
-    var r4 = await post('/api/setup/tools', { tools: picked });
+    var r4 = await post('/api/setup/tools', { visibility: visibility });
     busy(btn, false);
     if (!r4.ok) { msg(4, r4.error || 'Could not save.'); return; }
     msg(4, ''); show(5); return;
@@ -439,13 +452,21 @@ async function runPrime() {
    definition rather than written out again. */
 var TOOL_GLYPHS = ${JSON.stringify(TOOL_ICONS)};
 
+/* Each tool starts where the registry puts it: visible, or admin only for Site Backend. */
+var VIS_CHOICES = [['visible', 'Visible'], ['admin', 'Admin only'], ['hidden', 'Hidden']];
+
 async function loadTools() {
   var r = await get('/api/setup/tools');
   document.getElementById('toolList').innerHTML = (r.tools || []).map(function (t) {
     var glyph = TOOL_GLYPHS[t.key] || TOOL_GLYPHS.default;
-    return '<label class="toolpick"><input type="checkbox" data-tool="' + t.key + '" checked>'
+    var id = 'tp-' + t.key;
+    return '<div class="toolpick" role="radiogroup" aria-labelledby="' + id + '">'
       + '<span class="toolglyph">' + glyph + '</span>'
-      + '<span><b>' + t.name + '</b><i>' + t.description + '</i></span></label>';
+      + '<span class="tpinfo"><b id="' + id + '">' + t.name + '</b><i>' + t.description + '</i></span>'
+      + '<span class="tpvis">' + VIS_CHOICES.map(function (v) {
+          return '<label><input type="radio" name="vis-' + t.key + '" data-tool="' + t.key + '" value="' + v[0] + '"'
+            + (t.visibility === v[0] ? ' checked' : '') + '><span>' + v[1] + '</span></label>';
+        }).join('') + '</span></div>';
   }).join('');
 }
 
