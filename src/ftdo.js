@@ -13,6 +13,7 @@ import { FT_SUMMARY_KEY, ftMapKey } from './fortuneteller.js';
 import { getPart } from './store.js';
 import { FT_DEV_VIEW_KEY, FT_ESPN_ODDS_KEY } from './fortuneteller.js';
 import { loadConfig } from './config.js';
+import { sendEvents } from './sitelog.js';
 import { fetchPart } from './espn.js';
 import { simplestPath, totalsOf } from '../app/fortune-teller/engine.js';
 import { finalOdds } from '../app/fortune-teller/final.js';
@@ -159,7 +160,57 @@ export class FortuneTellerDO {
       games: input.games.length, sources, sample: input.games.filter((g, i) => i < 3 || g.source === 'projection').slice(0, 6).map((g) => ({ week: g.week, a: src.names.get(g.a) || g.a, b: src.names.get(g.b) || g.b, pA: g.pA, projA: g.projA, projB: g.projB, source: g.source })),
       fingerprint: input.fingerprint };
   }
-  async putPipeline(p) { await this.env.DATA.put(FT_PIPELINE_KEY, JSON.stringify(p), { httpMetadata: { contentType: 'application/json' } }); return p; }
+  async putPipeline(p) {
+    let prev = this.pipeState;
+    if (prev === undefined) { try { const o = await this.env.DATA.get(FT_PIPELINE_KEY); prev = o ? ((await o.json()) || {}).state || null : null; } catch { prev = null; } }
+    await this.env.DATA.put(FT_PIPELINE_KEY, JSON.stringify(p), { httpMetadata: { contentType: 'application/json' } });
+    this.pipeState = p.state;
+    if (prev !== p.state && p.state) {
+      const sev = p.state === 'failed' ? 'bad' : ['ready', 'season-over'].includes(p.state) ? 'ok' : 'info';
+      await this.siteChange(`Fortune Teller: ${prev || 'first check'} → ${p.state}${p.state === 'failed' && p.error ? ` (${String(p.error).slice(0, 80)})` : ''}`, sev);
+    }
+    return p;
+  }
+
+  /** A change of state for the site log. Never throws, never delays much: one small request. */
+  async siteChange(text, sev = 'info') {
+    try { await sendEvents(this.env, [{ kind: 'change', sev, text, page: 'fortune-teller' }]); } catch { /* recording must never matter */ }
+  }
+
+  /**
+   * Re-arm a build whose next slice is missing or over two minutes late, and put its marker
+   * back so the minute cron watches it. What the dev portal's watchdog did when someone
+   * looked, done here by the schedule, since nobody looks on a live site.
+   */
+  async recoverStalled(job, who) {
+    if (!job || !['queued', 'running', 'paused'].includes(job.state)) return null;
+    const s = this.s(), now = this.now();
+    let alarm = null;
+    try { alarm = await s.getAlarm(); } catch { alarm = null; }
+    let marker = true;
+    try { marker = Boolean(await this.env.DATA.head(FT_ACTIVE_KEY)); } catch { marker = true; }
+    const stalled = !alarm || alarm < now - 120000;
+    if (!stalled && marker) return null;
+    try {
+      if (!marker) await this.env.DATA.put(FT_ACTIVE_KEY, job.id);
+      if (stalled) {
+        await s.setAlarm(now + 50);
+        await this.log('warn', `${who}: the next slice was ${alarm ? `${Math.round((now - alarm) / 60000)} min overdue` : 'not scheduled'}; re-armed`);
+        await this.siteChange(`Fortune Teller: a stalled ${job.kind === 'trim' ? 'update' : 'build'} was re-armed by the ${who}`, 'warn');
+      }
+      return stalled ? 're-armed' : 'marker restored';
+    } catch (e) {
+      return 'refused: ' + String((e && e.message) || e);
+    }
+  }
+
+  /** The job as Site Backend shows it: position, timings and outcome, nothing heavier. */
+  peekJob(job) {
+    if (!job) return null;
+    return { id: job.id, kind: job.kind || 'build', state: job.state, next: job.next, team: job.team, n: job.n, chunk: job.chunk || 0, parts: 3 ** (job.k || 0),
+      paths: job.paths, startedAt: job.startedAt || null, finishedAt: job.finishedAt || null, error: job.error || null, pauseReason: job.pauseReason || null,
+      resumeAt: job.resumeAt || null, slices: (job.slices || []).length, sliceMs: (job.slices || []).slice(-120).map((x) => x.ms) };
+  }
 
   /**
    * Decides what Fortune Teller should be doing, and starts it. Runs from the site's cron
@@ -181,6 +232,9 @@ export class FortuneTellerDO {
     Object.assign(out, { season, mpc: st.mpc, lastSettled: st.lastSettled, weeksLeft: st.weeksLeft, opensAfterWeek: ready.opensAfterWeek, dev: !!src.dev,
       estimate: ready.estimate ? { hours: ready.estimate.hours, paths: ready.estimate.paths } : null });
     const job = await s.get('job'), active = job && ['queued', 'running', 'paused'].includes(job.state);
+    // A build whose alarms stopped is found here as well as by the minute cron, which only
+    // watches builds whose marker is present: this check restores both.
+    if (active) await this.recoverStalled(job, 'pipeline check');
     if (active && job.pipeline) return this.putPipeline({ ...out, state: job.kind === 'trim' ? 'updating' : 'building', build: this.progress(job), tree: prev.tree });
     // Someone else's build (a benchmark on dev) holds the object: say so, and start nothing.
     if (active) return this.putPipeline({ ...out, state: prev.state && !['building', 'updating'].includes(prev.state) ? prev.state : (ready.now ? 'available' : 'early'), waiting: 'another build is running', tree: prev.tree, thru: prev.thru });
@@ -254,6 +308,7 @@ export class FortuneTellerDO {
       await this.log('info', `build ${job.id} queued: ${N.toLocaleString('en-US')} paths, ${job.n} teams`);
     }
     await s.put('job', job); await this.env.DATA.put(FT_ACTIVE_KEY, job.id);
+    await this.siteChange(`Fortune Teller ${job.kind === 'trim' ? 'update' : 'build'} started: ${Number(job.paths || 0).toLocaleString('en-US')} paths, ${job.n} teams`);
     await s.setAlarm(this.now() + 50);
     return { ok: true, job };
   }
@@ -325,6 +380,9 @@ export class FortuneTellerDO {
       // The site's minute cron calls this while a build is active. If the next slice is overdue
       // (alarms not being delivered), it runs slices itself, for up to about 20 seconds.
       const job = await s.get('job'), alarm = await s.getAlarm(), force = u.searchParams.get('force') === '1';
+      // A paused build keeps its marker, so the cron keeps watching it: it resumes on its own
+      // alarm, and if that alarm is lost, this re-arms it.
+      if (job && job.state === 'paused') return json({ ok: true, ran: 0, paused: true, recovered: await this.recoverStalled(job, 'cron') });
       if (!job || !['queued', 'running'].includes(job.state)) { await this.env.DATA.delete(FT_ACTIVE_KEY); return json({ ok: true, ran: 0, idle: true }); }
       if (!force && alarm && alarm > this.now() - 60000) return json({ ok: true, ran: 0, onTime: true });
       // Slices start only in the first 15 s, so even a merge that starts late ends inside the 30 s CPU limit.
@@ -349,6 +407,15 @@ export class FortuneTellerDO {
       if (!job || !['queued', 'running', 'paused'].includes(job.state)) return json({ ok: false, error: 'no build in progress' });
       try { await s.setAlarm(this.now() + 50); await this.env.DATA.put(FT_ACTIVE_KEY, job.id); await this.log('warn', 're-armed a stalled build'); return json({ ok: true }); }
       catch (e) { return json({ ok: false, error: String((e && e.message) || e) }); }
+    }
+    if (u.pathname === '/peek') {
+      // Site Backend's read: the facts /status gives, with no watchdog and nothing written.
+      const cfg = await this.config(), day = new Date(this.now()).toISOString().slice(0, 10);
+      const [job, log, meter, alarm] = await Promise.all([s.get('job'), s.get('log'), this.meter(day), s.getAlarm()]);
+      const gov = await this.governor(cfg);
+      let dbBytes = null;
+      try { dbBytes = s.sql ? Number(s.sql.databaseSize) || null : null; } catch { dbBytes = null; }
+      return json({ ok: true, job: this.peekJob(job), config: cfg, meter, governor: gov, log: (log || []).slice(-40).reverse(), alarm: alarm ? new Date(alarm).toISOString() : null, dbBytes });
     }
     if (u.pathname === '/status') {
       const cfg = await this.config(), day = new Date(this.now()).toISOString().slice(0, 10);
@@ -482,6 +549,8 @@ export class FortuneTellerDO {
     if (job.state !== 'failed') await this.log('info', `${step}${detail ? ' · ' + detail : ''} · ${wall} ms`);
     if (!['done', 'failed', 'cancelled'].includes(job.state)) await s.setAlarm(this.now() + Math.max(0, cfg.sliceGapMs));
     else if (job.state === 'done') await this.log('info', `build ${job.id} finished`);
+    if (job.state === 'done') await this.siteChange(`Fortune Teller ${job.kind === 'trim' ? 'update' : 'build'} finished`, 'ok');
+    else if (job.state === 'failed') await this.siteChange(`Fortune Teller ${job.kind === 'trim' ? 'update' : 'build'} failed: ${String(job.error || '').slice(0, 100)}`, 'bad');
     if (['done', 'failed', 'cancelled'].includes(job.state)) await this.env.DATA.delete(FT_ACTIVE_KEY);
     // A build or update the pipeline started reports its progress, and when it ends the
     // pipeline runs again, so whatever comes next (say, an update for a week that settled
