@@ -197,7 +197,7 @@ export function dashboardPage({
       ['03', 'Your matchup, then the table',
        'The card shows this week\u2019s score, projection and win chance for you and your opponent. Below it the full standings, sortable on any column, with playoff odds.'],
       ['04', 'Tools',
-       'Each tile opens one. Which tiles appear is up to whoever runs the league, so your league may show more or fewer than another.'],
+       'Each tile opens one. Which tiles appear, and in what order, is up to whoever administers this site, so your league may show more or fewer than another.'],
       ['05', 'News, further down',
        'Injuries on your own roster, everything the league has done lately \u2014 waiver claims, adds, drops and trades \u2014 and headlines from around the NFL. League activity starts at the last seven days; change the range to see further back.'],
       ['06', 'Settings follow you',
