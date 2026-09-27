@@ -23,7 +23,7 @@ export function loginPage({ leagueName, season, theme, reduceMotion, error }) {
       })}
       <button class="primary" id="go">Enter</button>
       <div class="msg ${error ? 'err' : ''}" id="msg">${esc(error || '')}</div>
-      <p class="note" style="text-align:left">Don't have it? Ask whoever runs your league.</p>
+      <p class="note" style="text-align:left">Don't have it? Ask whoever administers this site.</p>
     </div>`;
 
   const js = `
@@ -52,12 +52,12 @@ pw.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); }
                  rail, body, centred: true, extraJs: js,
     instructions: [
       ['01', 'One password for the league',
-       'Everyone in the league signs in with the same League Password. Whoever set the site up has it.'],
+       'Everyone in the league signs in with the same League Password. Whoever administers this site has it.'],
       ['02', 'Type it, do not paste it',
        'The field is deliberately paste-proof, and the eye icon reveals what you typed so a stray character cannot lock you out.'],
       ['03', 'You stay signed in',
        'Signing in lasts about eight hours on this device, so you will not be asked again every time you open a tool.'],
       ['04', 'Trouble getting in',
-       'Several wrong attempts in a row slow the next ones down. Wait a moment and try again, or ask whoever runs the site.'],
+       'Several wrong attempts in a row slow the next ones down. Wait a moment and try again, or ask whoever administers this site.'],
     ] });
 }
