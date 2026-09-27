@@ -11,6 +11,7 @@ import { espnPoints, seedOrder } from "./history.js";
 import { isFinal, finalOrder, finalOdds, flattenStandings, definiteBlock } from "./final.js";
 import { makeCounter } from "./counting.js";
 import { encodeShare, decodeShare, datasetTag } from "./sharelink.js";
+import { logEvent } from "../shared/sitelog.js";
 
 const INSTRUCTIONS = [
   [1, "Pick your team", "Choose your team at the top. The dial and the finish board show your chances across every way the rest of the regular season can go."],
@@ -691,6 +692,7 @@ function Live({ data, loadMap, boot, live, replay }) {
     const qs = encodeShare({ teamId: data.teams[ti].id, path, pins, fixed: trim.fixed, whatIf, tieOrders, dataset: datasetTag(data), trim: trimIdx });
     const url = `${location.origin}${location.pathname}?${qs}`;
     try { await navigator.clipboard.writeText(url); } catch (e) { window.prompt("Copy this link", url); }
+    logEvent("share-fortune");
     setCopied(true); setTimeout(() => setCopied(false), 2200);
   };
   const clearPicks = () => { const q = Int8Array.from(pins); for (let j = trim.fixed; j < G; j++) q[j] = -1; setPins(q); };
