@@ -10,6 +10,8 @@ import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamSelect from "../shared/TeamSelect.jsx";
 import Instructions from "../shared/Instructions.jsx";
 import { teamLogoUrl } from "../../src/teamlogo.js";
+import { rosterShape, assignRoster as assignLineup, fits } from "./rosterShape.js";
+import { draftPlan, DEFAULT_ROUNDS } from "./draftPlan.js";
 
 // color tokens — dark and light themes
 // Values mirror the shared design tokens exactly, so the tool sits inside the
@@ -40,8 +42,8 @@ const PALETTE = {
 // The condensed display face is replaced by the system stack at heavy weight.
 const UI_FONT = "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 
-// league roster construction — stable league settings, not fetched live (see planning doc)
-const STARTER_SLOTS = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "D/ST", "K"];
+// The league's roster shape (starting slots, bench, position caps) comes from its own
+// settings, which the draft payload carries: see rosterShape.js.
 
 /* The bench is read in the same order as the starting lineup rather than in
    the order players happened to be drafted, so a slot sits in the same place
@@ -52,9 +54,6 @@ const benchPosRank = (pos) => {
   const r = BENCH_POS_ORDER[pos];
   return r === undefined ? 99 : r;
 };
-const BENCH_SLOTS = 7;
-const MAX_ROSTERED = { QB: 4, RB: 8, WR: 8, TE: 3, K: 3, "D/ST": 3 };
-const FLEX_ELIGIBLE = ["RB", "WR", "TE"];
 
 
 // ESPN's fixed position and NFL-team ID conventions — validated against live data
@@ -201,12 +200,9 @@ function deriveDraftState(draftResultsData) {
   let scenario = "pre";
   if (picks.length > 0 && made.length >= picks.length) scenario = "post";
   else if (made.length > 0 || dd.inProgress) scenario = "active";
-  const rounds = picks.length ? Math.max(...picks.map((p) => p.roundId)) : 16;
-  const boardColumns = picks
-    .filter((p) => p.roundId === 1)
-    .sort((a, b) => a.roundPickNumber - b.roundPickNumber)
-    .map((p) => p.teamId);
-  return { scenario, picks, draftStartMs, rounds, boardColumns };
+  // Rounds, the order and snake or straight come from the league's own draft (draftPlan.js).
+  const plan = draftPlan(draftResultsData.settings, picks);
+  return { scenario, picks, draftStartMs, rounds: plan.rounds, boardColumns: plan.order, plan };
 }
 
 function buildDraftedMap(picks, playersById) {
@@ -255,27 +251,17 @@ function deriveNews(newsData) {
   return newsData.articles.slice(0, 8).map((a) => ({ id: a.id, headline: a.headline, time: timeAgo(a.published) }));
 }
 
-function assignRoster(teamId, draftedByOverall) {
+function assignRoster(teamId, draftedByOverall, shape) {
   const picks = [...draftedByOverall.values()]
     .filter((p) => p.draftedBy === teamId)
     .sort((a, b) => a.overall - b.overall);
-  const slots = STARTER_SLOTS.map((s) => ({ slot: s, player: null }));
-  const bench = [];
-  const remaining = [...picks];
-
-  STARTER_SLOTS.forEach((slotType, idx) => {
-    if (slotType === "FLEX") return;
-    const i = remaining.findIndex((p) => p.pos === slotType);
-    if (i >= 0) { slots[idx].player = remaining[i]; remaining.splice(i, 1); }
-  });
-  const flexIdx = slots.findIndex((s) => s.slot === "FLEX");
-  const fi = remaining.findIndex((p) => FLEX_ELIGIBLE.includes(p.pos));
-  if (fi >= 0) { slots[flexIdx].player = remaining[fi]; remaining.splice(fi, 1); }
-
-  remaining.forEach((p) => { if (bench.length < BENCH_SLOTS) bench.push(p); });
-  bench.sort((a, b) => benchPosRank(a.pos) - benchPosRank(b.pos));
-  return { slots, bench, totalPicks: picks.length };
+  const out = assignLineup(shape, picks);
+  out.bench.sort((a, b) => benchPosRank(a.pos) - benchPosRank(b.pos));
+  return out;
 }
+
+/** A slot that takes several positions shows the colour of whoever fills it. */
+const isFlexSlot = (slot) => slot === "FLEX" || slot === "OP" || String(slot).includes("/");
 
 function posCounts(teamId, draftedByOverall) {
   const counts = {};
@@ -371,7 +357,7 @@ function Blank({ title, sub }) {
 
 /** A roster slot: filled reads as a card, empty reads as a gap to fill. */
 function Slot({ pal, slot, player, dim }) {
-  const color = POS_COLOR(pal, slot === "FLEX" ? (player ? player.pos : "FLEX") : slot);
+  const color = POS_COLOR(pal, isFlexSlot(slot) ? (player ? player.pos : "FLEX") : slot);
   if (!player) {
     return (
       <div className="slot empty">
@@ -449,10 +435,13 @@ export default function DraftHelper() {
   const playersById = useMemo(() => new Map(players.map((p) => [p.id, p])), [players]);
 
   const draftState = useMemo(() => deriveDraftState(draftResultsRes.data), [draftResultsRes.data]);
+  // Keyed by the settings' text, so a poll that brings the same settings keeps the same shape.
+  const shapeKey = JSON.stringify((draftResultsRes.data && draftResultsRes.data.settings && draftResultsRes.data.settings.rosterSettings) || null);
+  const shape = useMemo(() => { const rs = JSON.parse(shapeKey); return rosterShape(rs ? { rosterSettings: rs } : null); }, [shapeKey]);
   const scenario = draftState?.scenario || "pre";
   const picks = draftState?.picks || [];
   const boardColumns = draftState?.boardColumns || [];
-  const totalRounds = draftState?.rounds || 16;
+  const totalRounds = draftState?.rounds || DEFAULT_ROUNDS;
 
   // app state
   const [selectedTeamId, setSelectedTeamId] = useState(() => readTeamCookie());
@@ -504,7 +493,7 @@ export default function DraftHelper() {
 
   const viewingTeamId = previewTeamId || selectedTeamId;
   const viewingTeam = teams.find((t) => t.id === viewingTeamId);
-  const roster = useMemo(() => assignRoster(viewingTeamId, draftedByOverall), [viewingTeamId, draftedByOverall]);
+  const roster = useMemo(() => assignRoster(viewingTeamId, draftedByOverall, shape), [viewingTeamId, draftedByOverall, shape]);
   const counts = useMemo(() => posCounts(viewingTeamId, draftedByOverall), [viewingTeamId, draftedByOverall]);
 
   const draftedIds = useMemo(() => new Set([...draftedByOverall.values()].map((p) => p.id)), [draftedByOverall]);
@@ -512,7 +501,7 @@ export default function DraftHelper() {
   const available = useMemo(() => {
     let pool = players.filter((p) => !draftedIds.has(p.id));
     pool = pool.filter((p) => !blacklist.has(p.id));
-    pool = pool.filter((p) => !(MAX_ROSTERED[p.pos] && (counts[p.pos] || 0) >= MAX_ROSTERED[p.pos]));
+    pool = pool.filter((p) => !(shape.limits[p.pos] && (counts[p.pos] || 0) >= shape.limits[p.pos]));
     if (posFilter !== "ALL") pool = pool.filter((p) => p.pos === posFilter);
     pool = [...pool].sort((a, b) => {
       if (emphasize) {
@@ -523,7 +512,7 @@ export default function DraftHelper() {
       return a.adp - b.adp;
     });
     return pool;
-  }, [players, draftedIds, blacklist, counts, posFilter, emphasize]);
+  }, [players, draftedIds, blacklist, counts, posFilter, emphasize, shape]);
 
   const injuryList = useMemo(() => deriveInjuryList(injuriesRes.data), [injuriesRes.data]);
   const newsList = useMemo(() => deriveNews(newsRes.data), [newsRes.data]);
@@ -561,7 +550,7 @@ export default function DraftHelper() {
   const madeCount = draftedByOverall.size;
   const totalPicks = picks.length || (boardColumns.length * totalRounds);
   const progress = totalPicks ? madeCount / totalPicks : 0;
-  const teamCount = boardColumns.length || teams.length || 10;
+  const teamCount = boardColumns.length || draftState?.plan?.teamCount || teams.length || 10;
 
   const posList = ["ALL", "QB", "RB", "WR", "TE", "FLEX", "K", "D/ST"];
 
@@ -978,8 +967,7 @@ export default function DraftHelper() {
                   const watched = watchlist.has(p.id);
                   const banned = blacklist.has(p.id);
                   const color = POS_COLOR(pal, p.pos);
-                  const need = needSlots.includes(p.pos) ||
-                    (needSlots.includes("FLEX") && FLEX_ELIGIBLE.includes(p.pos));
+                  const need = needSlots.some((slot) => fits(shape, slot, p.pos));
                   return (
                     <div className={"prow" + (watched ? " watch" : "")} key={p.id}>
                       <span className="prank">{i + 1}</span>
@@ -1059,10 +1047,11 @@ export default function DraftHelper() {
                     <tr key={r}>
                       <td className="rnd">{r + 1}</td>
                       {boardColumns.map((tid, c) => {
-                        const n = boardColumns.length;
-                        const overall = (r % 2 === 0) ? r * n + c + 1 : r * n + (n - c);
+                        const slot = draftState.plan.slotAt(r, c);
+                        const overall = slot.overall;
                         const pick = draftedByOverall.get(overall);
-                        const mine = tid === viewingTeamId;
+                        // A traded pick belongs to whoever holds it, not to the column it sits in.
+                        const mine = (slot.pick ? slot.pick.teamId : tid) === viewingTeamId;
                         const onClock = onClockPick && onClockPick.overallPickNumber === overall;
                         return (
                           <td key={c} className={(mine ? "mine " : "") + (onClock ? "onclock" : "")}>
