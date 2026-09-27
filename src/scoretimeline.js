@@ -27,7 +27,7 @@
  * that spans four days, and it bounds a week at well under the row cap even if
  * the cron fires every minute for the entire span.
  */
-const MIN_GAP_MS = 60 * 1000;
+export const MIN_GAP_MS = 60 * 1000;
 
 /**
  * Defensive backstop only. At a 60-second floor a full Thursday-to-Monday week
@@ -43,8 +43,8 @@ const MIN_GAP_MS = 60 * 1000;
  *
  * The real budget is bytes, so that is what gets enforced. The count below is
  * only a coarse upper guard; BYTE_BUDGET is the one that decides. */
-const MAX_ROWS = 2000;
-const BYTE_BUDGET = Math.floor(128 * 1024 * 0.75);
+export const MAX_ROWS = 2000;
+export const BYTE_BUDGET = Math.floor(128 * 1024 * 0.75);
 
 /**
  * Scoring events kept per week.
@@ -55,10 +55,10 @@ const BYTE_BUDGET = Math.floor(128 * 1024 * 0.75);
  * far more than a Durable Object value is allowed to hold. Ninety starters
  * across five matchups produce well under this in a full week.
  */
-const MAX_EVENTS = 1500;
+export const MAX_EVENTS = 1500;
 
 /** Ignore scoring noise below this, so a stat correction is not an event. */
-const MIN_DELTA = 0.05;
+export const MIN_DELTA = 0.05;
 
 /**
  * Drop the oldest entries until a list encodes within the byte budget.
@@ -364,8 +364,10 @@ export class ScoreTimelineDO {
     } finally {
       this.pending = null;
     }
+    // The week's stored size, for the site log's 80% warning (measured only when a row was added).
+    const bytes = movedRow ? new TextEncoder().encode(JSON.stringify(this.rows)).length : null;
     return json({ ok: true, appended: movedRow, count: this.rows.length,
-                  unchanged: !movedRow,
+                  unchanged: !movedRow, bytes,
                   events: fresh.length, eventTotal: this.events.length });
   }
 }
