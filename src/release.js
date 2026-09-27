@@ -14,15 +14,15 @@
  * outside the repo would notice.
  */
 export const RELEASE_NOTE_ITEMS = [
-  'New tool: Fortune Teller. Every way the rest of the regular season can go, '
-  + 'mapped in full. Tap results to watch your playoff odds move, find the simplest '
-  + 'path to a playoff spot, and see the brackets any path produces.',
-  'The home page standings gain a Sim % column once Fortune Teller has run, and a '
-  + 'line marking the playoff places.',
-  'After the regular season, every team shows as clinched or eliminated rather '
-  + 'than a percentage.',
-  'The LLM Data Export now includes Fortune Teller\u2019s playoff odds beside '
-  + 'ESPN\u2019s.',
-  'Help panels now open at their first step.',
-  'Various bug fixes.',
+  'New tool: Site Backend. How the site is running at a glance: its health, its '
+  + 'data, its traffic and its logs. Admin-only by default.',
+  'Added support for traded draft picks, alternate roster sizes, and alternate '
+  + 'draft formats in Draft Helper.',
+  'LLM Data Export now makes sure the data is always fresh on every copy or download.',
+  'Tools on the home page have a new order, and whoever administers this site can '
+  + 'now arrange them in Site Configuration.',
+  'The Setup Wizard now allows defaulting tools to admin-only, in addition to '
+  + 'visible and hidden.',
+  'Added uniform rounding rules to prevent percentage mismatches across pages.',
+  'Various bug fixes and performance improvements.',
 ];
