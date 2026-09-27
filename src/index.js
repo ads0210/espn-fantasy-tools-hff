@@ -27,8 +27,15 @@ import { wizardPage } from './wizard.js';
 import { siteConfigPage } from './siteconfig.js';
 import { shell, backAction, displayTitle, passwordField, esc, LOGO_FALLBACK_SVG,
   THEME_COOKIE, TEAM_COOKIE, MOTION_COOKIE, FAVICON_SVG} from './ui.js';
-import { TOOLS, describeTools, applyVisibility, visibleTools, visibilityOf, VISIBILITY }
-  from './tools.js';
+import { adminGateRail, adminGateSection, ADMIN_GATE_CSS } from './admingate.js';
+import { TOOLS, LEAGUE_TOOLS, describeTools, applyVisibility, visibleTools, visibilityOf, VISIBILITY,
+  orderTiles, normaliseTileOrder, describeTileOrder, defaultTileOrder, SITE_CONFIG_TOOL } from './tools.js';
+import {
+  beginRequest, finishRequest, traceOf, note, markPage, noteLapsed, countException, countOp,
+  sendTick, meteredEnv, isolateFacts, logStub, seasonAt, FIRST_LOG_SEASON,
+} from './sitelog.js';
+import { SHARE_PARAMS, DATA_ROUTE_DATASETS, apiTool } from './readers.js';
+import { BUILD_INFO } from './generated/build-info.js';
 import { runBatch, readJob, jobStatus } from './history.js';
 import { runPrimeBatch, primeStatus, missingDatasetKeys } from './prime.js';
 import { fetchPart } from './espn.js';
@@ -42,10 +49,11 @@ import { json, html, readJson, b64urlDecode } from './http.js';
 export { DatasetCoordinator } from './coordinator.js';
 export { LoginThrottle } from './throttle.js';
 export { ScoreTimelineDO } from './scoretimeline.js';
+export { SiteLogDO } from './sitelogdo.js';
 import { RELEASE_NOTE_ITEMS } from './release.js';
 import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r169';
+const BUILD_MARKER = 'r179';
 
 
 
@@ -67,16 +75,23 @@ function displayVersion() {
 }
 
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, rawEnv, ctx) {
+    rawEnv.BUILD_MARKER = BUILD_MARKER;
+    // Every R2, KV and Durable Object call is counted for Site Backend's usage panel.
+    const env = meteredEnv(rawEnv);
+    const trace = beginRequest(request);
+    let response;
     try {
-      env.BUILD_MARKER = BUILD_MARKER;
-      return await route(request, env, ctx);
+      response = await route(request, env, ctx);
     } catch (err) {
-      return json(
+      countException();
+      response = json(
         { ok: false, error: 'unhandled worker exception', detail: String((err && err.stack) || err) },
         500
       );
     }
+    finishRequest(rawEnv, ctx, request, response, { recording: Boolean(trace && trace.record), version: BUILD_MARKER });
+    return response;
   },
 
   /**
@@ -87,28 +102,40 @@ export default {
    * ESPN at all. Gating the work rather than the schedule is what makes this
    * survive an off-season without anyone having to remember to switch it off.
    */
-  async scheduled(event, env, ctx) {
-    try {
-      await tickTimeline(env);
-    } catch (err) {
-      console.log('scheduled tick failed:', String((err && err.stack) || err));
-    }
-    try {
-      await tickLogos(env, event);
-    } catch (err) {
-      console.log('scheduled logo pass failed:', String((err && err.stack) || err));
-    }
-    try {
-      await fortuneTellerCheck(env);
-    } catch (err) {
-      console.log('scheduled Fortune Teller check failed:', String((err && err.stack) || err));
-    }
+  async scheduled(event, rawEnv, ctx) {
+    rawEnv.BUILD_MARKER = BUILD_MARKER;
+    const env = meteredEnv(rawEnv);
+    const at = (event && event.scheduledTime) || Date.now();
+    const jobs = {};
+    const timed = async (name, fn, shape) => {
+      const t0 = Date.now();
+      try {
+        jobs[name] = { ...shape(await fn()), ms: Date.now() - t0 };
+      } catch (err) {
+        jobs[name] = { error: String((err && err.message) || err).slice(0, 120), ms: Date.now() - t0 };
+        console.log(`scheduled ${name} failed:`, String((err && err.stack) || err));
+      }
+    };
+    await timed('timeline', () => tickTimeline(env), (r) => ({
+      recorded: Boolean(r && r.timeline && r.timeline.appended), skipped: (r && r.skipped) || null,
+      matchups: (r && r.matchups) || 0, bytes: (r && r.timeline && r.timeline.bytes) || null,
+      week: (r && r.week) || null, season: (r && r.season) || null,
+    }));
+    await timed('logos', () => tickLogos(env, event), (r) => (r ? {
+      ran: true, seen: r.teamsSeen || 0, changed: r.changed || 0, failed: r.failed || 0, fetched: (r.changed || 0) + (r.failed || 0),
+      result: { teams: (r.teams || []).map((t) => ({ teamId: t.teamId, name: t.name, state: t.state, status: t.status || null })) },
+    } : { ran: false }));
+    await timed('ft', () => fortuneTellerCheck(env), (r) => (r ? { ran: true, state: r.state || null } : { ran: false }));
     let nudge = null;
+    await timed('nudge', async () => { nudge = await nudgeFortuneTeller(env); return nudge; }, (r) => ({
+      ran: Boolean(r && typeof r === 'object'), result: typeof r === 'string' ? r : r && r.ran ? `ran ${r.ran} slice${r.ran === 1 ? '' : 's'}` : r && r.paused ? 'build paused' : r && r.onTime ? 'on time' : r && r.idle ? 'no build' : null,
+    }));
+    // The site log's record of this tick: what makes "last tick" and gap detection possible.
     try {
-      nudge = await nudgeFortuneTeller(env);
+      const cfg = await loadConfig(env);
+      if (isSetupFinished(cfg)) await sendTick(rawEnv, { at, ms: Date.now() - at, jobs }, { version: BUILD_MARKER });
     } catch (err) {
-      nudge = 'failed: ' + String((err && err.message) || err);
-      console.log('scheduled Fortune Teller nudge failed:', String((err && err.stack) || err));
+      console.log('scheduled log tick failed:', String((err && err.stack) || err));
     }
   },
 };
@@ -130,7 +157,9 @@ async function fortuneTellerCheck(env) {
   await ensureDataset(env, 'season_schedule', null);
   await ensureDataset(env, 'league_settings', null);
   await ensureDataset(env, 'standings_digest', null);
-  await env.FORTUNE.get(env.FORTUNE.idFromName('fortune-teller')).fetch('https://ft/pipeline?reason=cron');
+  const r = await env.FORTUNE.get(env.FORTUNE.idFromName('fortune-teller')).fetch('https://ft/pipeline?reason=cron');
+  const body = r.ok ? await r.json().catch(() => null) : null;
+  return (body && body.pipeline) || { state: null };
 }
 
 /**
@@ -168,7 +197,7 @@ async function tickLogos(env, event) {
 
   const cfg = await loadConfig(env);
   if (!canCallEspn(cfg)) return;
-  await refreshLogos(env, cfg);
+  return refreshLogos(env, cfg);
 }
 
 /**
@@ -243,7 +272,8 @@ export async function tickTimeline(env) {
     }
   }
   const res = await timelineAppend(env, digest.season, digest.matchupPeriod, m, Date.now(), p, pm);
-  return { ok: true, matchups: Object.keys(m).length, players: Object.keys(p).length, timeline: res };
+  return { ok: true, matchups: Object.keys(m).length, players: Object.keys(p).length, timeline: res,
+    season: digest.season, week: digest.matchupPeriod };
 }
 
 /**
@@ -302,6 +332,7 @@ async function route(request, env, ctx) {
         CONFIG: Boolean(env.CONFIG), DATA: Boolean(env.DATA),
         COORDINATOR: Boolean(env.COORDINATOR), THROTTLE: Boolean(env.THROTTLE),
         SCORE_TIMELINE: Boolean(env.SCORE_TIMELINE),
+        FORTUNE: Boolean(env.FORTUNE), SITE_LOG: Boolean(env.SITE_LOG),
         ASSETS: Boolean(env.ASSETS),
       },
     });
@@ -328,10 +359,12 @@ async function route(request, env, ctx) {
     });
   }
 
-
   const cfg = await loadConfig(env);
   const theme = themeOf(request);
   const reduceMotion = motionOf(request);
+  // Recording starts when setup finishes: a site still in its wizard records nothing.
+  const trace = traceOf(request);
+  if (trace) trace.record = isSetupFinished(cfg);
 
   // ---- first run --------------------------------------------------------
   if (!isConfigured(cfg)) {
@@ -368,12 +401,19 @@ async function route(request, env, ctx) {
     return handleLogin(request, env, cfg);
   }
   if (path === '/api/auth/logout') {
+    if (await hasLeagueSession(request, cfg)) note(request, 'sign-in', 'Signed out', { page: 'signin' });
     return json({ ok: true }, 200, { 'set-cookie': clearSessionCookie() });
   }
 
   // ---- the gate ----------------------------------------------------------
   if (!(await hasLeagueSession(request, cfg))) {
-    if (isApi(path)) return json({ ok: false, error: 'unauthorized' }, 401);
+    // A tool's own data route answers like any API: a status, never the sign-in page.
+    if (isApi(path) || /^\/apps\/[^/]+\/api$/.test(path)) {
+      // A page left open past its session keeps polling: noted once per team per hour.
+      if (path !== '/api/site-log/event') noteLapsed(request);
+      return json({ ok: false, error: 'unauthorized' }, 401);
+    }
+    markPage(request, 'signin', 'Sign-in');
     return html(loginPage({ leagueName: await leagueName(env), season: cfg.season,
       theme, reduceMotion }), 401);
   }
@@ -423,6 +463,13 @@ async function route(request, env, ctx) {
   }
 
   if (path === '/api/tools/unlock') return handleToolUnlock(request, env, cfg);
+  if (path === '/api/site-log/event') return siteLogEvent(request, env);
+
+  // A hidden tool is off for everyone: its data routes are blocked along with its page.
+  const owner = apiTool(path);
+  if (owner && visibilityOf(cfg, owner) === VISIBILITY.HIDDEN) {
+    return json({ ok: false, error: 'This tool is switched off for your league.' }, 403);
+  }
 
   if (path.startsWith('/api/live/')) {
     return handleLive(env, cfg, path.slice('/api/live/'.length), url, ctx);
@@ -431,7 +478,9 @@ async function route(request, env, ctx) {
   if (path.startsWith('/api/data/')) {
     const rest = path.slice('/api/data/'.length).replace(/\.json$/, '');
     const [key, partRaw] = rest.split('/');
-    return serveDataset(env, cfg, key, partRaw || 'main', url, ctx);
+    // Only what Draft Helper reads. Every other dataset is reached through the page that shapes it.
+    if (!DATA_ROUTE_DATASETS.has(key)) return json({ ok: false, error: `no route for ${path}` }, 404);
+    return serveDataset(env, cfg, key, partRaw || 'main', url, ctx, request);
   }
 
   if (path === '/api/hof') return hallOfFame(env, ctx);
@@ -450,20 +499,17 @@ async function route(request, env, ctx) {
     return serveTeamLogo(env, request, url, ctx, path.slice('/api/logo/'.length));
   }
 
-  if (path.startsWith('/api/status/')) {
-    const st = await readStatus(env, path.slice('/api/status/'.length));
-    return st ? json({ ok: true, status: st }) : json({ ok: false, error: 'no status yet' }, 404);
-  }
-
   if (isApi(path)) return json({ ok: false, error: `no route for ${path}` }, 404);
 
   // ---- pages -------------------------------------------------------------
   if (path === '/config' || path === '/config/') {
+    markPage(request, 'config', 'Site Configuration');
     return html(siteConfigPage({ theme, reduceMotion,
       leagueName: await leagueName(env, { ensure: true, ctx }) }));
   }
 
   if (path === '/' || path === '/index.html') {
+    markPage(request, 'home', 'Home');
     const selectedTeam = readCookie(request, TEAM_COOKIE) || '';
     const [teams, initial, board, repullNeeded] = await Promise.all([
       getTeams(env, ctx),
@@ -475,7 +521,7 @@ async function route(request, env, ctx) {
       leagueName: await leagueName(env, { ensure: true, ctx }),
       season: cfg.season,
       theme, reduceMotion,
-      tools: [...visibleTools(cfg), siteConfigTile()],
+      tools: orderTiles(cfg, [...visibleTools(cfg), siteConfigTile()]),
       teams,
       selectedTeamId: selectedTeam,
       initial, board,
@@ -495,25 +541,113 @@ async function route(request, env, ctx) {
     if (!tool) return new Response('not found', { status: 404 });
 
     const vis = visibilityOf(cfg, key);
+    const siteBackendApi = key === 'site-backend' && path === '/apps/site-backend/api';
     if (vis === VISIBILITY.HIDDEN) {
+      if (siteBackendApi) return json({ ok: false, error: 'Site Backend is switched off.' }, 403);
       return html(shell({
         title: 'Not available',
         theme, reduceMotion, settings: true, action: backAction(),
         body: `<p class="eyebrow">Off the field</p>
           <h1>Not available</h1>
           <p class="sub">This tool is switched off for your league right now.
-             Whoever runs the league can turn it back on in Site Configuration.</p>`,
+             Whoever administers this site can turn it back on in Site Configuration.</p>`,
       }), 403);
     }
 
+    const isDocument = /^\/apps\/[^/]+\/(index\.html)?$/.test(path);
     if (vis === VISIBILITY.ADMIN) {
       const unlocked = await hasToolUnlock(request, cfg, key);
-      if (!unlocked) return html(adminGatePage({ tool, theme, reduceMotion }), 200);
+      if (!unlocked) {
+        if (siteBackendApi) return json({ ok: false, error: 'locked', locked: true }, 403);
+        if (isDocument) markPage(request, key, `${tool.name} (Admin Password prompt)`);
+        return html(adminGatePage({ tool, theme, reduceMotion }), 200);
+      }
+    }
+    if (siteBackendApi) return siteBackendRoute(request, env, cfg, url);
+    if (isDocument) {
+      markPage(request, key, tool.name);
+      // A shared link being opened: its parameters say so, and nothing else about it is kept.
+      if ((SHARE_PARAMS[key] || []).some((k) => url.searchParams.has(k))) {
+        note(request, 'operation', `Opened a shared ${tool.name} link`, { page: key });
+      }
     }
   }
 
   if (env.ASSETS) return env.ASSETS.fetch(request);
   return new Response('not found', { status: 404 });
+}
+
+/**
+ * Events only a browser knows about: a share link written to the clipboard. One
+ * allow-listed name each, nothing else accepted; the log object caps them at 60
+ * a minute site-wide. Not an error channel.
+ */
+const CLIENT_EVENTS = {
+  'share-trade': { text: 'Shared a Trade Analyzer link', page: 'trade-analyzer' },
+  'share-fortune': { text: 'Shared a Fortune Teller link', page: 'fortune-teller' },
+  // A copy or download is often served from the page's own copy, so only the browser knows it happened.
+  'export-copy-full': { text: 'Exported league data (copy, full)', page: 'llm-export' },
+  'export-copy-compact': { text: 'Exported league data (copy, compact)', page: 'llm-export' },
+  'export-download-full': { text: 'Exported league data (download, full)', page: 'llm-export' },
+  'export-download-compact': { text: 'Exported league data (download, compact)', page: 'llm-export' },
+};
+
+async function siteLogEvent(request, env) {
+  if (request.method !== 'POST') return json({ ok: false, error: 'POST required' }, 405);
+  const body = await readJson(request);
+  const ev = CLIENT_EVENTS[body && body.name];
+  if (!ev) return json({ ok: false, error: 'unknown event' }, 400);
+  const trace = traceOf(request);
+  if (!trace || !trace.record) return json({ ok: true, recorded: false });
+  const stub = logStub(env);
+  if (stub) {
+    const m = /(?:^|;\s*)eft_team=([^;]*)/.exec(request.headers.get('cookie') || '');
+    const team = m && Number(decodeURIComponent(m[1])) > 0 ? Number(decodeURIComponent(m[1])) : null;
+    try {
+      const r = await stub.fetch('https://site-log/client', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: ev.text, page: ev.page, team }) });
+      if (r.body && r.body.cancel) await r.body.cancel().catch(() => {});
+    } catch { /* recording must never matter */ }
+  }
+  return json({ ok: true });
+}
+
+/**
+ * Site Backend's data route. Lives under the tool's own path so the tool's unlock
+ * cookie reaches it; the visibility checks above have already run. The log object
+ * assembles the tab with its 30 s of CPU; this adds only what the Worker knows.
+ */
+export async function siteBackendRoute(request, env, cfg, url) {
+  if (!env.SITE_LOG) return json({ ok: false, error: 'The site log is not available on this deployment.' }, 503);
+  const q = Object.fromEntries(url.searchParams);
+  const now = seasonAt();
+  const setupSeason = cfg.setupCompletedAt ? seasonAt(Date.parse(cfg.setupCompletedAt)) : now;
+  const seasons = [];
+  for (let y = now; y >= Math.max(FIRST_LOG_SEASON, Math.min(setupSeason, now)); y--) seasons.push(y);
+  const asked = Number(q.season);
+  const season = q.tab === 'activity' && seasons.includes(asked) ? asked : now;
+  const vm = env.CF_VERSION_METADATA;
+  const cf = request.cf || {};
+  const facts = {
+    build: BUILD_MARKER, version: displayVersion(), season, seasons,
+    versionMetadata: vm ? { id: vm.id || null, tag: vm.tag || null, timestamp: vm.timestamp || null } : null,
+    buildInfo: BUILD_INFO,
+    bindings: Object.fromEntries(['CONFIG', 'DATA', 'ASSETS', 'COORDINATOR', 'THROTTLE', 'SCORE_TIMELINE', 'FORTUNE', 'SITE_LOG', 'CF_VERSION_METADATA']
+      .map((b) => [b, Boolean(env[b])])),
+    isolate: isolateFacts(),
+    // Shown to the viewer about their own connection; the log never stores facts.
+    viewer: { colo: cf.colo || null, httpProtocol: cf.httpProtocol || null, tlsVersion: cf.tlsVersion || null, rtt: cf.clientTcpRtt ?? null },
+    devHooks: Boolean(env.DEV_TOKEN),
+    releaseItems: RELEASE_NOTE_ITEMS,
+    needsHistoryRepull: NEEDS_HISTORY_REPULL,
+  };
+  const stub = logStub(env, season);
+  const call = q.dataset
+    ? stub.fetch('https://site-log/dataset', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: q.dataset, facts }) })
+    : stub.fetch('https://site-log/tab', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ params: q, facts }) });
+  const r = await call;
+  const text = await r.text();
+  return new Response(text, { status: r.status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 }
 
 /**
@@ -552,8 +686,10 @@ async function handleToolUnlock(request, env, cfg) {
   // Header only, never the body — the same rule every admin call follows.
   const supplied = request.headers.get('x-admin-password') || '';
   if (!(await checkAdminPassword(cfg, supplied))) {
+    note(request, 'admin', `Admin Password refused (${tool.name})`, { sev: 'warn', page: key });
     return json({ ok: false, error: 'That Admin Password is not right.' }, 401);
   }
+  note(request, 'admin', `Unlocked ${tool.name}`, { page: key });
   const token = await createSession(cfg.sessionSecret, `tool:${key}`, TOOL_UNLOCK_TTL_SECONDS);
   return json({ ok: true, next: tool.href }, 200, {
     'set-cookie': `${toolUnlockCookie(key)}=${token}; Path=${tool.href}; HttpOnly; Secure; ` +
@@ -562,38 +698,11 @@ async function handleToolUnlock(request, env, cfg) {
 }
 
 /** The prompt shown in place of a restricted tool. */
-function adminGatePage({ tool, theme, reduceMotion }) {
-  const rail = `
-    <p class="eyebrow">Restricted</p>
-    ${displayTitle(tool.name)}
-    <p class="sub">${esc(tool.description)}</p>`;
-  const body = `
-    <section id="gate">
-      <div class="panel">
-        <span class="ghostmark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" stroke-width="1.6"><rect x="4" y="10.5" width="16" height="11"/>
-          <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/><circle cx="12" cy="16" r="1.4"/></svg></span>
-        <p class="hint" style="margin-top:0">This tool is restricted to whoever runs the
-           league. Enter the Admin Password to open it.</p>
-        ${passwordField({ id: 'adminPw', label: 'Admin Password', autofocus: true,
-                          autocomplete: 'current-password' })}
-        <button class="primary" id="unlock">Unlock</button>
-        <div class="msg" id="gateMsg"></div>
-      </div>
-    </section>`;
-  const css = `
-    /* One question on an otherwise empty page: centred, with the header
-       centred over it rather than hanging off to one side. */
-    .pagegrid.stack .rail { max-width:none; }
-    .pagegrid.stack .railtext, .pagegrid.stack .titlebar { text-align:center; }
-    .pagegrid.stack .railmark { margin:0 auto; }
-    .pagegrid.stack .railtext .display { margin:0 auto; }
-    .pagegrid.stack .railtext .eyebrow { justify-content:center; }
-    .pagegrid.stack .railtext .sub { margin-left:auto; margin-right:auto; }
-    .main { display:flex; justify-content:center; }
-    #gate { width:min(100%,420px); }
-    #gate .panel { text-align:center; }
-    #gate .panel .fieldwrap, #gate .panel .msg { text-align:left; }`;
+export function adminGatePage({ tool, theme, reduceMotion }) {
+  // The shared gate (src/admingate.js): the same header, panel and note as Site Configuration's.
+  const rail = adminGateRail(tool.name);
+  const body = adminGateSection();
+  const css = ADMIN_GATE_CSS;
   const js = `
 var gm = document.getElementById('gateMsg');
 async function unlock() {
@@ -626,7 +735,7 @@ document.getElementById('adminPw').addEventListener('keydown', function (e) {
       ['01', 'This tool is restricted',
        'Someone set it to admin-only in Site Configuration. It stays listed on the dashboard so the league can see it exists.'],
       ['02', 'The Admin Password opens it',
-       'The same one that opens Site Configuration. Whoever runs the league has it.'],
+       'The same one that opens Site Configuration. Whoever administers this site has it.'],
       ['03', 'The unlock is short-lived',
        'It lasts thirty minutes and applies only to this tool. Nothing else on the site is unlocked by it.'],
     ],
@@ -634,13 +743,7 @@ document.getElementById('adminPw').addEventListener('keydown', function (e) {
 }
 
 function siteConfigTile() {
-  return {
-    key: 'site-config',
-    name: 'Site Configuration',
-    description: 'Passwords, ESPN connection, tools and data re-pulls.',
-    href: '/config',
-    adminOnly: true,
-  };
+  return { key: SITE_CONFIG_TOOL.key, name: SITE_CONFIG_TOOL.name, description: SITE_CONFIG_TOOL.description, href: SITE_CONFIG_TOOL.href, adminOnly: true };
 }
 
 // ---------------------------------------------------------------- auth flows
@@ -662,6 +765,7 @@ async function handleSetupPasswords(request, env, cfg) {
 async function handleLogin(request, env, cfg) {
   const gate = await throttleCheck(env, request);
   if (gate.blocked) {
+    note(request, 'sign-in', 'Sign-in blocked by the throttle', { sev: 'warn', page: 'signin' });
     return json({ ok: false, error: 'Too many attempts. Try again in a few minutes.' }, 429,
       { 'retry-after': String(gate.retryAfterSeconds || 600) });
   }
@@ -672,12 +776,14 @@ async function handleLogin(request, env, cfg) {
   }
   if (!(await verifyPassword(body.password, cfg.leaguePasswordHash))) {
     const after = await throttleFail(env, request);
+    note(request, 'sign-in', after.blocked ? 'Sign-in blocked by the throttle' : 'Sign-in failed', { sev: 'warn', page: 'signin' });
     return json({
       ok: false,
       error: after.blocked ? 'Too many attempts. Try again in a few minutes.' : 'That password was not correct.',
     }, after.blocked ? 429 : 401);
   }
   await throttleSucceed(env, request);
+  note(request, 'sign-in', 'Signed in', { page: 'signin' });
   const token = await createSession(cfg.sessionSecret, 'league', SESSION_TTL_SECONDS);
   return json({ ok: true, next: '/' }, 200, { 'set-cookie': sessionCookie(token) });
 }
@@ -749,11 +855,23 @@ async function handleSetupLeague(request, env, cfg) {
 async function handleSetupTools(request, env, cfg) {
   if (request.method === 'GET') return json({ ok: true, tools: describeTools(cfg) });
   const body = await readJson(request);
-  const picked = new Set((body && body.tools) || []);
   const visibility = {};
-  for (const t of TOOLS) visibility[t.key] = picked.has(t.key) ? 'visible' : 'hidden';
-  if (!Object.values(visibility).includes('visible')) {
-    return json({ ok: false, error: 'Choose at least one tool.' }, 400);
+  if (body && body.visibility && typeof body.visibility === 'object') {
+    // One state per tool; a tool the wizard did not mention takes the registry's default.
+    const allowed = Object.values(VISIBILITY);
+    for (const t of TOOLS) {
+      const v = body.visibility[t.key];
+      if (v !== undefined && !allowed.includes(v)) return json({ ok: false, error: `Unknown visibility "${v}".` }, 400);
+      visibility[t.key] = v || t.defaultVisibility;
+    }
+  } else {
+    // The older form: the tools picked, each at its default (Site Backend admin-only), the rest hidden.
+    const picked = new Set((body && body.tools) || []);
+    for (const t of TOOLS) visibility[t.key] = picked.has(t.key) ? t.defaultVisibility : 'hidden';
+  }
+  // Site Backend never counts toward this: it is not a league tool.
+  if (!LEAGUE_TOOLS.some((t) => visibility[t.key] === 'visible')) {
+    return json({ ok: false, error: 'Keep at least one tool visible to your league.' }, 400);
   }
   // Deliberately does NOT mark setup complete. Doing so here was what broke the
   // wizard: `setupCompletedAt` flips isSetupFinished, isSetupFinished un-routes
@@ -770,6 +888,10 @@ async function handleSetupFinish(request, env, cfg) {
   if (request.method !== 'POST') return json({ ok: false, error: 'POST required' }, 405);
   if (!cfg.leagueId) return json({ ok: false, error: 'Connect your league first.' }, 400);
   await saveConfig(env, { setupCompletedAt: new Date().toISOString() });
+  // Recording starts here, so this request is its first entry.
+  const trace = traceOf(request);
+  if (trace) trace.record = true;
+  note(request, 'admin', 'Setup finished', { page: 'wizard' });
   return json({ ok: true });
 }
 
@@ -809,17 +931,24 @@ async function handleAdmin(request, env, cfg, path) {
 
   if (!(await checkAdminPassword(cfg, supplied))) {
     await throttleFail(env, request);
+    // A load of Site Configuration asks before any password is typed; only a real attempt is noted.
+    if (supplied) note(request, 'admin', 'Admin Password refused (Site Configuration)', { sev: 'warn', page: 'config' });
     return json({ ok: false, error: 'Admin Password required.' }, 403);
   }
   await throttleSucceed(env, request);
+  const stamp = () => new Date().toISOString();
 
-  if (path === '/api/admin/verify') return json({ ok: true, verified: true });
+  if (path === '/api/admin/verify') {
+    note(request, 'admin', 'Admin Password accepted (Site Configuration)', { page: 'config' });
+    return json({ ok: true, verified: true });
+  }
 
   if (path === '/api/admin/config') {
     return json({
       ok: true,
       config: describeConfig(cfg),
       tools: describeTools(cfg),
+      order: describeTileOrder(cfg),
       history: jobStatus(await readJob(env)),
       // Reported alongside history for the same reason: the panel has to be
       // able to say what state it is in when the page opens, not only while a
@@ -841,10 +970,11 @@ async function handleAdmin(request, env, cfg, path) {
     });
     if (!verified.ok) return json({ ok: false, error: verified.error }, 400);
 
-    const patch = {};
+    const patch = { stamps: { espnCookies: stamp() } };
     if (espnS2) patch.espnS2 = espnS2;
     if (swid) patch.swid = swid;
     const saved = await saveConfig(env, patch);
+    note(request, 'admin', `ESPN cookies updated (${[espnS2 && 'espn_s2', swid && 'SWID'].filter(Boolean).join(' and ')})`, { page: 'config' });
     return json({
       ok: true, config: describeConfig(saved), tools: describeTools(saved),
       history: jobStatus(await readJob(env)),
@@ -865,7 +995,12 @@ async function handleAdmin(request, env, cfg, path) {
       patch.adminPasswordHash = await hashPassword(ap);
     }
     if (!Object.keys(patch).length) return json({ ok: false, error: 'Enter at least one new password.' }, 400);
+    patch.stamps = {};
+    if (lp) patch.stamps.leaguePassword = stamp();
+    if (ap) patch.stamps.adminPassword = stamp();
     await saveConfig(env, patch);
+    if (lp) note(request, 'admin', 'League Password changed', { page: 'config' });
+    if (ap) note(request, 'admin', 'Admin Password changed', { page: 'config' });
     return json({ ok: true });
   }
 
@@ -875,6 +1010,7 @@ async function handleAdmin(request, env, cfg, path) {
     const action = String(body.action || '');
     if (!['enable', 'disable', 'check', 'rebuild'].includes(action)) return json({ ok: false, error: 'unknown action' }, 400);
     if (action === 'enable' || action === 'disable') await saveConfig(env, { fortuneTeller: { enabled: action === 'enable', changedAt: new Date().toISOString() } });
+    note(request, 'admin', { enable: 'Fortune Teller switched on', disable: 'Fortune Teller switched off', check: 'Fortune Teller checked by hand', rebuild: 'Fortune Teller rebuild asked for' }[action], { page: 'fortune-teller' });
     let pipeline = null;
     if (env.FORTUNE) {
       const stub = env.FORTUNE.get(env.FORTUNE.idFromName('fortune-teller'));
@@ -902,23 +1038,51 @@ async function handleAdmin(request, env, cfg, path) {
       // Only what differs from the shipped default is kept.
       if (Math.abs(snapped - row.w) > 1e-9) next[row.id] = snapped;
     }
-    const saved = await saveConfig(env, { tradeWeights: next });
+    const saved = await saveConfig(env, { tradeWeights: next, stamps: { tradeWeights: stamp() } });
+    const moved = Object.keys(next).length;
+    note(request, 'admin', `Trade weighting changed: ${moved} of ${TRADE_ROWS.length} rows away from the default`, { page: 'trade-analyzer' });
     return json({ ok: true, tradeWeights: saved.tradeWeights || {} });
   }
 
   if (path === '/api/admin/tool-visibility') {
     const result = applyVisibility(cfg, body.tool, body.visibility);
     if (!result.ok) return json({ ok: false, error: result.error }, 400);
-    const saved = await saveConfig(env, { toolVisibility: result.toolVisibility });
+    const saved = await saveConfig(env, { toolVisibility: result.toolVisibility, stamps: { toolVisibility: { [body.tool]: stamp() } } });
+    const t = TOOLS.find((x) => x.key === body.tool);
+    note(request, 'admin', `Tool visibility changed: ${t ? t.name : body.tool} → ${body.visibility === 'admin' ? 'admin-only' : body.visibility}`, { page: body.tool });
     return json({ ok: true, tools: describeTools(saved) });
   }
 
+  if (path === '/api/admin/tool-order') {
+    // The home page's tile order. A full list of the tiles, each once; `reset` returns to the default.
+    let next = null;
+    if (!body.reset) {
+      const order = Array.isArray(body.order) ? body.order : null;
+      const known = new Set(defaultTileOrder());
+      if (!order || !order.length || order.some((k) => !known.has(k)) || new Set(order).size !== order.length) {
+        return json({ ok: false, error: 'Send each tile once, by its key.' }, 400);
+      }
+      next = normaliseTileOrder(order);
+      // An order that matches the default is stored as the default, so later tools keep their shipped place.
+      if (next.join() === defaultTileOrder().join()) next = null;
+    }
+    const saved = await saveConfig(env, { toolOrder: next, stamps: { toolOrder: stamp() } });
+    note(request, 'admin', next ? 'Home page tool order changed' : 'Home page tool order reset to the default', { page: 'config' });
+    return json({ ok: true, order: describeTileOrder(saved) });
+  }
+
   if (path === '/api/admin/history-batch') {
-    return json(await runBatch(env, cfg, { restart: Boolean(body.restart) }));
+    if (body.restart) note(request, 'admin', 'Box-score history re-pull started', { page: 'config' });
+    const out = await runBatch(env, cfg, { restart: Boolean(body.restart) });
+    if (out && out.complete && !body.restart) note(request, 'admin', 'Box-score history re-pull finished', { page: 'config' });
+    return json(out);
   }
 
   if (path === '/api/admin/prime-batch') {
-    return json(await runPrimeBatch(env, cfg, { restart: Boolean(body.restart) }));
+    if (body.restart) note(request, 'admin', 'League data re-pull started', { page: 'config' });
+    const out = await runPrimeBatch(env, cfg, { restart: Boolean(body.restart) });
+    if (out && out.complete && !body.restart) note(request, 'admin', `League data re-pull finished${out.failures && out.failures.length ? ` with ${out.failures.length} failures` : ''}`, { page: 'config' });
+    return json(out);
   }
 
   return json({ ok: false, error: `no admin route for ${path}` }, 404);
@@ -979,7 +1143,7 @@ export async function liveWeekPayload(env, cfg, asked, ctx) {
     // Written for whoever is looking at it: the cause is almost always that
     // the league pull has not run on this site yet.
     return reply({ ok: false, error: 'League data has not been pulled yet, so there is nothing to show. '
-      + 'Whoever runs the league can start it from Site Configuration.' }, 503);
+      + 'Whoever administers this site can start it from Site Configuration.' }, 503);
   }
 
   const currentWeek = Number(live.matchupPeriod || 1);
@@ -1122,7 +1286,8 @@ async function llmExportRoute(env, ctx, wantFresh = false) {
    * When a file is being handed over, this week's scoring — the only thing
    * that moves minute to minute — is laid over the stored copy instead, which
    * costs a moment. */
-  const digest = await llmExportDigest(env, ctx);
+  // A copy or download waits for a stale export's rebuild; a page load is answered at once and rebuilds behind.
+  const digest = await llmExportDigest(env, wantFresh ? null : ctx);
   const sim = await simOdds(env);
   if (!wantFresh || !digest) return json(llmExportPayload(digest, sim));
   const obj = await ensureDataset(env, 'live_scoring_digest', ctx);
@@ -1194,23 +1359,24 @@ async function liveTimeline(env, url, ctx) {
  * freshness window — the page would feel broken while it waited. Only a
  * complete cache miss blocks, since there is nothing to show otherwise.
  */
-async function serveDataset(env, cfg, key, part, url, ctx) {
+async function serveDataset(env, cfg, key, part, url, ctx, request = null) {
   const dataset = getDataset(key);
   if (!dataset) return json({ ok: false, error: `unknown dataset "${key}"` }, 404);
 
   const known = new Set(dataset.parts(cfg).map((p) => p.part));
   if (!known.has(part)) {
-    return json({ ok: false, error: `unknown part "${part}"`, validParts: [...known].slice(0, 50) }, 404);
+    return json({ ok: false, error: `unknown part "${part}"` }, 404);
   }
 
-  const force = url.searchParams.get('force') === '1';
+  // A member cannot force a refresh: that would put ESPN one request away from anyone
+  // with the League Password. Freshness is the dataset's own interval; forcing is for dev.
   let head = await headPart(env, key, part);
   let refreshed = null;
   let revalidating = false;
 
-  if (!head || force) {
-    // Nothing cached (or an explicit force): this one has to wait.
-    refreshed = await coordinatorRefresh(env, key, force);
+  if (!head) {
+    // Nothing cached: this one has to wait.
+    refreshed = await coordinatorRefresh(env, key, false);
     head = await headPart(env, key, part);
   } else if (!isFresh(head.uploaded, dataset.ttl)) {
     // Stale but present: answer now, refresh behind the response.
@@ -1221,7 +1387,13 @@ async function serveDataset(env, cfg, key, part, url, ctx) {
   }
 
   if (!head) {
-    return json({ ok: false, error: 'dataset unavailable and no cached copy exists', refresh: refreshed }, 502);
+    return json({ ok: false, error: 'dataset unavailable and no cached copy exists', refresh: refreshed ? { ok: Boolean(refreshed.ok) } : null }, 502);
+  }
+
+  // A poll that already holds this copy is told so, with no body: one R2 head, no transfer.
+  const held = request && request.headers.get('if-none-match');
+  if (held && head.httpEtag && held === head.httpEtag) {
+    return new Response(null, { status: 304, headers: { etag: head.httpEtag, 'cache-control': 'no-store', 'x-dataset': key } });
   }
 
   const obj = await getPart(env, key, part);
@@ -1659,6 +1831,7 @@ async function serveImage(request, url, ctx) {
   const cache = edgeCache();
   const cacheKey = new Request(new URL(request.url).toString(), { method: 'GET' });
   const hit = cache ? await cache.match(cacheKey) : null;
+  if (cache) countOp(hit ? 'cacheHit' : 'cacheMiss');
   if (hit) return hit;
 
   try {
@@ -1733,6 +1906,7 @@ async function serveTeamLogo(env, request, url, ctx, rawId) {
   const cache = edgeCache();
   const cacheKey = new Request(new URL(request.url).toString(), { method: 'GET' });
   const hit = cache ? await cache.match(cacheKey) : null;
+  if (cache) countOp(hit ? 'cacheHit' : 'cacheMiss');
   if (hit) return hit;
 
   let obj = null;

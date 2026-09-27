@@ -17,6 +17,8 @@
 
 
 import { TRADE_ROWS, TRADE_GROUPS } from "../../src/traderows.js";
+import { ENGINE_VERSION, MIN_GAP, MIN_SCALE, BALANCE_HELP_BAND, BALANCE_SUGGESTIONS, OFFER_SOON_HOURS,
+  BENCH_DISCOUNT, LOPSIDED_RATIO, ODDS_VP, TITLE_VP, PLACE_VP, INJ_RATE, SIGMA_POS, PLAY_PROB, REPLACEMENT, BANDS } from "./constants.js";
 
 /**
  * Builds an evaluator bound to one digest.
@@ -30,25 +32,11 @@ import { TRADE_ROWS, TRADE_GROUPS } from "../../src/traderows.js";
 export function createEngine(digest, ADMIN) {
   const DATA = adaptDigest(digest);
 
-/* The evaluator's own version, reported in Details. Bumped when the row set,
-   the attribution order or a default weight changes — a saved analysis link is
-   only reproducible against the engine that produced it. */
-const ENGINE_VERSION = "ta-1";
 
 /* --- model constants (from §13 of the plan) ------------------------------ */
-const MIN_GAP = 4.0;
-const MIN_SCALE = 10.0;
-const BALANCE_HELP_BAND = 0.25;
-const BALANCE_SUGGESTIONS = 3;
-const OFFER_SOON_HOURS = 6;
-const BENCH_DISCOUNT = 0.30;
-const LOPSIDED_RATIO = 2.5;
 
 /* Value-point conversions for this sample. One value point is roughly one
    projected fantasy point per remaining week. */
-const ODDS_VP = 55;
-const TITLE_VP = 90;
-const PLACE_VP = 26;
 
 /* The starting lineup, read from the league's own settings rather than assumed.
    FLEX resolves last against whatever the dedicated slots did not take, which
@@ -77,15 +65,11 @@ const POS_LIMIT = (() => {
   return max;
 })();
 
-const INJ_RATE = { QB: 0.07, RB: 0.14, WR: 0.09, TE: 0.09, K: 0.02, "D/ST": 0.02 };
-const SIGMA_POS = { QB: 6, RB: 7, WR: 8, TE: 6, K: 4, "D/ST": 6 };
-const PLAY_PROB = { ACTIVE: 1, NORMAL: 1, QUESTIONABLE: 0.75, DOUBTFUL: 0.35, OUT: 0, INJURY_RESERVE: 0 };
 /* Season-scale projection of what is freely available on waivers at each
    position. A slot a trade leaves empty is filled from here, not left at zero:
    trading away your only kicker costs the difference against a streamer, not
    that kicker's whole projection. Kickers and defences sit close to the
    rostered ones, which is the same fact R18 prices. */
-const REPLACEMENT = { QB: 205, RB: 95, WR: 100, TE: 85, K: 132, "D/ST": 98 };
 
 const WEEKS_LEFT = DATA.league.finalSP - DATA.league.sp + 1;
 
@@ -95,13 +79,6 @@ const WEEKS_LEFT = DATA.league.finalSP - DATA.league.sp + 1;
 const ROWS = TRADE_ROWS;
 const GROUPS = TRADE_GROUPS;
 
-const BANDS = [
-  { max: 0.10, key: "even", label: "Even" },
-  { max: 0.25, key: "slight", label: "Slightly leans" },
-  { max: 0.45, key: "leans", label: "Leans" },
-  { max: 0.75, key: "favors", label: "Favors" },
-  { max: Infinity, key: "heavy", label: "Heavily favors" },
-];
 
 /* --- small helpers -------------------------------------------------------- */
 const teamById = (id) => DATA.teams.find((t) => t.id === id);
@@ -383,7 +360,8 @@ function analyzeTrade(trade) {
       const dS = memo.R1 + memo.R2;
       const after = Math.max(0, Math.min(1, P + ODDS.slope(S) * dS));
       memo._p = { before: P, after };
-      return { v: (after - P) * ODDS_VP, raw: (P * 100).toFixed(1) + "% \u2192 " + (after * 100).toFixed(1) + "%" };
+      const p1 = (x) => (Math.round(x * 1000 + 1e-6) / 10).toFixed(1) + "%";
+      return { v: (after - P) * ODDS_VP, raw: p1(P) + " \u2192 " + p1(after) };
     },
     R20: (c, memo) => { const p = memo._p || { before: 0, after: 0 };
       const rd = (q) => q * 0.5; const t = (q) => q * rd(q) * rd(q);

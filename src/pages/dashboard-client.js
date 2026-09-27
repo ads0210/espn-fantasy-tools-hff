@@ -390,6 +390,11 @@ function stMedal(rank) {
 /* After the regular season every team is in or out: its final seed decides, not ESPN's last figure. */
 function stFinal(r) { var f = stSim && stSim.final; return f && f.seasonOver && f.inByTeam && f.inByTeam[r.teamId] != null ? (f.inByTeam[r.teamId] ? 1 : 0) : null; }
 
+/* One rounding for a percentage everywhere on the site: half up, at one decimal. Multiplying and
+   then calling toFixed rounds whatever the float happens to hold, so 0.3815 read 38.1% here and
+   38.2% on Fortune Teller. The same rule lives in Fortune Teller's pct() and Site Backend's. */
+function pct1(x) { return (Math.round(x * 1000 + 1e-6) / 10).toFixed(1) + '%'; }
+
 function stOdds(r) {
   var fin = stFinal(r);
   if (fin != null) return fin ? '<span class="stflag in">Clinched</span>' : '<span class="stflag out">Eliminated</span>';
@@ -398,7 +403,7 @@ function stOdds(r) {
      "100%" invites a reader to wonder what the other nothing per cent is. */
   if (r.playoffPct >= 0.9995) return '<span class="stflag in">Clinched</span>';
   if (r.playoffPct <= 0.0005) return '<span class="stflag out">Eliminated</span>';
-  return '<span class="stpct">' + (r.playoffPct * 100).toFixed(1) + '%</span>';
+  return '<span class="stpct">' + pct1(r.playoffPct) + '</span>';
 }
 
 /* Sim %: the same markers as Playoff % at the extremes; before the simulation has run, the
@@ -408,7 +413,7 @@ function stSimCell(r) {
   if (v == null) return '<span class="dim">&mdash;</span>';
   var cell = v >= 0.9995 ? '<span class="stflag in">Clinched</span>'
     : v <= 0.0005 ? '<span class="stflag out">Eliminated</span>'
-    : '<span class="stpct">' + (v * 100).toFixed(1) + '%</span>';
+    : '<span class="stpct">' + pct1(v) + '</span>';
   return s.state === 'updating' ? '<span class="stupd" title="Updating for the week just played">' + cell + '</span>' : cell;
 }
 

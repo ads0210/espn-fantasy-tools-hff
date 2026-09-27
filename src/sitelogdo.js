@@ -1,0 +1,537 @@
+/**
+ * SiteLogDO: the site's activity log, one SQLite-backed object per season.
+ *
+ * Four tables: events (who did what, and changes of state), hours (counters per
+ * hour: traffic, calls, member settings, cron ticks, dataset tallies), reports
+ * (one status line per subsystem per hour) and meta (schema, the daily budget
+ * meter, the state that change detection compares against, the storage census).
+ *
+ * It writes only to its own storage. Everything it reads elsewhere (R2, KV,
+ * other objects) is read as stored, through src/sitebackend.js, which imports no
+ * write or refresh function.
+ *
+ * Budget: 10% of the Durable Object free allowance per UTC day, 10,000 requests
+ * and 10,000 rows written, metered here. At the ceiling, counters, ticks and
+ * status reports pause until 00:00 UTC; sign-ins, admin actions, visits,
+ * operations and changes of state are still recorded.
+ *
+ * Rows read are a daily free limit too, shared with the whole account, so the
+ * last eight days of events are kept in memory and a poll's counts are answered
+ * there rather than by scanning the table each time.
+ */
+
+import { assembleTab, hourlyReports, runCensus, datasetDetail } from './sitebackend.js';
+import { LOG_BUDGET_REF, GUARD_BYTES } from './sblimits.js';
+import { meteredEnv } from './sitelog.js';
+import { BYTE_BUDGET } from './scoretimeline.js';
+
+export const LOG_BUDGET = LOG_BUDGET_REF;
+export { GUARD_BYTES };
+const CLIENT_EVENTS_PER_MINUTE = 60;
+const CENSUS_EVERY_MS = 10 * 60 * 1000;
+const MAX_MS_SAMPLES = 64;
+const RECENT_MS = 8 * 86400000;
+const METER_SAVE_MS = 5 * 60 * 1000;
+const SCHEMA = 1;
+
+const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
+const hourOf = (ms) => Math.floor(ms / 3600000) * 3600000;
+const minuteOf = (ms) => Math.floor(ms / 60000) * 60000;
+
+function json(body, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
+}
+
+function pushSample(list, v) {
+  if (list.length < MAX_MS_SAMPLES) list.push(v);
+  else list[Math.floor(Math.random() * MAX_MS_SAMPLES)] = v;
+}
+
+/** Add one hour's counts into another, in place. */
+export function mergeCounts(into, add) {
+  if (!add) return into;
+  for (const [k, r] of Object.entries(add.req || {})) {
+    const t = (into.req = into.req || {})[k] || (into.req[k] = { n: 0, e: 0, c4: 0, ms: [], mx: 0 });
+    t.n += r.n || 0; t.e += r.e || 0; t.c4 += r.c4 || 0;
+    if (r.nm) t.nm = (t.nm || 0) + r.nm;
+    for (const v of r.ms || []) pushSample(t.ms, v);
+    if ((r.mx || 0) > t.mx) t.mx = r.mx;
+  }
+  for (const [k, v] of Object.entries(add.ops || {})) (into.ops = into.ops || {})[k] = (into.ops[k] || 0) + v;
+  for (const [route, mins] of Object.entries(add.poll || {})) {
+    const p = (into.poll = into.poll || {})[route] || (into.poll[route] = {});
+    for (const [m, n] of Object.entries(mins)) p[m] = (p[m] || 0) + n;
+  }
+  for (const [group, vals] of Object.entries(add.settings || {})) {
+    const g = (into.settings = into.settings || {})[group] || (into.settings[group] = {});
+    for (const [k, n] of Object.entries(vals)) g[k] = (g[k] || 0) + n;
+  }
+  into.exc = (into.exc || 0) + (add.exc || 0);
+  return into;
+}
+
+/** A dataset coordinator's tally merged into the hour. */
+export function mergeTally(into, key, t) {
+  const ds = (into.ds = into.ds || {});
+  const d = ds[key] || (ds[key] = { req: 0, sweeps: 0, coalesced: 0, fetched: 0, failed: 0, bytes: 0, ms: 0 });
+  for (const f of ['req', 'sweeps', 'coalesced', 'fetched', 'failed', 'bytes', 'ms']) d[f] += t[f] || 0;
+  for (const [host, h] of Object.entries(t.hosts || {})) {
+    const hs = (into.hosts = into.hosts || {});
+    const x = hs[host] || (hs[host] = { n: 0, f: 0, ms: [], fb: 0, last: null });
+    x.n += h.n || 0; x.f += h.f || 0; x.fb += h.fb || 0;
+    if (h.last && (!x.last || h.last.at >= x.last.at)) x.last = h.last;
+    for (const v of h.ms || []) pushSample(x.ms, v);
+  }
+  for (const [k, n] of Object.entries(t.ops || {})) (into.dsOps = into.dsOps || {})[k] = (into.dsOps[k] || 0) + n;
+  return into;
+}
+
+/** What a tick stores per minute: the jobs' summaries without any bulky results. */
+function tickSummary(jobs) {
+  const out = {};
+  for (const [k, v] of Object.entries(jobs || {})) {
+    if (!v || typeof v !== 'object') { out[k] = v; continue; }
+    const { result, ...rest } = v;
+    void result;
+    out[k] = rest;
+  }
+  return out;
+}
+
+export class SiteLogDO {
+  constructor(state, env) {
+    this.state = state;
+    this.sql = state.storage.sql;
+    this.rawEnv = env;
+    this.opsPending = {};
+    // Reads this object makes elsewhere (R2 lists, KV, other objects) count toward the site's usage like any other.
+    this.env = meteredEnv(env, (k) => { this.opsPending[k] = (this.opsPending[k] || 0) + 1; });
+    this.meter = null;
+    this.meterSavedAt = 0;
+    this.client = { minute: 0, n: 0 };
+    this.cache = new Map();
+    this.ready = false;
+    this.recentWin = null;
+    this.kinds = null;
+    this.kindsDirty = false;
+    this.lastTick = undefined;
+  }
+
+  // ---------------------------------------------------------------- storage
+
+  run(query, ...binds) {
+    const cur = this.sql.exec(query, ...binds);
+    const rows = cur.toArray();
+    this.count(cur.rowsWritten || 0, cur.rowsRead || 0);
+    return rows;
+  }
+
+  one(query, ...binds) { return this.run(query, ...binds)[0] || null; }
+
+  count(written, read) {
+    const m = this.meterNow();
+    m.rows += written; m.read += read;
+  }
+
+  hasTables() {
+    try { return Boolean(this.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'events'").toArray()[0]); } catch { return false; }
+  }
+
+  init() {
+    if (this.ready) return;
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+      CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, kind TEXT NOT NULL,
+        sev TEXT, text TEXT, page TEXT, team INTEGER, n INTEGER NOT NULL DEFAULT 1);
+      CREATE INDEX IF NOT EXISTS events_at ON events(at);
+      CREATE INDEX IF NOT EXISTS events_page ON events(page, id);
+      CREATE TABLE IF NOT EXISTS hours (hour INTEGER PRIMARY KEY, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, hour INTEGER NOT NULL, sub TEXT, sev TEXT, text TEXT);
+      CREATE INDEX IF NOT EXISTS reports_hour ON reports(hour);`);
+    const m = this.sql.exec("SELECT v FROM meta WHERE k = 'meter'").toArray()[0];
+    try { this.meter = m ? JSON.parse(m.v) : null; } catch { this.meter = null; }
+    if (!this.sql.exec("SELECT v FROM meta WHERE k = 'schema'").toArray()[0]) {
+      this.sql.exec("INSERT INTO meta (k, v) VALUES ('schema', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", String(SCHEMA));
+    }
+    this.ready = true;
+  }
+
+  getMeta(k, fallback = null) {
+    const r = this.one('SELECT v FROM meta WHERE k = ?', k);
+    if (!r) return fallback;
+    try { return JSON.parse(r.v); } catch { return fallback; }
+  }
+
+  setMeta(k, v) { this.run('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', k, JSON.stringify(v)); }
+
+  meterNow(now = Date.now()) {
+    const day = dayOf(now);
+    if (!this.meter || this.meter.day !== day) {
+      const prev = this.meter;
+      this.meter = { day, req: 0, rows: 0, read: 0, reached: false };
+      this.meterSavedAt = 0;
+      if (prev && prev.day && this.ready) this.pushDaily(prev);
+    }
+    return this.meter;
+  }
+
+  /** Yesterday's meter joins a short history for the usage panels. */
+  pushDaily(prev) {
+    try {
+      const hist = (this.getMeta('daily', []) || []).filter((x) => x.day !== prev.day);
+      hist.push({ day: prev.day, req: prev.req, rows: prev.rows, read: prev.read });
+      this.setMeta('daily', hist.slice(-40));
+    } catch { /* a missing history point is harmless */ }
+  }
+
+  paused() {
+    const m = this.meterNow();
+    return m.req >= LOG_BUDGET.requests || m.rows >= LOG_BUDGET.rows;
+  }
+
+  /**
+   * The meter and the per-kind totals are saved together, at most every five
+   * minutes: an object evicted in between forgets a few minutes of its own count,
+   * which costs far less than a row written on every request.
+   */
+  saveMeter(force = false) {
+    const m = this.meterNow();
+    const now = Date.now();
+    if (!force && !this.kindsDirty && now - this.meterSavedAt < METER_SAVE_MS) return;
+    this.sql.exec("INSERT INTO meta (k, v) VALUES ('meter', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(m));
+    m.rows += 1;
+    if (this.kindsDirty && this.kinds) {
+      this.sql.exec("INSERT INTO meta (k, v) VALUES ('kinds', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", JSON.stringify(this.kinds));
+      m.rows += 1;
+      this.kindsDirty = false;
+    }
+    this.meterSavedAt = now;
+  }
+
+  transaction(fn) {
+    const t = this.state.storage.transactionSync;
+    if (typeof t === 'function') return t.call(this.state.storage, fn);
+    return fn();
+  }
+
+  size() {
+    try { return Number(this.sql.databaseSize) || 0; } catch { return 0; }
+  }
+
+  // ---------------------------------------------------------------- the in-memory window
+
+  /** The last eight days of events, oldest first; loaded once, then kept in step with every insert. */
+  recent() {
+    const from = Date.now() - RECENT_MS;
+    if (!this.recentWin) {
+      const rows = this.run('SELECT id, at, kind, sev, text, page, team, n FROM events WHERE at >= ? ORDER BY id', from);
+      const oldest = this.one('SELECT MIN(at) AS at FROM events');
+      this.recentWin = { from, rows, complete: !oldest || oldest.at == null || oldest.at >= from };
+    } else if (from - this.recentWin.from > 3600000) {
+      const rows = this.recentWin.rows;
+      let i = 0;
+      while (i < rows.length && rows[i].at < from) i++;
+      this.recentWin = { from, rows: i ? rows.slice(i) : rows, complete: this.recentWin.complete && i === 0 };
+    }
+    return this.recentWin;
+  }
+
+  loadKinds() {
+    if (this.kinds) return this.kinds;
+    const k = this.getMeta('kinds', null);
+    if (k) this.kinds = k;
+    else {
+      this.kinds = {};
+      for (const r of this.run('SELECT kind, SUM(n) AS n FROM events GROUP BY kind')) this.kinds[r.kind] = r.n;
+      this.kindsDirty = true;
+    }
+    return this.kinds;
+  }
+
+  // ---------------------------------------------------------------- intake
+
+  insertEvent(e) {
+    const at = Number(e.at) || Date.now();
+    const team = e.team == null ? null : Number(e.team);
+    if (e.kind === 'sign-in' && e.text === 'Session lapsed') {
+      const win = this.recent();
+      const h = hourOf(at);
+      if (win.rows.some((r) => r.kind === 'sign-in' && r.text === 'Session lapsed' && r.team === team && r.at >= h)) return;
+    }
+    const row = {
+      at, kind: String(e.kind || 'change').slice(0, 20), sev: String(e.sev || 'info').slice(0, 8), text: String(e.text || '').slice(0, 160),
+      page: e.page ? String(e.page).slice(0, 40) : null, team, n: 1,
+    };
+    // Totals are loaded before the insert, so a first load from the table never counts this entry twice.
+    const kinds = this.loadKinds();
+    const r = this.one('INSERT INTO events (at, kind, sev, text, page, team) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
+      row.at, row.kind, row.sev, row.text, row.page, row.team);
+    row.id = r ? r.id : null;
+    if (this.recentWin && at >= this.recentWin.from) this.recentWin.rows.push(row);
+    kinds[row.kind] = (kinds[row.kind] || 0) + 1;
+    this.kindsDirty = true;
+  }
+
+  change(text, sev = 'info', page = null) {
+    this.insertEvent({ at: Date.now(), kind: 'change', sev, text, page, team: null });
+  }
+
+  mergeHour(hour, fn) {
+    const row = this.one('SELECT data FROM hours WHERE hour = ?', hour);
+    let data = {};
+    if (row) { try { data = JSON.parse(row.data); } catch { data = {}; } }
+    fn(data);
+    // Per-minute poll counts matter only for the last few minutes.
+    const cutoff = Date.now() - 10 * 60000;
+    for (const mins of Object.values(data.poll || {})) for (const m of Object.keys(mins)) if (Number(m) < cutoff) delete mins[m];
+    this.run('INSERT INTO hours (hour, data) VALUES (?, ?) ON CONFLICT(hour) DO UPDATE SET data = excluded.data', hour, JSON.stringify(data));
+    return data;
+  }
+
+  noteVersion(version) {
+    if (!version) return;
+    const seen = this.getMeta('version', null);
+    if (seen && seen.build === version) return;
+    this.setMeta('version', { build: version, since: new Date().toISOString(), previous: seen ? seen.build : null });
+    if (seen && seen.build) this.change(`Version ${version} answered for the first time (previously ${seen.build})`, 'ok');
+    else this.change(`Version ${version} answered for the first time`, 'ok');
+  }
+
+  checkBudget() {
+    const m = this.meterNow();
+    if (!m.reached && this.paused()) {
+      m.reached = true;
+      this.change('The log reached its daily budget: counters and status reports pause until 00:00 UTC', 'warn');
+      this.saveMeter(true);
+    }
+  }
+
+  checkErrors(hour, data) {
+    let errs = data.exc || 0;
+    for (const r of Object.values(data.req || {})) errs += r.e || 0;
+    if (errs <= 10) return;
+    const flagged = this.getMeta('errorsFlagged', 0);
+    if (flagged === hour) return;
+    this.setMeta('errorsFlagged', hour);
+    this.change(`A burst of server errors: ${errs} this hour`, 'bad');
+  }
+
+  takeOps() {
+    const ops = this.opsPending;
+    this.opsPending = {};
+    return Object.keys(ops).length ? ops : null;
+  }
+
+  ingest(body) {
+    const events = Array.isArray(body.events) ? body.events.slice(0, 300) : [];
+    const hours = Array.isArray(body.hours) ? body.hours.slice(0, 4) : [];
+    this.transaction(() => {
+      this.recent();
+      for (const e of events) this.insertEvent(e);
+      if (!this.paused()) {
+        for (const h of hours) {
+          const hour = hourOf(Number(h.hour) || Date.now());
+          const data = this.mergeHour(hour, (d) => mergeCounts(d, h.counts));
+          this.checkErrors(hour, data);
+        }
+      }
+      this.noteVersion(body.version);
+      this.checkBudget();
+      this.saveMeter();
+    });
+    return { ok: true, events: events.length };
+  }
+
+  tally(body) {
+    const t = body && body.tally;
+    if (!t || !body.key) return { ok: false };
+    this.transaction(() => {
+      if (!this.paused()) this.mergeHour(hourOf(Number(t.hour) || Date.now()), (d) => mergeTally(d, String(body.key), t));
+      this.checkBudget();
+      this.saveMeter();
+    });
+    return { ok: true };
+  }
+
+  /** The last tick, from memory, or from the newest hour row after a restart. */
+  lastTickMinute() {
+    if (this.lastTick !== undefined) return this.lastTick;
+    let last = null;
+    for (const r of this.run('SELECT data FROM hours ORDER BY hour DESC LIMIT 2')) {
+      try { for (const m of Object.keys(JSON.parse(r.data).ticks || {})) if (last == null || Number(m) > last) last = Number(m); } catch { /* skip */ }
+      if (last != null) break;
+    }
+    this.lastTick = last;
+    return last;
+  }
+
+  /** The cron's tick: its summary, its isolate's counters, change detection, and once an hour, the reports. */
+  async tick(body) {
+    const t = (body && body.tick) || {};
+    const at = Number(t.at) || Date.now();
+    const minute = minuteOf(at);
+    const hour = hourOf(at);
+    let reportHour = null;
+    this.transaction(() => {
+      this.recent();
+      for (const e of (body.events || []).slice(0, 300)) this.insertEvent(e);
+      const last = this.lastTickMinute();
+      if (last != null && minute - last >= 3 * 60000) {
+        const gap = Math.round((minute - last) / 60000) - 1;
+        this.change(`Cron resumed after ${gap} minutes without a tick`, 'warn');
+      }
+      if (last == null && !this.getMeta('firstTick', null)) this.setMeta('firstTick', minute);
+      this.lastTick = Math.max(minute, last || 0);
+      if (!this.paused()) {
+        const ops = this.takeOps();
+        this.mergeHour(hour, (d) => {
+          for (const h of body.hours || []) if (hourOf(Number(h.hour)) === hour) mergeCounts(d, h.counts);
+          if (ops) mergeCounts(d, { ops });
+          (d.ticks = d.ticks || {})[minute] = tickSummary(t.jobs);
+        });
+        for (const h of body.hours || []) {
+          if (hourOf(Number(h.hour)) !== hour) this.mergeHour(hourOf(Number(h.hour)), (d) => mergeCounts(d, h.counts));
+        }
+      }
+      this.noteLogos(t.jobs && t.jobs.logos);
+      this.noteTimeline(t.jobs && t.jobs.timeline);
+      this.noteVersion(body.version);
+      const lastReport = this.getMeta('lastReportHour', null);
+      if (lastReport == null) this.setMeta('lastReportHour', hour);
+      else if (hour > lastReport) { reportHour = hour - 3600000; this.setMeta('lastReportHour', hour); }
+      this.checkBudget();
+      this.saveMeter();
+    });
+    // Outside the transaction: these read other stores.
+    const census = this.getMeta('census', null);
+    if (!census || at - Date.parse(census.at) >= CENSUS_EVERY_MS) {
+      try {
+        const c = await runCensus(this.env);
+        this.transaction(() => { this.setMeta('census', c); this.saveMeter(); });
+      } catch { /* the next tick tries again */ }
+    }
+    if (reportHour != null && !this.paused()) {
+      try {
+        const { lines, meta } = await hourlyReports(this.deps(), reportHour);
+        this.transaction(() => {
+          for (const l of lines) this.run('INSERT INTO reports (hour, sub, sev, text) VALUES (?, ?, ?, ?)', reportHour, l.sub, l.sev, l.text);
+          for (const [k, v] of Object.entries(meta || {})) this.setMeta(k, v);
+          this.guard();
+          this.saveMeter(true);
+        });
+      } catch { /* a missed report is shown as missing, never invented */ }
+    }
+    return { ok: true };
+  }
+
+  /** Logo fetches that start or stop failing, from the logo pass the cron ran. */
+  noteLogos(logos) {
+    const res = logos && logos.result;
+    if (!res || !Array.isArray(res.teams)) return;
+    const was = this.getMeta('logoState', {}) || {};
+    const now = {};
+    for (const t of res.teams) {
+      const k = String(t.teamId);
+      now[k] = t.state === 'failed' ? 'failed' : 'ok';
+      const name = t.name || `Team ${t.teamId}`;
+      if (now[k] === 'failed' && was[k] !== 'failed') this.change(`Logo for ${name} failing to fetch${t.status ? ` (${t.status})` : ''}`, 'warn', 'home');
+      else if (now[k] === 'ok' && was[k] === 'failed') this.change(`Logo for ${name} fetching again`, 'ok', 'home');
+      else if (t.state === 'stored' && was[k] !== undefined) this.change(`Logo for ${name} changed`, 'info', 'home');
+    }
+    if (JSON.stringify(now) !== JSON.stringify(was)) this.setMeta('logoState', now);
+  }
+
+  /** A week's score timeline passing 80% of its byte budget, once per week. */
+  noteTimeline(tl) {
+    if (!tl || !tl.bytes || tl.bytes <= BYTE_BUDGET * 0.8) return;
+    const k = `${tl.season}:${tl.week}`;
+    if (this.getMeta('tl80', null) === k) return;
+    this.setMeta('tl80', k);
+    this.change(`Week ${tl.week}'s score timeline passed 80% of its byte budget (${Math.round((tl.bytes / BYTE_BUDGET) * 100)}%)`, 'warn', 'live-matchups');
+  }
+
+  /**
+   * The storage guard: past 750 MB, the oldest day of visits is condensed into one
+   * row per page and team. Sign-in, admin, operation and status entries are never touched.
+   */
+  guard(sizeOverride = null) {
+    const size = sizeOverride != null ? sizeOverride : this.size();
+    if (size < GUARD_BYTES) return false;
+    const oldest = this.one("SELECT MIN(at) AS at FROM events WHERE kind = 'visit' AND n = 1 AND at < ?", Date.now() - 7 * 86400000);
+    if (!oldest || oldest.at == null) return false;
+    const d0 = Math.floor(oldest.at / 86400000) * 86400000, d1 = d0 + 86400000;
+    const top = this.one('SELECT MAX(id) AS id FROM events').id;
+    this.run(`INSERT INTO events (at, kind, sev, text, page, team, n)
+      SELECT MIN(at), 'visit', 'info', text, page, team, COUNT(*) FROM events
+      WHERE kind = 'visit' AND n = 1 AND at >= ? AND at < ? GROUP BY text, page, team`, d0, d1);
+    this.run("DELETE FROM events WHERE kind = 'visit' AND n = 1 AND at >= ? AND at < ? AND id <= ?", d0, d1, top);
+    this.setMeta('condensedThrough', d1);
+    this.recentWin = null;
+    this.change(`The log passed 750 MB: visits on ${new Date(d0).toISOString().slice(0, 10)} were condensed into daily summaries`, 'warn');
+    return true;
+  }
+
+  /** An event sent from the browser: allow-listed by the Worker, at most 60 a minute site-wide. */
+  clientEvent(body) {
+    const now = Date.now(), m = minuteOf(now);
+    if (this.client.minute !== m) this.client = { minute: m, n: 0 };
+    this.client.n += 1;
+    if (this.client.n > CLIENT_EVENTS_PER_MINUTE) {
+      this.transaction(() => {
+        const over = this.getMeta('clientOver', 0);
+        this.setMeta('clientOver', over + 1);
+      });
+      return { ok: true, counted: false };
+    }
+    this.transaction(() => {
+      this.recent();
+      this.insertEvent({ at: now, kind: 'operation', sev: 'info', text: body.text, page: body.page, team: body.team });
+      this.saveMeter();
+    });
+    return { ok: true, counted: true };
+  }
+
+  // ---------------------------------------------------------------- reads
+
+  /** Read-only helpers handed to the payload assembly. */
+  deps(facts = {}) {
+    return {
+      env: this.env,
+      facts,
+      cache: this.cache,
+      q: (query, ...b) => this.run(query, ...b),
+      meta: (k, f) => (k === 'kinds' ? { ...this.loadKinds() } : this.getMeta(k, f)),
+      meter: () => ({ ...this.meterNow(), budget: LOG_BUDGET, paused: this.paused() }),
+      size: () => this.size(),
+      recent: () => this.recent(),
+    };
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    try {
+      const body = request.method === 'POST' ? await request.json().catch(() => ({})) : {};
+      // A past season that never recorded anything is answered without creating a store for it.
+      if (!this.ready && ['/tab', '/meta', '/dataset'].includes(url.pathname) && !this.hasTables()) {
+        return json(url.pathname === '/tab' ? { ok: true, empty: true } : { ok: true, events: 0 });
+      }
+      this.init();
+      this.meterNow().req += 1;
+      switch (url.pathname) {
+        case '/ingest': return json(this.ingest(body));
+        case '/tally': return json(this.tally(body));
+        case '/tick': return json(await this.tick(body));
+        case '/client': return json(this.clientEvent(body));
+        case '/tab': return json(await assembleTab(this.deps(body.facts || {}), body.params || {}));
+        case '/dataset': return json(await datasetDetail(this.deps(body.facts || {}), body.key || url.searchParams.get('key')));
+        case '/meta': {
+          const r = this.one('SELECT MAX(id) AS n, MIN(at) AS first, MAX(at) AS last FROM events');
+          return json({ ok: true, events: r.n || 0, first: r.first, last: r.last, size: this.size(), meter: this.meterNow() });
+        }
+        default: return json({ ok: false, error: 'unknown log route' }, 404);
+      }
+    } catch (err) {
+      return json({ ok: false, error: String((err && err.message) || err) }, 500);
+    }
+  }
+}

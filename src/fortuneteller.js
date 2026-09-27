@@ -135,6 +135,8 @@ export async function previewData(env) {
   const ls = sched && settings ? leagueState(sched, settings) : null, seasonOver = !!(ls && ls.seasonOver);
   return {
     leagueName: (settings && settings.settings && settings.settings.name) || null,
+    // When the standings were built, so a page answered with an old copy can ask again for the rebuilt one.
+    standingsAt: (st && st.generatedAt) || null,
     places, seasonOver, weeksPlayed: rows.reduce((a, r) => Math.max(a, (r.wins || 0) + (r.losses || 0) + (r.ties || 0)), 0),
     consolation: !sch.consolationLadderDisabled, started: Boolean(st && st.started),
     teams: rows.slice().sort((a, b) => (a.rank || 99) - (b.rank || 99)).map((r) => ({

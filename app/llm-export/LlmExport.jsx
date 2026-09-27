@@ -6,8 +6,10 @@ import TeamSelect from "../shared/TeamSelect.jsx";
 import Instructions from "../shared/Instructions.jsx";
 import { attachVScroll } from "../../src/vscroll.js";
 import { applyMyTeam } from "./myteam.js";
+import { logEvent } from "../shared/sitelog.js";
 import { compactExport } from "./compact.js";
 import { buildPrompt } from "./prompt.js";
+import { freshenWhenStale } from "../shared/freshen.js";
 import {
   formatExport, lineHtml, lineDiff, sectionMap, formatBytes, downloadName,
 } from "./format.js";
@@ -453,12 +455,13 @@ function contentsOf(version, doc) {
 }
 
 /** A copy button whose label says what just happened, then settles back. */
-function CopyButton({ label, getText, className = "" }) {
+function CopyButton({ label, getText, className = "", onCopied = null }) {
   const [state, setState] = useState("idle");
   const timer = useRef(0);
   useEffect(() => () => clearTimeout(timer.current), []);
   const onClick = async () => {
     const ok = await copyText(await getText());
+    if (ok && onCopied) onCopied();
     setState(ok ? "done" : "fail");
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setState("idle"), 1800);
@@ -472,11 +475,20 @@ function CopyButton({ label, getText, className = "" }) {
   );
 }
 
+/* The export's own refresh interval: older than this, the page asks for the rebuilt copy. */
+const STALE_MS = 5 * 60 * 1000;
+function isStale(payload) {
+  const at = payload && payload.ready && payload.export && payload.export.about ? Date.parse(payload.export.about.generatedAt) : NaN;
+  return Number.isFinite(at) && Date.now() - at > STALE_MS;
+}
+
 export default function LlmExport() {
   const preview = typeof window !== "undefined" ? window.__LLM_PREVIEW__ : null;
   const [data, setData] = useState(preview || null);
   const fetchedAt = useRef(Date.now());
   const [loading, setLoading] = useState(!preview);
+  // True while a stored export older than its refresh interval is being rebuilt behind the page.
+  const [updating, setUpdating] = useState(false);
   const [failed, setFailed] = useState(false);
   const [theme, setTheme] = useState(() =>
     (typeof document !== "undefined"
@@ -504,11 +516,23 @@ export default function LlmExport() {
   useEffect(() => {
     if (preview) return;
     let live = true;
-    fetch("/api/llm-export", { credentials: "same-origin" })
-      .then((r) => r.json())
-      .then((j) => { if (live) { setData(j); fetchedAt.current = Date.now(); setLoading(false); } })
+    let cancel = null;
+    const load = () => fetch("/api/llm-export", { credentials: "same-origin" }).then((r) => r.json());
+    load()
+      .then((j) => {
+        if (!live) return;
+        setData(j); fetchedAt.current = Date.now(); setLoading(false);
+        // Days-old data is rebuilt behind the answer: ask again until the rebuilt copy arrives.
+        cancel = j && j.ready ? freshenWhenStale({
+          stamp: j.export.about.generatedAt, ttlMs: STALE_MS, refetch: load,
+          stampOf: (k) => (k && k.ready ? k.export.about.generatedAt : null),
+          apply: (k) => { if (live) { setData(k); fetchedAt.current = Date.now(); } },
+          done: () => { if (live) setUpdating(false); },
+        }) : null;
+        if (cancel) setUpdating(true);
+      })
       .catch(() => { if (live) { setFailed(true); setLoading(false); } });
-    return () => { live = false; };
+    return () => { live = false; if (cancel) cancel(); };
   }, [preview]);
 
   useEffect(() => {
@@ -606,7 +630,8 @@ export default function LlmExport() {
      rebuilds a stale export before answering, so this is the whole chain. */
   const refresh = async () => {
     if (preview || !data) return null;
-    if (Date.now() - fetchedAt.current < 45000) return null;
+    // A stored export past its refresh interval is always refreshed first; the route waits for the rebuild.
+    if (Date.now() - fetchedAt.current < 45000 && !isStale(data)) return null;
     try {
       const fresh = await (await fetch("/api/llm-export?fresh=1", { credentials: "same-origin" })).json();
       if (fresh && fresh.ready) {
@@ -625,6 +650,7 @@ export default function LlmExport() {
   };
 
   const download = async () => {
+    logEvent(`export-download-${version}`);
     const fresh = await refresh();
     const body = fresh ? textFrom(fresh) : text;
     const blob = new Blob([body], { type: "application/json" });
@@ -712,7 +738,7 @@ export default function LlmExport() {
               <b>No league data yet</b>
               <span>
                 The export is assembled from the league pull. If that has not run yet, whoever
-                runs the league can start it from Site Configuration.
+                administers this site can start it from Site Configuration.
               </span>
             </div>
           ) : (
@@ -805,7 +831,7 @@ export default function LlmExport() {
         </div>
 
         <div className="sechead"><span className="t">League data</span><span className="rule" />
-          <span className="count">As of {whenText(base.about.generatedAt)}</span></div>
+          <span className="count">As of {whenText(base.about.generatedAt)}{updating ? " \u00b7 updating to the latest" : ""}</span></div>
         <div className="panel">
           <div className="ctlrow">
             <div className="seg" role="group" aria-label="Export version">
@@ -818,7 +844,7 @@ export default function LlmExport() {
             </div>
             <div className="grow" />
             <div className="actions">
-              <CopyButton label="Copy" getText={async () => textFrom(await refresh())} />
+              <CopyButton label="Copy" getText={async () => textFrom(await refresh())} onCopied={() => logEvent(`export-copy-${version}`)} />
               <button type="button" className="minibtn go" onClick={download}>
                 {DOWNLOAD_ICON}Download
               </button>

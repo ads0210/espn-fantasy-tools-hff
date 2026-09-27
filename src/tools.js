@@ -13,6 +13,9 @@
 
 export const VISIBILITY = { VISIBLE: 'visible', HIDDEN: 'hidden', ADMIN: 'admin' };
 
+/* The order here is the default order everywhere: the home page's tiles (until an
+   administrator arranges them in Site Configuration), the setup wizard, Site
+   Configuration's lists and Site Backend's tabs. */
 export const TOOLS = [
   {
     key: 'draft-helper',
@@ -36,17 +39,17 @@ export const TOOLS = [
     defaultVisibility: VISIBILITY.VISIBLE,
   },
   {
-    key: 'trade-analyzer',
-    name: 'Trade Analyzer',
-    description: 'Every offer on the table, broken down for both sides.',
-    href: '/apps/trade-analyzer/',
-    defaultVisibility: VISIBILITY.VISIBLE,
-  },
-  {
     key: 'fortune-teller',
     name: 'Fortune Teller',
     description: 'Every way the rest of the season can go, and where each leaves you.',
     href: '/apps/fortune-teller/',
+    defaultVisibility: VISIBILITY.VISIBLE,
+  },
+  {
+    key: 'trade-analyzer',
+    name: 'Trade Analyzer',
+    description: 'Every offer on the table, broken down for both sides.',
+    href: '/apps/trade-analyzer/',
     defaultVisibility: VISIBILITY.VISIBLE,
   },
   {
@@ -56,7 +59,21 @@ export const TOOLS = [
     href: '/apps/llm-export/',
     defaultVisibility: VISIBILITY.VISIBLE,
   },
+  /* The site's own workings. Admin-only by default, because it shows who visited
+     and when, which members cannot see anywhere else. It never counts toward the
+     rule that one tool must stay visible to the league: it is not a league tool. */
+  {
+    key: 'site-backend',
+    name: 'Site Backend',
+    description: 'How the site is running: health, data, traffic, and logs.',
+    href: '/apps/site-backend/',
+    defaultVisibility: VISIBILITY.ADMIN,
+    backstage: true,
+  },
 ];
+
+/** The tools the league itself uses: everything but the site's own backend. */
+export const LEAGUE_TOOLS = TOOLS.filter((t) => !t.backstage);
 
 /**
  * Site Configuration is deliberately not in TOOLS: it is always present and
@@ -66,7 +83,7 @@ export const TOOLS = [
 export const SITE_CONFIG_TOOL = {
   key: 'site-config',
   name: 'Site Configuration',
-  description: 'Passwords, ESPN connection, tool visibility and data re-pulls.',
+  description: 'Passwords, ESPN connection, tools and data re-pulls.',
   href: '/config',
 };
 
@@ -125,7 +142,7 @@ export function applyVisibility(cfg, key, visibility) {
     return { ok: false, error: `Unknown visibility "${visibility}".` };
   }
   const next = { ...(cfg.toolVisibility || {}), [key]: visibility };
-  const anyVisible = TOOLS.some((t) => (next[t.key] || t.defaultVisibility) === VISIBILITY.VISIBLE);
+  const anyVisible = LEAGUE_TOOLS.some((t) => (next[t.key] || t.defaultVisibility) === VISIBILITY.VISIBLE);
   if (!anyVisible) {
     return { ok: false, error: 'At least one tool must stay visible to your league.' };
   }
@@ -139,5 +156,53 @@ export function describeTools(cfg) {
     description: t.description,
     href: t.href,
     visibility: visibilityOf(cfg, t.key),
+    ...(t.backstage ? { backstage: true } : {}),
   }));
+}
+
+/* ---------------------------------------------------------------- home page order */
+
+/** Every tile the home page can carry, in the default order: the tools, then Site Configuration. */
+export function defaultTileOrder() {
+  return [...TOOLS.map((t) => t.key), SITE_CONFIG_TOOL.key];
+}
+
+/**
+ * An administrator's order made whole: unknown and repeated keys dropped, and any
+ * tile missing from it (a tool added in a later release) placed where the default
+ * order puts it, just after the nearest tile that precedes it there.
+ */
+export function normaliseTileOrder(saved) {
+  const def = defaultTileOrder();
+  const known = new Set(def);
+  const out = [];
+  for (const k of Array.isArray(saved) ? saved : []) if (known.has(k) && !out.includes(k)) out.push(k);
+  for (let i = 0; i < def.length; i++) {
+    const k = def[i];
+    if (out.includes(k)) continue;
+    let at = 0;
+    for (let j = i - 1; j >= 0; j--) { const p = out.indexOf(def[j]); if (p >= 0) { at = p + 1; break; } }
+    out.splice(at, 0, k);
+  }
+  return out;
+}
+
+/** The home page's tiles in this site's order. */
+export function orderTiles(cfg, tiles) {
+  const order = normaliseTileOrder(cfg.toolOrder);
+  const rank = new Map(order.map((k, i) => [k, i]));
+  return tiles.slice().sort((a, b) => (rank.get(a.key) ?? 999) - (rank.get(b.key) ?? 999));
+}
+
+/** The order as Site Configuration draws it: every tile, with whether it reaches the home page. */
+export function describeTileOrder(cfg) {
+  const custom = Array.isArray(cfg.toolOrder) && cfg.toolOrder.length > 0;
+  return {
+    custom,
+    tiles: normaliseTileOrder(cfg.toolOrder).map((k) => {
+      if (k === SITE_CONFIG_TOOL.key) return { key: k, name: SITE_CONFIG_TOOL.name, visibility: 'always' };
+      const t = getTool(k);
+      return { key: k, name: t.name, visibility: visibilityOf(cfg, k) };
+    }),
+  };
 }

@@ -281,8 +281,20 @@ export const DASHBOARD_CSS = `
       .txteam b { max-width:none; }
     }
 
-    .tiles { display:grid; grid-template-columns:1fr; gap:10px; }
-    @media (min-width:560px) { .tiles { grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); } }
+    /* Tiles run in rows of equal width, as many to a row as fit at 280px or more (the count
+       auto-fit minmax(280px,1fr) gave), and a row that is not full is centred, always. A grid
+       cannot centre a short last row, so this is a wrapping flex row whose tile width is set by
+       the row's own width: a container query, one step per tile count. */
+    .tiles { display:flex; flex-wrap:wrap; justify-content:center; gap:10px; container-type:inline-size; }
+    .tiles > .tile { flex:0 0 100%; min-width:0; }
+    @container (min-width:570px) { .tiles > .tile { flex-basis:calc((100% - 10px) / 2); } }
+    @container (min-width:860px) { .tiles > .tile { flex-basis:calc((100% - 20px) / 3); } }
+    @container (min-width:1150px) { .tiles > .tile { flex-basis:calc((100% - 30px) / 4); } }
+    /* A browser without container queries (before Safari 16) steps by the window instead. */
+    @supports not (container-type:inline-size) {
+      @media (min-width:600px) { .tiles > .tile { flex-basis:calc((100% - 10px) / 2); } }
+      @media (min-width:920px) { .tiles > .tile { flex-basis:calc((100% - 20px) / 3); } }
+    }
     .tile { position:relative; display:flex; align-items:center; gap:13px;
       background:var(--panel); border:1px solid var(--line); padding:16px 17px;
       text-decoration:none; color:var(--ink); overflow:hidden;

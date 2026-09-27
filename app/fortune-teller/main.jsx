@@ -1,6 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import FortuneTeller from "./FortuneTeller.jsx";
+import { freshenWhenStale } from "../shared/freshen.js";
 
 /* The preview inlines everything, because it has no session to fetch with;
    the page fetches the summary, then each team's map when it is first shown. */
@@ -49,6 +50,16 @@ root.render(<FortuneTeller data={null} />);
   // appears by itself; a newer map over one being read is offered, not forced.
   if (window.__FT_PREVIEW__) return;
   let current = data;
+  // Before a map exists the page is built from the standings, which the server rebuilds behind a
+  // stale answer: ask again until the rebuilt copy arrives, so the first visit in a while is current.
+  if (data && !data.ready && data.preview) {
+    freshenWhenStale({
+      stamp: data.preview.standingsAt, ttlMs: 5 * 60 * 1000,
+      refetch: async () => prepare(await (await fetch("/api/fortune-teller", { credentials: "same-origin" })).json()),
+      stampOf: (p) => (p && !p.ready && p.preview ? p.preview.standingsAt : null),
+      apply: (fresh) => { if (current.ready) return; current = fresh; root.render(<FortuneTeller data={fresh} loadMap={(i, onP) => fetchMap(fresh, i, onP)} />); },
+    });
+  }
   setInterval(async () => {
     // Only while a build or an update is running: weeks before one can start, there is nothing to wait for.
     const st = current && current.pipeline && current.pipeline.state;

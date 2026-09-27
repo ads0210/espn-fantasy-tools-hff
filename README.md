@@ -161,7 +161,7 @@ you find a box like this:
 ```
 
 Enter that code on the site. The wizard takes it from there: two passwords,
-your ESPN league, which tools to switch on, and your league history.
+your ESPN league, which tools your league sees, and your league history.
 
 The code stops working the moment setup completes, so nobody who finds your
 address later can reconfigure your site.
@@ -187,6 +187,10 @@ like `%2B` that must stay exactly as they are, and `SWID` must keep its curly
 braces. The wizard tests both against ESPN before saving, so you will know
 straight away if something did not paste cleanly.
 
+**Your tools.** Each tool can be visible to the league, admin-only (listed on the
+dashboard, but opened only with the Admin Password), or hidden. Every tool starts
+visible except Site Backend, which starts admin-only.
+
 **League history** is the last step. It walks through past
 seasons pulling every game result. This may take a few minutes depending on how
 many seasons your league has — please do not close or refresh the tab while it
@@ -200,8 +204,12 @@ You can skip it and run it later from Site Configuration.
 
 Everything is adjustable from **Site Configuration**, reachable from the
 dashboard and gated by your Admin Password. Change either password, replace your
-ESPN cookies if league data stops loading, switch tools on and off, and re-run
-or resume the history pull.
+ESPN cookies if league data stops loading, set each tool to visible, admin-only
+or hidden, arrange the order of the dashboard's tiles, and re-run or resume the
+history pull.
+
+Site Backend shows how the site itself is running: its health, its data, its
+traffic and its logs. It starts admin-only, so it opens with the Admin Password.
 
 Fortune Teller starts switched off. Switch it on in Site Configuration and it
 builds its map of every way the regular season can go by itself, as soon as the

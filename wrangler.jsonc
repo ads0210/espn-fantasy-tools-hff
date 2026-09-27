@@ -27,7 +27,8 @@
       { "name": "COORDINATOR", "class_name": "DatasetCoordinator" },
       { "name": "THROTTLE", "class_name": "LoginThrottle" },
       { "name": "SCORE_TIMELINE", "class_name": "ScoreTimelineDO" },
-      { "name": "FORTUNE", "class_name": "FortuneTellerDO" }
+      { "name": "FORTUNE", "class_name": "FortuneTellerDO" },
+      { "name": "SITE_LOG", "class_name": "SiteLogDO" }
     ]
   },
   "migrations": [
@@ -46,6 +47,10 @@
     {
       "tag": "v4",
       "new_sqlite_classes": ["FortuneTellerDO"]
+    },
+    {
+      "tag": "v5",
+      "new_sqlite_classes": ["SiteLogDO"]
     }
   ],
   // The platform's only scheduled work. Every other dataset is fetched on
@@ -58,6 +63,8 @@
   "triggers": {
     "crons": ["* * * * *"]
   },
+  // Which deploy is answering, for Site Backend: an id, a tag and when it was uploaded.
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   // Workers Logs: invocation logs, errors and uncaught exceptions for this
   // Worker and its Durable Objects, under Observability in the dashboard.
   // Declared here rather than switched on in the dashboard because every

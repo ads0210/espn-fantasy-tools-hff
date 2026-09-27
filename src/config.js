@@ -40,7 +40,7 @@ const LEGACY_KEYS = {
  * season itself, not with the calendar, so anything from August onwards belongs
  * to the year it started in.
  */
-function currentSeason(now = new Date()) {
+export function currentSeason(now = new Date()) {
   const year = now.getUTCFullYear();
   return String(now.getUTCMonth() >= 7 ? year : year - 1);
 }
@@ -84,6 +84,9 @@ function normalise(raw) {
     sessionSecret: c.sessionSecret || null,
     setupCompletedAt: c.setupCompletedAt || null,
     toolVisibility: c.toolVisibility || {},
+    /* The home page's tile order, when an administrator has arranged it; null means
+       the default order. Made whole against the registry when read (tools.js). */
+    toolOrder: Array.isArray(c.toolOrder) && c.toolOrder.length ? c.toolOrder.filter((k) => typeof k === 'string').slice(0, 40) : null,
     /* The league's own Trade Analyzer weighting, holding only the rows an
        administrator has an opinion about. Absent means "use the shipped
        defaults", which is where every league starts. */
@@ -92,6 +95,9 @@ function normalise(raw) {
     /* Fortune Teller: off until an administrator switches it on; once on, it builds
        itself as soon as a build fits and moves on each week. */
     fortuneTeller: { enabled: Boolean(c.fortuneTeller && c.fortuneTeller.enabled), changedAt: (c.fortuneTeller && c.fortuneTeller.changedAt) || null },
+    /* When each sensitive setting last changed, for Site Backend: a timestamp per
+       setting, never a value. Written by the handlers that change them. */
+    stamps: (c.stamps && typeof c.stamps === 'object') ? c.stamps : {},
     // The build this site last confirmed its datasets against. Internal
     // bookkeeping for the post-update re-pull banner: deliberately absent from
     // describeConfig, because it describes the deployment rather than the league.
@@ -167,11 +173,18 @@ export async function saveConfig(env, patch) {
   const allowed = [
     'leagueId', 'espnS2', 'swid', 'season', 'leaguePrivate', 'historySeasons',
     'leaguePasswordHash', 'adminPasswordHash', 'sessionSecret', 'setupCompletedAt',
-    'toolVisibility', 'datasetsCheckedVersion', 'tradeWeights', 'fortuneTeller',
+    'toolVisibility', 'toolOrder', 'datasetsCheckedVersion', 'tradeWeights', 'fortuneTeller', 'stamps',
   ];
   for (const field of allowed) {
     if (patch[field] === undefined) continue;
     next[field] = patch[field];
+  }
+  /* Stamps merge rather than replace, so a handler records the one setting it
+     changed without knowing about the others. */
+  if (patch.stamps && typeof patch.stamps === 'object') {
+    const was = current.stamps || {};
+    next.stamps = { ...was, ...patch.stamps,
+      toolVisibility: { ...(was.toolVisibility || {}), ...(patch.stamps.toolVisibility || {}) } };
   }
   await env.CONFIG.put(CONFIG_KEY, JSON.stringify(next));
   invalidateConfigCache();
@@ -197,12 +210,15 @@ export function describeConfig(cfg) {
        them. An empty object means "use the defaults", which is also what every
        new league starts with. */
     tradeWeights: cfg.tradeWeights || {},
+    toolOrder: cfg.toolOrder || null,
     fortuneTeller: { enabled: Boolean(cfg.fortuneTeller && cfg.fortuneTeller.enabled) },
     historyDiscovered: Array.isArray(cfg.historySeasons) && cfg.historySeasons.length > 0,
     leaguePasswordSet: Boolean(cfg.leaguePasswordHash),
     adminPasswordSet: Boolean(cfg.adminPasswordHash),
     sessionSecretSet: Boolean(cfg.sessionSecret),
     setupCompletedAt: cfg.setupCompletedAt,
+    // Times only; which setting changed when, never what it changed to.
+    stamps: cfg.stamps || {},
   };
 }
 

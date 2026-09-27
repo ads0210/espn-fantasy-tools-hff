@@ -7,7 +7,9 @@ import TeamLogo from "../shared/TeamLogo.jsx";
 import { createEngine } from "./engine.js";
 import TeamSelect from "../shared/TeamSelect.jsx";
 import { shareLinkFor, parseSharedBuild, parseSharedOffer } from "./sharelink.js";
+import { logEvent } from "../shared/sitelog.js";
 import Instructions from "../shared/Instructions.jsx";
+import { freshenWhenStale } from "../shared/freshen.js";
 
 /* ==========================================================================
  * Trade Analyzer
@@ -785,6 +787,7 @@ function Analysis({ engine, trade, surfaceKey, weights, onWeights, onOpenInBuild
 
   const copy = () => {
     try { navigator.clipboard.writeText(shareLink); } catch { /* no clipboard */ }
+    logEvent("share-trade");
     setCopied(true);
     setTimeout(() => setCopied(false), 1600);
   };
@@ -1266,11 +1269,22 @@ export default function TradeAnalyzer() {
   useEffect(() => {
     if (preview) return;
     let live = true;
-    fetch("/api/trade", { credentials: "same-origin" })
-      .then((r) => r.json())
-      .then((j) => { if (live) { setData(j); setLoading(false); } })
+    let cancel = null;
+    const load = () => fetch("/api/trade", { credentials: "same-origin" }).then((r) => r.json());
+    load()
+      .then((j) => {
+        if (!live) return;
+        setData(j); setLoading(false);
+        /* The offers and rosters were rebuilt behind this answer if they were past their
+           five minutes: ask again until the rebuilt copy arrives, so a new offer shows. */
+        cancel = j && j.ready ? freshenWhenStale({
+          stamp: j.generatedAt, ttlMs: 5 * 60 * 1000, refetch: load,
+          stampOf: (k) => (k && k.ready ? k.generatedAt : null),
+          apply: (k) => { if (live) setData(k); },
+        }) : null;
+      })
       .catch(() => { if (live) { setFailed(true); setLoading(false); } });
-    return () => { live = false; };
+    return () => { live = false; if (cancel) cancel(); };
   }, [preview]);
 
   // Timestamps are rendered in the browser, in the zone chosen in settings.
@@ -1490,8 +1504,8 @@ export default function TradeAnalyzer() {
               <b>No trade data yet</b>
               <span>
                 This tool reads the league&rsquo;s rosters and standing offers. If the
-                league pull has not run yet, whoever runs the league can start it from
-                Site Configuration.
+                league pull has not run yet, whoever administers this site can start it
+                from Site Configuration.
               </span>
             </div>
           ) : (
