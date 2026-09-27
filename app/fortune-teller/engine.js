@@ -154,7 +154,8 @@ export function pct(share, paths) {
   const v = (100 * share) / paths;
   if (v > 0 && v < 0.1) return '<0.1%';
   if (v < 100 && v > 99.9) return '>99.9%';
-  return (Math.round(v * 10) / 10).toFixed(v === 0 || v === 100 ? 0 : 1) + '%';
+  // Half up at one decimal, from the fraction, the same rule as the home page's and Site Backend's.
+  return (Math.round((share / paths) * 1000 + 1e-6) / 10).toFixed(v === 0 || v === 100 ? 0 : 1) + '%';
 }
 
 /** Whether every path the pins allow leaves the team wholly inside the playoff places. */
