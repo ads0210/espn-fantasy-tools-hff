@@ -16,6 +16,8 @@
  * a failure can never race with a config write and lose a field.
  */
 
+import { sendEvents } from './sitelog.js';
+
 export const ESPN_AUTH_KEY = 'config:espn_auth';
 
 /**
@@ -37,6 +39,10 @@ export async function noteEspnAuth(env, { failing, status = null }) {
     // Health reporting must never be the thing that breaks a refresh.
     return current;
   }
+  await sendEvents(env, [{
+    kind: 'change', page: 'config', sev: failing ? 'bad' : 'ok',
+    text: failing ? `ESPN refused the league's cookies (${next.status})` : 'ESPN accepted the league\'s cookies again',
+  }]);
   return next;
 }
 
