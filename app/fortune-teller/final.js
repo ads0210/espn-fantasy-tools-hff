@@ -28,6 +28,15 @@ export function finalOdds(summary, trim) {
   return odds;
 }
 
+/** Each team's place, exactly (1 at its place, 0 elsewhere); null while games remain. */
+export function finalPlaces(summary, trim) {
+  if (!isFinal(summary, trim)) return null;
+  const { order } = finalOrder(summary, trim), n = summary.teams.length;
+  const out = summary.teams.map(() => new Array(n).fill(0));
+  order.forEach((ti, k) => { out[ti][k] = 1; });
+  return out;
+}
+
 /**
  * Standings with nothing left level: once every game is played the points are final, so teams
  * level on record are ordered (by the league's rule, then points) and each gets a place of its own.
