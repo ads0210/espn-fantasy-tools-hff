@@ -28,7 +28,9 @@
       { "name": "THROTTLE", "class_name": "LoginThrottle" },
       { "name": "SCORE_TIMELINE", "class_name": "ScoreTimelineDO" },
       { "name": "FORTUNE", "class_name": "FortuneTellerDO" },
-      { "name": "SITE_LOG", "class_name": "SiteLogDO" }
+      { "name": "SITE_LOG", "class_name": "SiteLogDO" },
+      { "name": "SOURCE_PACE", "class_name": "SourcePaceDO" },
+      { "name": "CLOCK", "class_name": "BackendClockDO" }
     ]
   },
   "migrations": [
@@ -51,6 +53,14 @@
     {
       "tag": "v5",
       "new_sqlite_classes": ["SiteLogDO"]
+    },
+    {
+      "tag": "v6",
+      "new_sqlite_classes": ["SourcePaceDO"]
+    },
+    {
+      "tag": "v7",
+      "new_sqlite_classes": ["BackendClockDO"]
     }
   ],
   // The platform's only scheduled work. Every other dataset is fetched on
