@@ -24,6 +24,9 @@ import { assembleTab, hourlyReports, runCensus, datasetDetail } from './siteback
 import { LOG_BUDGET_REF, GUARD_BYTES } from './sblimits.js';
 import { meteredEnv } from './sitelog.js';
 import { BYTE_BUDGET } from './scoretimeline.js';
+import { levelFrom, BRAKE_OF, BRAKE_WORDS, LIMIT_WORDS } from './budget.js';
+import { likelyTeams } from './sources.js';
+const LEVEL_RANK = { quiet: 0, normal: 1, busy: 2, verybusy: 3, resting: 4 };
 
 export const LOG_BUDGET = LOG_BUDGET_REF;
 export { GUARD_BYTES };
@@ -67,7 +70,56 @@ export function mergeCounts(into, add) {
     for (const [k, n] of Object.entries(vals)) g[k] = (g[k] || 0) + n;
   }
   into.exc = (into.exc || 0) + (add.exc || 0);
+  if (add.all) into.all = (into.all || 0) + add.all;
+  for (const [kind, vals] of Object.entries(add.api || {})) {
+    const g = (into.api = into.api || {})[kind] || (into.api[kind] = {});
+    for (const [k, n] of Object.entries(vals || {})) g[k] = (g[k] || 0) + n;
+  }
+  for (const [id, s] of Object.entries(add.src || {})) mergeSource(into, id, s);
   return into;
+}
+
+const SOURCES_PER_HOUR = 200;
+/** One source's hour merged in; past 200 sources an hour, the rest are summed as other sources. */
+export function mergeSource(into, id, s) {
+  const src = (into.src = into.src || {});
+  let t = src[id];
+  if (!t) {
+    if (id !== 'other' && Object.keys(src).filter((k) => k !== 'other').length >= SOURCES_PER_HOUR) {
+      const o = src.other || (src.other = { f: 'other', n: 0, srcs: 0 });
+      o.n += s.n || 0; o.srcs += s.srcs || 1;
+      return;
+    }
+    t = src[id] = { f: s.f, n: 0 };
+  }
+  t.n += s.n || 0;
+  if (s.srcs) t.srcs = (t.srcs || 0) + s.srcs;
+  if (s.k) t.k = s.k;
+  if (s.ak) t.ak = s.ak;
+  for (const f of ['api', 'pg', 'hd', 'af', 'bp']) if (s[f]) t[f] = (t[f] || 0) + s[f];
+  for (const f of ['ep', 'key', 'nm', 'rf', 'nr']) {
+    if (!s[f]) continue;
+    const g = t[f] || (t[f] = {});
+    for (const [k, n] of Object.entries(s[f])) if (g[k] || Object.keys(g).length < 12) g[k] = (g[k] || 0) + n;
+  }
+}
+
+/** One hour's use of the limits the pace watches, from its counts. */
+export function paceCountsOf(d) {
+  const out = { worker: 0, doReq: 0, rowsW: 0, kvR: 0, kvW: 0 };
+  // Every request the site served (counted since C7), or, for an hour before that, the recorded ones; and every cron run.
+  let rec = 0;
+  for (const r of Object.values(d.req || {})) rec += r.n || 0;
+  out.worker = Math.max(d.all || 0, rec) + Object.keys(d.ticks || {}).length;
+  for (const bag of [d.ops || {}, d.dsOps || {}]) {
+    for (const [k, v] of Object.entries(bag)) {
+      if (k.startsWith('do:') && k !== 'do:SITE_LOG') out.doReq += v;
+      else if (k === 'kvr') out.kvR += v;
+      else if (k === 'kvw') out.kvW += v;
+    }
+  }
+  for (const t of Object.values(d.ds || {})) out.rowsW += t.req || 0;
+  return out;
 }
 
 /** A dataset coordinator's tally merged into the hour. */
@@ -328,18 +380,162 @@ export class SiteLogDO {
     this.transaction(() => {
       this.recent();
       for (const e of events) this.insertEvent(e);
+      this.noteSources(hours);
       if (!this.paused()) {
         for (const h of hours) {
           const hour = hourOf(Number(h.hour) || Date.now());
           const data = this.mergeHour(hour, (d) => mergeCounts(d, h.counts));
           this.checkErrors(hour, data);
         }
+        this.noteLevel();
       }
       this.noteVersion(body.version);
       this.checkBudget();
       this.saveMeter();
     });
-    return { ok: true, events: events.length };
+    return { ok: true, events: events.length, pace: this.paceUsage() };
+  }
+
+  /**
+   * Sources the isolates saw: each fingerprint's alias (numbered in the order first seen, per family, for the
+   * season), and page visits by team as daily counts kept 14 days (the likely member). Visits never stay in the
+   * hour's counts. Written only when something changed.
+   */
+  noteSources(hours) {
+    let aliases = null, matches = null, days = null, dirtyA = false, dirtyM = false, dirtyD = false;
+    const today = dayOf(Date.now());
+    for (const h of hours) {
+      const c = h.counts || {};
+      const hour = hourOf(Number(h.hour) || Date.now());
+      for (const [id, src] of Object.entries(c.src || {})) {
+        if (id === 'other') continue;
+        aliases = aliases || this.getMeta('aliases', {}) || {};
+        let a = aliases[id];
+        if (!a) {
+          if (Object.keys(aliases).length >= 1000) continue;
+          const fam = src.f === 'IPv6' ? 'IPv6' : 'IPv4';
+          let n = 0; for (const x of Object.values(aliases)) if (x.f === fam && x.n > n) n = x.n;
+          a = aliases[id] = { f: fam, n: n + 1, first: hour, last: hour, days: 1, ld: today, k: src.k || null };
+          dirtyA = true;
+        }
+        if (a.last < hour) { a.last = hour; dirtyA = true; }
+        if (a.ld !== today) { a.ld = today; a.days = (a.days || 0) + 1; dirtyA = true; }
+        const kind = src.ak || src.k;
+        if (kind && kind !== 'unknown' && a.k !== kind && (src.ak || !a.k)) { a.k = kind; dirtyA = true; }
+        // Each day's totals by source, kept 8 days for the Sources and Jobs panels (at most 200 sources a day).
+        days = days || this.getMeta('srcdays', {}) || {};
+        const dk = dayOf(hour);
+        const day = days[dk] || (days[dk] = {});
+        let t = day[id];
+        if (!t) { if (Object.keys(day).length >= 200) continue; t = day[id] = { n: 0 }; }
+        t.n += src.n || 0;
+        for (const f of ['api', 'pg', 'hd', 'af']) if (src[f]) t[f] = (t[f] || 0) + src[f];
+        for (const f of ['nm', 'nr', 'rf', 'key']) {
+          if (!src[f]) continue;
+          const g = t[f] || (t[f] = {});
+          for (const [k, n] of Object.entries(src[f])) if (g[k] || Object.keys(g).length < 12) g[k] = (g[k] || 0) + n;
+        }
+        if (src.ak) t.k = src.ak; else if (src.k && src.k !== 'unknown' && !t.k) t.k = src.k;
+        t.last = Math.max(t.last || 0, hour);
+        dirtyD = true;
+      }
+      for (const [id, teams] of Object.entries(c.visits || {})) {
+        matches = matches || this.getMeta('matches', {}) || {};
+        const m = matches[id] || (matches[id] = {});
+        for (const [team, n] of Object.entries(teams || {})) {
+          const t = m[team] || (m[team] = {});
+          t[today] = (t[today] || 0) + n;
+          dirtyM = true;
+        }
+      }
+      delete c.visits;
+    }
+    if (dirtyM) {
+      const cutoff = dayOf(Date.now() - 14 * 86400000);
+      for (const [id, m] of Object.entries(matches)) {
+        for (const [team, days] of Object.entries(m)) {
+          for (const d of Object.keys(days)) if (d < cutoff) delete days[d];
+          if (!Object.keys(days).length) delete m[team];
+        }
+        if (!Object.keys(m).length) delete matches[id];
+      }
+      this.setMeta('matches', matches);
+    }
+    if (dirtyA) this.setMeta('aliases', aliases);
+    if (dirtyD) {
+      const keep = dayOf(Date.now() - 8 * 86400000);
+      for (const k of Object.keys(days)) if (k < keep) delete days[k];
+      this.setMeta('srcdays', days);
+    }
+  }
+
+  /** The load level each hour reached (its slowest), for the Pace panel's chart. */
+  noteLevel(now = Date.now()) {
+    try {
+      const lvl = levelFrom(this.paceUsage(now), now);
+      const lv = lvl.key;
+      // The brake moving is a change of state, logged as it happens (C5).
+      const brake = BRAKE_OF[lv] || 'normal', was = this.getMeta('brake', 'normal');
+      if (brake !== was) {
+        this.setMeta('brake', brake);
+        const near = lvl.limit ? `${LIMIT_WORDS[lvl.limit]} at ${Math.round(lvl.frac * 100)}% of today's free limit` : '';
+        this.change(brake === 'normal' ? 'The brake is off again: every page runs as usual'
+          : `The brake moved to ${BRAKE_WORDS[brake]}${near ? `: ${near}` : ''}`, brake === 'normal' ? 'info' : brake === 'economy' ? 'warn' : 'bad');
+      }
+      const hour = hourOf(now);
+      const row = this.one('SELECT data FROM hours WHERE hour = ?', hour);
+      if (!row) return;
+      let d = {}; try { d = JSON.parse(row.data); } catch { return; }
+      if (d.lv && LEVEL_RANK[d.lv] >= LEVEL_RANK[lv]) return;
+      d.lv = lv;
+      this.run('UPDATE hours SET data = ? WHERE hour = ?', JSON.stringify(d), hour);
+    } catch { /* the chart shows the hour as unknown */ }
+  }
+
+  /**
+   * The likely member behind each alias asked for: the teams that opened the site from the same fingerprint in the
+   * last 14 days. Answered only to the Admin Password popup's route; never part of a payload or an event.
+   */
+  members(list) {
+    const aliases = this.getMeta('aliases', {}) || {};
+    const matches = this.getMeta('matches', {}) || {};
+    const want = new Set((Array.isArray(list) ? list : []).slice(0, 200).map(String));
+    const out = {};
+    for (const [id, a] of Object.entries(aliases)) {
+      const name = `${a.f}:${a.n}`;
+      if (!want.has(name)) continue;
+      out[name] = { teams: likelyTeams(matches[id]), kind: a.k || null };
+    }
+    return { ok: true, members: out };
+  }
+
+  /**
+   * The day's use of the limits the pace watches, with the recent hourly rate, for every isolate's pace.
+   * Read from today's hours at most every 30 seconds; the log's own requests and rows come from its meter.
+   */
+  paceUsage(now = Date.now()) {
+    const day = dayOf(now);
+    if (this.pu && this.pu.day === day && now - this.pu.at < 30000) return this.pu;
+    const mid = Math.floor(now / 86400000) * 86400000;
+    const h0 = hourOf(now) - 3600000;
+    const counts = { worker: 0, doReq: 0, rowsW: 0, kvR: 0, kvW: 0 }, recent = { ...counts };
+    for (const r of this.run('SELECT hour, data FROM hours WHERE hour >= ?', Math.min(mid, h0))) {
+      let d; try { d = JSON.parse(r.data); } catch { continue; }
+      const c = paceCountsOf(d);
+      for (const k of Object.keys(counts)) {
+        if (r.hour >= mid) counts[k] += c[k];
+        if (r.hour >= h0) recent[k] += c[k];
+      }
+    }
+    const m = this.meterNow(now);
+    counts.doReq += m.req; counts.rowsW += m.rows;
+    const spanH = Math.max(0.25, (now - h0) / 3600000);
+    const rate = Object.fromEntries(Object.entries(recent).map(([k, v]) => [k, Math.round(v / spanH)]));
+    // A cutoff pages saw in the last day travels with the counts, for the home page's note (C6).
+    const o = this.getMeta('outage', null);
+    const outage = o && now - o.reportedAt < 86400000 ? { seenAt: new Date(o.seenAt).toISOString(), until: new Date(Math.floor(o.seenAt / 86400000) * 86400000 + 86400000).toISOString() } : null;
+    this.pu = { day, at: now, counts, rate, ...(outage ? { outage } : {}) };
+    return this.pu;
   }
 
   tally(body) {
@@ -412,9 +608,10 @@ export class SiteLogDO {
     }
     if (reportHour != null && !this.paused()) {
       try {
-        const { lines, meta } = await hourlyReports(this.deps(), reportHour);
+        const { lines, meta, events } = await hourlyReports(this.deps(), reportHour);
         this.transaction(() => {
           for (const l of lines) this.run('INSERT INTO reports (hour, sub, sev, text) VALUES (?, ?, ?, ?)', reportHour, l.sub, l.sev, l.text);
+          for (const e of events || []) this.insertEvent({ at: Date.now(), kind: 'change', sev: e.sev, text: e.text, page: 'site-api', team: null });
           for (const [k, v] of Object.entries(meta || {})) this.setMeta(k, v);
           this.guard();
           this.saveMeter(true);
@@ -485,7 +682,16 @@ export class SiteLogDO {
     }
     this.transaction(() => {
       this.recent();
-      this.insertEvent({ at: now, kind: 'operation', sev: 'info', text: body.text, page: body.page, team: body.team });
+      this.insertEvent({ at: now, kind: body.limit ? 'change' : 'operation', sev: body.limit ? 'bad' : 'info', text: body.text, page: body.page, team: body.team });
+      // The cutoff's record (C6): when pages first saw Cloudflare's limit page and when they were answered again,
+      // for the home page's note the next day. The earliest sighting in the last day is kept.
+      if (body.limit) {
+        const seen = Number(body.seenAt);
+        const at = Number.isFinite(seen) && seen <= now && now - seen < 86400000 ? seen : now;
+        const o = this.getMeta('outage', null);
+        const keep = o && now - o.reportedAt < 86400000 && o.seenAt <= at ? o.seenAt : at;
+        this.setMeta('outage', { seenAt: keep, reportedAt: now });
+      }
       this.saveMeter();
     });
     return { ok: true, counted: true };
@@ -504,6 +710,7 @@ export class SiteLogDO {
       meter: () => ({ ...this.meterNow(), budget: LOG_BUDGET, paused: this.paused() }),
       size: () => this.size(),
       recent: () => this.recent(),
+      pace: () => this.paceUsage(),
     };
   }
 
@@ -522,6 +729,8 @@ export class SiteLogDO {
         case '/tally': return json(this.tally(body));
         case '/tick': return json(await this.tick(body));
         case '/client': return json(this.clientEvent(body));
+        case '/pace': return json({ ok: true, pace: this.paceUsage() });
+        case '/members': return json(this.members(body.aliases));
         case '/tab': return json(await assembleTab(this.deps(body.facts || {}), body.params || {}));
         case '/dataset': return json(await datasetDetail(this.deps(body.facts || {}), body.key || url.searchParams.get('key')));
         case '/meta': {
