@@ -18,7 +18,17 @@
  * report on presence without echoing secret values.
  */
 
+import { normaliseSiteApi, keyState } from './apikey.js';
+
 export const CONFIG_KEY = 'config:v1';
+
+function describeSiteApi(raw) {
+  const sa = normaliseSiteApi(raw);
+  const st = keyState(sa);
+  const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
+  return { on: sa.on, started: Boolean(sa.gen), startedAt: sa.startedAt, changesAt: iso(st.changesAt), interval: sa.interval,
+    inAddress: sa.inAddress, graceUntil: st.prev ? iso(st.prev.stopsAt) : null, replacedAt: sa.replacedAt };
+}
 
 // Legacy per-field keys, read once to migrate an existing deployment.
 const LEGACY_KEYS = {
@@ -40,6 +50,14 @@ const LEGACY_KEYS = {
  * season itself, not with the calendar, so anything from August onwards belongs
  * to the year it started in.
  */
+/** An address on workers.dev, as an origin (https://name.account.workers.dev), or null for anything else. */
+export function workersOriginOf(value) {
+  try {
+    const u = new URL(String(value || ''));
+    return u.protocol === 'https:' && /^[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev$/.test(u.hostname) ? u.origin : null;
+  } catch { return null; }
+}
+
 export function currentSeason(now = new Date()) {
   const year = now.getUTCFullYear();
   return String(now.getUTCMonth() >= 7 ? year : year - 1);
@@ -92,9 +110,16 @@ function normalise(raw) {
        defaults", which is where every league starts. */
     tradeWeights: (c.tradeWeights && typeof c.tradeWeights === 'object')
       ? c.tradeWeights : {},
+    /* The site's own workers.dev address, noted the first time the site is asked for there. Site API's guides
+       are written against it wherever the page is opened, so a site that also answers at a custom domain hands
+       out the same addresses as one that does not. Null until seen. */
+    workersOrigin: workersOriginOf(c.workersOrigin),
     /* Fortune Teller: off until an administrator switches it on; once on, it builds
        itself as soon as a build fits and moves on each week. */
     fortuneTeller: { enabled: Boolean(c.fortuneTeller && c.fortuneTeller.enabled), changedAt: (c.fortuneTeller && c.fortuneTeller.changedAt) || null },
+    /* Site API: the switch, the key's generation and when it started, the replacement interval, the previous
+       generation and when its grace ends, and whether the key may travel in the address. Never a key. */
+    siteApi: normaliseSiteApi(c.siteApi),
     /* When each sensitive setting last changed, for Site Backend: a timestamp per
        setting, never a value. Written by the handlers that change them. */
     stamps: (c.stamps && typeof c.stamps === 'object') ? c.stamps : {},
@@ -147,8 +172,19 @@ async function migrateLegacy(env) {
   return out;
 }
 
+/**
+ * How long this isolate holds the settings: 5 seconds normally; longer while the brake is on (5 minutes at Economy,
+ * 30 at Protect), because every hold is a KV read saved; and 5 minutes inside the backend clock, which reads KV
+ * barely at all (C5). An admin save still hands its new values over explicitly, as it always has.
+ */
+export function configHoldMs(env) {
+  if (env && Number(env.CONFIG_HOLD_MS) > 0) return Number(env.CONFIG_HOLD_MS);
+  const brake = env && env.BRAKE;
+  return brake === 'protect' || brake === 'limit' ? 30 * 60 * 1000 : brake === 'economy' ? 5 * 60 * 1000 : CACHE_MS;
+}
+
 export async function loadConfig(env, { fresh = false } = {}) {
-  if (!fresh && cache && Date.now() - cacheAt < CACHE_MS) return cache;
+  if (!fresh && cache && Date.now() - cacheAt < configHoldMs(env)) return cache;
 
   let raw = null;
   const stored = await env.CONFIG.get(CONFIG_KEY);
@@ -173,7 +209,8 @@ export async function saveConfig(env, patch) {
   const allowed = [
     'leagueId', 'espnS2', 'swid', 'season', 'leaguePrivate', 'historySeasons',
     'leaguePasswordHash', 'adminPasswordHash', 'sessionSecret', 'setupCompletedAt',
-    'toolVisibility', 'toolOrder', 'datasetsCheckedVersion', 'tradeWeights', 'fortuneTeller', 'stamps',
+    'toolVisibility', 'toolOrder', 'datasetsCheckedVersion', 'tradeWeights', 'fortuneTeller', 'stamps', 'siteApi',
+    'workersOrigin',
   ];
   for (const field of allowed) {
     if (patch[field] === undefined) continue;
@@ -212,6 +249,8 @@ export function describeConfig(cfg) {
     tradeWeights: cfg.tradeWeights || {},
     toolOrder: cfg.toolOrder || null,
     fortuneTeller: { enabled: Boolean(cfg.fortuneTeller && cfg.fortuneTeller.enabled) },
+    // The switch, dates, interval and address setting; never anything that could rebuild a key.
+    siteApi: describeSiteApi(cfg.siteApi),
     historyDiscovered: Array.isArray(cfg.historySeasons) && cfg.historySeasons.length > 0,
     leaguePasswordSet: Boolean(cfg.leaguePasswordHash),
     adminPasswordSet: Boolean(cfg.adminPasswordHash),
