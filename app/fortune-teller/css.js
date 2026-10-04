@@ -321,7 +321,7 @@ table.ftst tr[data-tone="a"] { --tc:var(--signal); --tcs:var(--signal-soft); --t
 table.ftst tr[data-tone="b"] { --tc:#FF7A45; --tcs:rgba(255,122,69,.13); --tcl:rgba(255,122,69,.5); }
 table.ftst tr.tie td { background:var(--tcs); }
 table.ftst tr.tie.me td { background:linear-gradient(var(--accent-glow),var(--accent-glow)), linear-gradient(var(--tcs),var(--tcs)); }
-table.ftst tr.tierow td { padding:7px 10px; text-align:left; background:var(--tcs); border-top:1px solid var(--tcl); box-shadow:inset 3px 0 0 var(--tc); }
+table.ftst tr.tierow td { padding:7px 10px; text-align:center; background:var(--tcs); border-top:1px solid var(--tcl); box-shadow:inset 3px 0 0 var(--tc); }
 table.ftst tr.tierow b { font-size:10px; font-weight:900; letter-spacing:.14em; text-transform:uppercase; color:var(--tc); }
 table.ftst tr.tierow span { margin-left:10px; font-size:9.5px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-2); }
 table.ftst .stflag { display:inline-block; font-size:8.5px; font-weight:900; letter-spacing:.11em; text-transform:uppercase; padding:3px 8px; border:1px solid currentColor; }
