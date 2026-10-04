@@ -11,6 +11,7 @@ import { RELEASE_NOTE_ITEMS } from './release.js';
 import { simOdds } from './fortuneteller.js';
 import { FT_ACTIVE_KEY, FT_DEFAULTS } from './ftdo.js';
 import { feasibility } from './ftbuild.js';
+import { DERIVATIONS } from './derive.js';
 import { ENGINE_VERSION, SCORE_DIFF_SD, TIE_CHANCE, leagueState } from './ftleague.js';
 import { MIN_GAP_MS, BYTE_BUDGET, MAX_EVENTS, MIN_DELTA } from './scoretimeline.js';
 import { setupCodeRequired, setupCodeGeneratedAt } from './setup.js';
@@ -20,6 +21,8 @@ import { compactExport, COMPACT_FREE_AGENT_DEPTH } from '../app/llm-export/compa
 import { rosterShape } from '../app/draft-helper/rosterShape.js';
 import { draftPlan } from '../app/draft-helper/draftPlan.js';
 import { SHARE_PARAMS } from './readers.js';
+import { normaliseSiteApi } from './apikey.js';
+import { SITE_API_PANELS } from './sbapi.js';
 import {
   C, B, worst, hourOf, utcMidnight, median, ttlText, upstream, countEvents, eventsSince, groupEvents, latestEvents, sumReq,
   pageVisibility, visibilityLabel,
@@ -569,7 +572,7 @@ const OWN = {
           ['Lopsided', C.txt(`one side gives ${TA.LOPSIDED_RATIO} times the other`)], ['Offer expiring soon', C.txt(`within ${TA.OFFER_SOON_HOURS} hours`)],
           ['Value of certain playoff odds', C.txt(`${TA.ODDS_VP} points`)], ['Value of a title', C.txt(`${TA.TITLE_VP} points`)]]),
           B.split([B.sub('Verdict bands (share of the larger side)'), B.table([['Verdict'], ['Gap']], TA.BANDS.map((b, i) => B.row([C.txt(b.label), C.txt(b.max === Infinity ? `beyond ${Math.round(TA.BANDS[i - 1].max * 100)}%` : `up to ${Math.round(b.max * 100)}%`)])))],
-            [B.sub('Replacement level, season points'), B.table([['Position'], ['Points', 'n']], Object.entries(TA.REPLACEMENT).map(([k, v]) => B.row([C.txt(k), C.n(v)])))])],
+            [B.sub('Replacement level where the league\'s free agents are not stored, season points'), B.table([['Position'], ['Points', 'n']], Object.entries(TA.REPLACEMENT).map(([k, v]) => B.row([C.txt(k), C.n(v)])))])],
       }),
       P('t-odds', 'Playoff odds fit', {
         sum: async (src) => { const st = await src.digest('standings_digest'); const s = await src.settings(); if (!st) return [null, 'not stored yet']; const sum = (st.rows || []).reduce((a, r) => a + (typeof r.playoffPct === 'number' ? r.playoffPct : 0), 0); const places = s && s.s.scheduleSettings ? s.s.scheduleSettings.playoffTeamCount : 0; const ok = places && Math.abs(sum - places) <= 0.15 * places; return [ok ? 'ok' : 'warn', ok ? 'ESPN\'s odds add up; the fit is in use' : 'ESPN\'s odds do not add up; the fit falls back']; },
@@ -593,7 +596,7 @@ const OWN = {
         body: async (src, ctx) => {
           const t = await src.digest('trade_digest'); const r = ctx.rowByKey.trade_digest;
           if (!t) return [B.empty('Not built yet.')];
-          return [B.kv([['Built from', C.code('pending_transactions')], ['Also needs', C.txt('league_teams, rosters, standings, league_settings')], ['Size', C.bytes(r ? r.bytes : 0)],
+          return [B.kv([['Built from', C.code('pending_transactions')], ['Also needs', C.txt(([].concat(DERIVATIONS.pending_transactions)[0].needs || []).join(', '))], ['Size', C.bytes(r ? r.bytes : 0)],
             ['Built', C.time(t.generatedAt)], ['Teams', C.n((t.teams || []).length)], ['Roster cap', C.n(t.rosterCap || 0)], ['Offers carried', C.n((t.pending || []).length)]]),
             B.note('Pending waiver claims share the same response from ESPN and are dropped before anything is stored.')];
         },
@@ -663,6 +666,17 @@ const OWN = {
         },
       }),
     ],
+  },
+
+  'site-api': {
+    settings: async (src) => {
+      const sa = normaliseSiteApi((await src.cfg()).siteApi);
+      return [['API', C.pill(sa.on ? 'ok' : 'idle', sa.on ? 'on' : 'off')], ['Replaced', C.txt(sa.interval === 'season' ? 'at Season End' : `every ${sa.interval} days`)],
+        ['Key in the address', C.txt(sa.inAddress ? 'allowed' : 'refused')]];
+    },
+    // Site API's own panels live in src/sbapi.js: High activity, API status, Pace, Snapshot, Rate window, Sources,
+    // Use, Jobs, Refusals, Old key still in use and Cost.
+    panels: SITE_API_PANELS,
   },
 
   'site-backend': {
