@@ -5,7 +5,7 @@ import { Heartbeat, TrafficChart, Spark, Heat, Slices, DepDiagram } from "./char
 
 /* Everything a panel body can hold, drawn from the small vocabulary the server writes in. */
 
-export const Ctx = createContext({ teams: {}, pages: [], go: () => {}, jump: () => {}, markSeen: () => {}, detail: async () => null });
+export const Ctx = createContext({ teams: {}, pages: [], go: () => {}, jump: () => {}, markSeen: () => {}, detail: async () => null, members: null, askMembers: () => {} });
 
 // ---------------------------------------------------------------- a clock every time shares
 
@@ -106,6 +106,7 @@ function Gauge({ g }) {
         <div className={"fill" + cls} style={{ width: `${((p - r) * 100).toFixed(2)}%` }} />
         {r ? <div className="fill r" style={{ left: `${((p - r) * 100).toFixed(2)}%`, width: `${(r * 100).toFixed(2)}%` }} /> : null}
         {(g.caps || []).map(([f, label], i) => <div key={i} className="capmark" title={label} style={{ left: `${(f * 100).toFixed(1)}%` }} />)}
+        {(g.lines || []).map(([f, label], i) => <div key={`l${i}`} className={`brakemark${f >= 0.8 ? " p" : ""}`} title={label} style={{ left: `${(f * 100).toFixed(1)}%` }} />)}
       </div>
       <div className="gs"><span>{pct(p)} {g.per || "today"}{g.est ? ", estimate" : ""}{g.note ? ` · ${g.note}` : ""}</span><Spark values={g.spark} /></div>
     </div>
@@ -122,6 +123,7 @@ function Gauges({ b }) {
         <span><i className="sw9" style={{ background: "var(--acc)" }} />the site</span>
         {any ? <span><i className="sw9" style={{ background: "var(--blue)" }} />Fortune Teller builds</span> : null}
         {(b.items || []).some((g) => g.caps) ? <span><i className="sw9" style={{ borderLeft: "1px dashed var(--blue)" }} />caps: the log&apos;s 10%, Fortune Teller up to 50%</span> : null}
+        {(b.items || []).some((g) => g.lines) ? <span><i className="sw9" style={{ borderLeft: "1px dashed var(--amber)" }} />the brake: Economy at 60%, Protect at 80%; past Protect is the backend&apos;s reserve</span> : null}
         {b.resetsAt ? <span>resets {relText(toMs(b.resetsAt), now)}</span> : null}
       </div>
     </div>
@@ -151,12 +153,12 @@ function Cells({ items }) {
 }
 
 function Attn({ items }) {
-  const { jump } = useContext(Ctx);
+  const { jump, go } = useContext(Ctx);
   return (
     <ul className="attn">
       {(items || []).map((x, i) => (
-        <li key={i}><Dot s={x.s} /><span>{x.text}{x.since ? <small> · since <Time v={x.since} /></small> : null}</span>
-          {x.go ? <button className="mini" type="button" onClick={() => jump(x.go)}>Show</button> : <span />}</li>
+        <li key={i}><Dot s={x.s} /><span>{x.text}{x.lock ? <> <Lock alias={x.lock} inline /></> : null}{x.since ? <small> · since <Time v={x.since} /></small> : null}</span>
+          {x.tab ? <button className="mini" type="button" onClick={() => go(x.tab)}>Open</button> : x.go ? <button className="mini" type="button" onClick={() => jump(x.go)}>Show</button> : <span />}</li>
       ))}
     </ul>
   );
@@ -335,6 +337,80 @@ function Datasets({ b }) {
   );
 }
 
+// ---------------------------------------------------------------- Site API: High activity and the likely member
+
+const LOCK = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
+
+/** The likely member behind a source: locked until the Admin Password is given, shown for this visit only. */
+export function Lock({ alias, why, inline }) {
+  const { members, askMembers, teams } = useContext(Ctx);
+  if (!alias) return <span className="mono-dim">{why || "no member matches"}</span>;
+  const m = members && members[alias];
+  if (!m) return <>{inline ? "likely member " : null}<span className="lockf">{LOCK}<span className="redact" aria-label="locked">•••••••</span><button type="button" className="mini" onClick={askMembers}>Show</button></span></>;
+  const names = (m.teams || []).map((t) => (teams[t.teamId] || teams[String(t.teamId)] || { name: `Team ${t.teamId}` }).name);
+  if (!names.length) return <span className="mono-dim">No member’s pages came from this address in the last 14 days</span>;
+  if (inline) return <>likely <span className="teamname">{names.length === 2 ? names.join(" and ") : names.join(", ")}</span></>;
+  const words = names.length === 1 ? `this address opened the site as ${names[0]} ${m.teams[0].visits} time${m.teams[0].visits === 1 ? "" : "s"} in the last 14 days`
+    : `this address opened the site as ${names.length === 2 ? "both" : `all ${names.length}`} in the last 14 days: a shared household`;
+  return <><span className="lockf open">{LOCK}<span className="teamname">likely {names.length === 2 ? names.join(" and ") : names.join(", ")}</span></span><br /><small>{words}</small></>;
+}
+
+function HotRow({ h }) {
+  const mx = Math.max(1, ...(h.bars || []));
+  return (
+    <div className={`hrow ${h.level}`}>
+      <div className="htop">
+        <span className="alias">{h.alias}{h.you ? <span className="youtag">You</span> : null}<small>{h.family}</small></span>
+        <Pill s={h.level === "heavy" ? "bad" : "warn"}>{h.level === "heavy" ? "Heavy" : "Watch"}</Pill>
+        <span className="mono-dim">{h.kind}{h.names && h.names.length ? <> · name <span className="key">{h.names.join(", ")}</span></> : null}</span>
+      </div>
+      <div className="hgrid">
+        <div><span className="k">Last hour</span><span className="v">{num(h.h1)}{h.overPace ? <> <small>over 2× the pace</small></> : null}</span></div>
+        <div><span className="k">Last 24 hours</span><span className="v">{num(h.d1)}</span></div>
+        <div><span className="k">Share of today</span><span className="v">{h.share ? pct(h.share) : "—"}</span></div>
+        <div><span className="k">too_soon refusals</span><span className={"v" + (h.refused ? " c-bad" : "")}>{num(h.refused)}{h.kept ? <> <small>kept asking after them</small></> : null}</span></div>
+        <div><span className="k">Asks for</span><span className="v">{h.asks}</span></div>
+        <div><span className="k">Key</span><span className="v">{h.key}</span></div>
+        <div><span className="k">Started</span><span className="v">{h.started ? <Time v={h.started} abs /> : "before the last 24 hours"}</span></div>
+        <div style={{ gridColumn: "1/-1" }}><span className="k">Likely member</span><span className="v"><Lock alias={h.member ? h.alias : null} why={h.memberWhy} /></span></div>
+      </div>
+      <div className="hbars" aria-label="Requests by hour, last 24 hours">
+        {(h.bars || []).map((b, i) => <i key={i} className={h.refusedBars && h.refusedBars[i] > b / 2 ? "refused" : undefined} style={{ height: `${Math.max(b ? 6 : 3, (b / mx) * 100)}%` }} />)}
+      </div>
+      <div className="hcap"><span>24 hours ago</span><span>requests by hour{(h.refusedBars || []).some((r, i) => r > (h.bars[i] || 0) / 2) ? ", red: mostly refused" : ""}</span><span>now</span></div>
+    </div>
+  );
+}
+
+function Hot({ items }) {
+  return <div className="hot">{(items || []).map((h) => <HotRow key={h.alias} h={h} />)}</div>;
+}
+
+const LV_Y = { quiet: 3, normal: 2, busy: 1, verybusy: 0, resting: -1 };
+function PaceChart({ levels }) {
+  const W = 1000, H = 132, L = 78, y = (v) => 14 + (3 - v) * 26, x = (i) => L + (i * (W - L - 8)) / 24;
+  let d = "";
+  (levels || []).forEach((k, i) => {
+    if (k == null || LV_Y[k] == null) return;
+    const v = Math.max(0, LV_Y[k]);
+    d += `M${x(i).toFixed(1)} ${y(v)} L${x(i + 1).toFixed(1)} ${y(v)} `;
+  });
+  return (
+    <svg className="pacechart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="The suggested pace, hour by hour, over the last 24 hours">
+      {["Very busy", "Busy", "Normal", "Quiet"].map((n, i) => <React.Fragment key={n}><line className="gridline" x1={L} x2={W - 8} y1={y(i)} y2={y(i)} /><text className="lv" x={L - 6} y={y(i) + 3} textAnchor="end">{n}</text></React.Fragment>)}
+      <path className="step" d={d || "M0 0"} />
+      <line className="nowl" x1={x(24)} x2={x(24)} y1="6" y2={H - 18} />
+      {[0, 6, 12, 18].map((i) => <text key={i} className="lv" x={x(i)} y={H - 2}>{i === 0 ? "24h ago" : `−${24 - i}h`}</text>)}
+      <text className="lv" x={x(24) - 2} y={H - 2} textAnchor="end">now</text>
+    </svg>
+  );
+}
+
+function HourBars({ v }) {
+  const mx = Math.max(1, ...(v || []));
+  return <div className="hbars flat">{(v || []).map((b, i) => <i key={i} style={{ height: `${Math.max(b ? 6 : 2, (b / mx) * 100)}%` }} />)}</div>;
+}
+
 // ---------------------------------------------------------------- the dispatcher
 
 export function Block({ b }) {
@@ -361,6 +437,9 @@ export function Block({ b }) {
     case "cells": return <Cells items={b.items} />;
     case "heat": return <Heat days={b.days} times={b.times} />;
     case "slices": return <Slices v={b.v} />;
+    case "hot": return <Hot items={b.items} />;
+    case "pacechart": return <PaceChart levels={b.levels} />;
+    case "hbars": return <HourBars v={b.v} />;
     default: return null;
   }
 }
