@@ -4,6 +4,8 @@ import { PALETTES, BASE_CSS, BACKDROP } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
 import { weightDays, makeXOf } from "./axis.js";
+import { playerMeta, pointsText, projectionShare, pointsDelta, liveClock, gameProgress } from "./gamestate.js";
+import { noteBrake, pollDelay } from "../shared/brake.js";
 import Instructions from "../shared/Instructions.jsx";
 
 /**
@@ -96,6 +98,11 @@ function useIdleClock() {
 function useWeek(week, idle) {
   const [state, setState] = useState({ data: null, error: null, at: null, loading: true });
   const timer = useRef(null);
+  // When the score history last came with the week: once a minute the poll asks for it too, so following a game
+  // takes one request every 15 seconds rather than two streams. A change of week asks for it straight away.
+  const tlAt = useRef(0);
+  const liveRef = useRef(false);   // whether a game is on, for the brake's poll rate
+  useEffect(() => { tlAt.current = 0; }, [week]);
 
   const load = useCallback(async (quiet) => {
     try {
@@ -112,14 +119,19 @@ function useWeek(week, idle) {
         return;
       }
       if (!quiet) setState((s) => ({ ...s, loading: true }));
-      const q = week ? `?w=${week}` : "";
+      const withTl = !week && Date.now() - tlAt.current >= 59000;
+      const q = week ? `?w=${week}` : (withTl ? "?timeline=1" : "");
       const res = await fetch(`/api/live/week${q}`, { credentials: "same-origin" });
+      noteBrake(res);
       if (res.status === 401) {
         setState({ data: null, error: "Your session expired. Reload to sign in again.", at: null, loading: false });
         return;
       }
       const body = await res.json();
       if (!res.ok || !body.ok) throw new Error(body.error || `${res.status}`);
+      // Asked once a minute whether or not the history came back (a week with none recorded yet has nothing to send).
+      if (withTl) tlAt.current = Date.now();
+      liveRef.current = Boolean(body.digest && (body.digest.games || []).some((g) => g.state === "live"));
       setState({ data: body, error: null, at: new Date(), loading: false });
     } catch (e) {
       setState((s) => ({ ...s, error: e.message || "Could not load this week.", loading: false }));
@@ -134,11 +146,12 @@ function useWeek(week, idle) {
   const isCurrent = state.data ? state.data.live : true;
   useEffect(() => {
     if (!isCurrent) return undefined;
+    // Every 15 seconds, or less often while the site saves its daily allowance (C5).
     function tick() {
       if (!document.hidden && !idle) load(true);
-      timer.current = setTimeout(tick, 15000);
+      timer.current = setTimeout(tick, pollDelay(15000, { live: liveRef.current }));
     }
-    timer.current = setTimeout(tick, 15000);
+    timer.current = setTimeout(tick, pollDelay(15000, { live: liveRef.current }));
     const onVisible = () => { if (!document.hidden && !idle) load(true); };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -168,8 +181,11 @@ function useH2h() {
   return h2h;
 }
 
-/** The stored score history for a week. Written by the cron, never by a view. */
-function useTimeline(season, week, live, idle) {
+/**
+ * The stored score history for a week. Written by the cron, never by a view. A past week is asked for once; the
+ * current week's history arrives with the week's own poll once a minute (`carried`), so it is never polled apart.
+ */
+function useTimeline(season, week, live, carried) {
   const [rows, setRows] = useState([]);
   const [lastTick, setLastTick] = useState(null);
   const [events, setEvents] = useState([]);
@@ -205,12 +221,13 @@ function useTimeline(season, week, live, idle) {
     }
   }, [rows, events, season, week]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (!live || (typeof window !== "undefined" && window.__LM_TIMELINE_PREVIEW__)) load(); }, [load, live]);
   useEffect(() => {
-    if (!live) return undefined;
-    const t = setInterval(() => { if (!document.hidden && !idle) load(); }, 60000);
-    return () => clearInterval(t);
-  }, [load, live, idle]);
+    if (!live || !carried || String(carried.season) !== String(season) || Number(carried.week) !== Number(week)) return;
+    setRows(Array.isArray(carried.rows) ? carried.rows : []);
+    setLastTick(carried.lastTick || null);
+    setEvents(Array.isArray(carried.events) ? carried.events : []);
+  }, [carried, live, season, week]);
   return { rows, events, lastTick };
 }
 
@@ -538,66 +555,94 @@ function Disclosure({ label, children, defaultOpen = false, className = "dsectio
 
 // ---------------------------------------------------------------- sections
 
+// The home team's four panels on the left and the away team's on the right, in the same order and the same
+// arrangement on both sides at every width, each side glowing in the colour the matchup card gives it.
 function Highlights({ g }) {
-  const cell = (label, value, colour) => (
-    <div className="hlcell">
+  const cell = (label, value) => (
+    <div className="hlcell" key={label}>
       <span className="hlft">{label}</span>
-      <span className="hlv" style={colour ? { color: colour } : undefined}>{value}</span>
+      <span className="hlv">{value}</span>
     </div>
   );
-  const side = (s) => [
-    cell("Top scorer", s.top ? `${shortName(s.top.name)} ${n1(s.top.points)}` : "—"),
-    cell("Bottom scorer", s.bottom ? `${shortName(s.bottom.name)} ${n1(s.bottom.points)}` : "—"),
-    cell("Avg / starter", n1(s.avgPerStarter)),
-    cell("Bench points", n1(s.benchPoints)),
-  ];
-  const h = side(g.home), a = side(g.away);
+  const side = (s, which) => (
+    <div className={`hlside ${which}`}>
+      <div className="hlteamname">{s.name}</div>
+      <div className="hlgrid">
+        {cell("Top scorer", s.top ? `${shortName(s.top.name)} ${n1(s.top.points)}` : "—")}
+        {cell("Bottom scorer", s.bottom ? `${shortName(s.bottom.name)} ${n1(s.bottom.points)}` : "—")}
+        {cell("Avg / starter", n1(s.avgPerStarter))}
+        {cell("Bench points", n1(s.benchPoints))}
+      </div>
+    </div>
+  );
   return (
     <div className="hlgridouter">
-      <div className="hlteamname">{g.home.name}</div>
-      <div className="hlteamname">{g.away.name}</div>
-      {h[0]}{h[1]}{a[0]}{a[1]}
-      {h[2]}{h[3]}{a[2]}{a[3]}
+      {side(g.home, "home")}
+      {side(g.away, "away")}
     </div>
   );
 }
 
 const INJ_LETTER = { QUESTIONABLE: "Q", DOUBTFUL: "D", OUT: "O", INJURY_RESERVE: "IR", SUSPENSION: "S" };
 
+// One side's points in a lineup row: a dash before the player's game starts, the points and projection with a thin
+// bar of one against the other once it has, and a brief "+6.0" whenever the points move between readings.
+function PtsCell({ p, side }) {
+  const prev = useRef(p ? p.points : null);
+  const [flash, setFlash] = useState(null);
+  const pts = p ? p.points : null;
+  useEffect(() => {
+    const d = p && p.gameStatus !== "pre" ? pointsDelta(prev.current, pts) : 0;
+    prev.current = pts;
+    if (!d) return undefined;
+    setFlash({ d, k: Date.now() });
+    const t = setTimeout(() => setFlash(null), 2600);
+    return () => clearTimeout(t);
+  }, [pts]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!p) return <td className={`ptscell ${side}`} />;
+  const share = projectionShare(p);
+  const live = p.gameStatus === "live";
+  return (
+    <td className={`ptscell ${side}${live ? " live" : ""}`}>
+      <b>{pointsText(p, n1)}</b>
+      <span className={`pbar${share === null ? " none" : ""}${share === 1 ? " over" : ""}`}><i style={{ width: `${Math.round((share || 0) * 100)}%` }} /></span>
+      <small>{n1(p.proj)}</small>
+      {flash ? <i key={flash.k} className={`ptsflash${flash.d < 0 ? " down" : ""}`} aria-hidden="true">{flash.d > 0 ? "+" : "\u2212"}{Math.abs(flash.d).toFixed(1)}</i> : null}
+    </td>
+  );
+}
+
 function Lineups({ g, tz }) {
   const rows = Math.max(g.home.starters.length, g.away.starters.length);
-  // Before kickoff a row shows when that player's own NFL game starts, in the
-  // zone chosen in Site settings. Every row previously formatted the same
-  // missing value, which rendered the epoch as one shared time for everybody.
+  const games = useMemo(() => Object.fromEntries((g.nflGames || []).map((ng) => [ng.key, ng])), [g.nflGames]);
+  // Before kickoff a row shows the opponent and when that player's own NFL game starts, in the zone chosen in Site
+  // settings; while it is live, the quarter, the clock and the score; once it is over, the result.
+  const when = (iso) => new Date(iso).toLocaleString(undefined, { timeZone: tz, weekday: "short", hour: "numeric", minute: "2-digit" });
   const meta = (p) => {
-    if (!p) return "";
-    if (p.gameStatus === "pre") {
-      if (!p.kickoff) return p.nfl;
-      try {
-        const d = new Date(p.kickoff);
-        return `${p.nfl} · ` + d.toLocaleString(undefined,
-          { timeZone: tz, weekday: "short", hour: "numeric", minute: "2-digit" });
-      } catch { return p.nfl; }
-    }
-    return p.gameState ? `${p.nfl} · ${p.gameState}` : p.nfl;
+    const text = playerMeta(p, p ? games[p.game] : null, when);
+    const parts = text ? text.split(" \u00b7 ") : [];
+    return parts.map((t, i) => <React.Fragment key={i}>{i ? <span className="msep"> {"\u00b7"} </span> : null}<span className="mseg">{t}</span></React.Fragment>);
   };
+  const dot = (p) => (p ? <span className={`godot ${p.gameStatus === "live" ? "live" : p.gameStatus === "final" ? "fin" : "up"}`} /> : null);
+  const isLive = (p) => Boolean(p && p.gameStatus === "live");
   const out = [];
   for (let i = 0; i < rows; i++) {
     const hp = g.home.starters[i], ap = g.away.starters[i];
+    const hl = isLive(hp) ? " live" : "", al = isLive(ap) ? " live" : "";
     out.push(
       <tr key={i}>
-        <td className="pcellL">
-          <span className="pname">{hp ? shortName(hp.name) : "—"}
+        <td className={`pcellL home${hl}`}>
+          <span className="pname">{hp ? shortName(hp.name) : "\u2014"}
             {hp && hp.injury ? <i className="injbadge">{INJ_LETTER[hp.injury] || "!"}</i> : null}</span>
           <span className="pmeta">{meta(hp)}</span>
         </td>
-        <td className="dotcell">{hp ? <span className={`godot ${hp.gameStatus === "live" ? "live" : hp.gameStatus === "final" ? "fin" : "up"}`} /> : null}</td>
-        <td className="ptscell home">{hp ? <><b>{n1(hp.points)}</b><small>{n1(hp.proj)}</small></> : null}</td>
+        <td className={`dotcell home${hl}`}>{dot(hp)}</td>
+        <PtsCell key={`h${hp ? hp.id : "none"}`} p={hp} side="home" />
         <td className="poscell">{(hp && hp.slot) || (ap && ap.slot) || ""}</td>
-        <td className="ptscell away">{ap ? <><b>{n1(ap.points)}</b><small>{n1(ap.proj)}</small></> : null}</td>
-        <td className="dotcell">{ap ? <span className={`godot ${ap.gameStatus === "live" ? "live" : ap.gameStatus === "final" ? "fin" : "up"}`} /> : null}</td>
-        <td className="pcellR">
-          <span className="pname">{ap ? shortName(ap.name) : "—"}
+        <PtsCell key={`a${ap ? ap.id : "none"}`} p={ap} side="away" />
+        <td className={`dotcell away${al}`}>{dot(ap)}</td>
+        <td className={`pcellR away${al}`}>
+          <span className="pname">{ap ? shortName(ap.name) : "\u2014"}
             {ap && ap.injury ? <i className="injbadge">{INJ_LETTER[ap.injury] || "!"}</i> : null}</span>
           <span className="pmeta">{meta(ap)}</span>
         </td>
@@ -612,7 +657,7 @@ function Lineups({ g, tz }) {
       {s.bench.map((p) => (
         <div className="benchrow" key={p.id}>
           <span>{shortName(p.name)} <small>{p.pos}</small></span>
-          <span className="benchpts"><b>{n1(p.points)}</b><small>{n1(p.proj)}</small></span>
+          <span className="benchpts"><b>{pointsText(p, n1)}</b><small>{n1(p.proj)}</small></span>
         </div>
       ))}
     </details>
@@ -628,6 +673,10 @@ function Lineups({ g, tz }) {
           <span><i className="godot live" /> Live</span>
           <span><i className="godot fin" /> Final</span>
           <span><i className="godot up" /> Upcoming</span>
+        </div>
+        <div className="leggroup">
+          <span><i className="pbar sample"><i /></i> Points against projection</span>
+          <span><b className="legdash">{"\u2013"}</b> Yet to play</span>
         </div>
         <div className="leggroup">
           <span><i className="injbadge">Q</i> Questionable</span>
@@ -787,8 +836,10 @@ function NflGame({ game, tz }) {
             { timeZone: tz, hour: "numeric", minute: "2-digit" });
         } catch { return "Upcoming"; }
       })()
-    : game.state;
-  const pct = game.status === "final" ? 100 : game.status === "live" ? 55 : 0;
+    : game.status === "live" ? (liveClock(game) || game.state) : game.state;
+  // Read from the quarter and the clock, so the bar shows how far the game really is.
+  const prog = gameProgress(game);
+  const pct = prog === null ? (game.status === "final" ? 100 : game.status === "live" ? 55 : 0) : Math.round(prog * 100);
   return (
     <div className="nflgame" data-state={game.status}>
       <button className="nflgtoggle" aria-expanded={open} onClick={toggle} type="button">
@@ -1184,7 +1235,7 @@ function OptimalPair({ g }) {
 const HELP_STEPS = [
   ["01", "Your matchup first", "Whichever team you picked on the dashboard is sorted to the top. The choice is shared with every other tool."],
   ["02", "Read the bar", "The split bar is ESPN's own win chance, not a calculation of ours. It moves as the games do."],
-  ["03", "Open a breakdown", "Full breakdown opens both lineups, scoring by position, the week's booms and busts, the NFL games your players are in, and your record against that opponent."],
+  ["03", "Open a breakdown", "Full breakdown opens both lineups, scoring by position, the week's booms and busts, the NFL games your players are in, and your record against that opponent. In the lineups, a player whose game is on is lit up with the quarter, the clock and the score, and a dash means their game hasn't started."],
   ["04", "Watch the shape", "Score and win chance are recorded every minute all week, so you can see where a matchup turned even if you missed it. Quiet stretches are squeezed up so the games fill the chart."],
   ["05", "Look back", "The arrows either side of the week walk back through weeks already played, with their final scores and their charts."],
 ];
@@ -1232,7 +1283,7 @@ export default function LiveMatchups() {
   const shownWeek = data ? data.week : 0;
   const isCurrent = data ? data.live : true;
   const { rows: timelineRows, events, lastTick } = useTimeline(
-    digest && digest.season, shownWeek, isCurrent, idle);
+    digest && digest.season, shownWeek, isCurrent, data ? data.timeline : null);
   const h2h = useH2h();
 
   const [, forceTick] = useState(0);
@@ -1330,9 +1381,15 @@ export default function LiveMatchups() {
           background:var(--inset); border:1px solid var(--line-2); }
         .mteam-info { display:flex; flex-direction:column; gap:1px; min-width:0; }
         /* A team's name is never shortened: the line wraps and the block grows
-           rather than ending in an ellipsis nobody can read. */
+           rather than ending in an ellipsis nobody can read. It is drawn in the site's gradient, as every standings
+           table draws a team's name (the winner's still turns gold). */
         .mname { font-size:13.5px; font-weight:900; letter-spacing:-.01em;
-          overflow-wrap:anywhere; }
+          overflow-wrap:anywhere;
+          background:linear-gradient(94deg, var(--ink) 30%, var(--accent) 165%);
+          -webkit-background-clip:text; background-clip:text;
+          color:transparent; -webkit-text-fill-color:transparent; }
+        /* The block hugs the name, so the gradient runs across the name itself and not the owner's longer line. */
+        .mteam.home .mname { align-self:flex-start; } .mteam.away .mname { align-self:flex-end; max-width:100%; }
         .mownerfull { font-size:10px; color:var(--ink-2); font-weight:700;
           overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .mrecline { font-size:9.5px; color:var(--ink-3); font-weight:700; letter-spacing:.03em; }
@@ -1443,12 +1500,19 @@ export default function LiveMatchups() {
         .reveal-stagger.opened > *:nth-child(4){transition-delay:.17s}
         .reveal-stagger.opened > *:nth-child(n+5){transition-delay:.2s}
 
-        .hlgridouter { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:8px; }
-        .hlteamname { grid-column:span 2; text-align:center; font-size:11px; font-weight:900;
-          letter-spacing:.08em; text-transform:uppercase; color:var(--ink-2); padding-bottom:6px;
-          overflow-wrap:anywhere; }
-        .hlcell { background:var(--inset); border:1px solid var(--line); padding:11px 6px;
-          text-align:center; display:flex; flex-direction:column; align-items:center;
+        /* Two sides, home left and away right, always; each side's four panels sit two by two, or one above
+           another on a phone, the same on both sides. A side glows in its matchup-card colour. When one team's
+           name wraps and the other's does not, the shorter name takes up the slack so both sets of panels line up. */
+        .hlgridouter { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px; }
+        .hlside { --hc:var(--accent); min-width:0; display:flex; flex-direction:column; }
+        .hlside.away { --hc:var(--sky); }
+        .hlgrid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px; }
+        .hlteamname { text-align:center; font-size:11px; font-weight:900;
+          letter-spacing:.08em; text-transform:uppercase; color:var(--ink-2); padding-bottom:7px;
+          overflow-wrap:anywhere; flex:1 0 auto; display:flex; align-items:center; justify-content:center; }
+        .hlcell { background:var(--inset); border:1px solid color-mix(in srgb,var(--hc) 45%,var(--line));
+          box-shadow:0 0 14px -2px color-mix(in srgb,var(--hc) 30%,transparent), inset 0 0 18px -8px color-mix(in srgb,var(--hc) 40%,transparent);
+          padding:11px 6px; text-align:center; display:flex; flex-direction:column; align-items:center;
           justify-content:center; gap:4px; min-width:0; }
         .hlft { font-size:8.5px; font-weight:900; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); }
         .hlv { font-size:11.5px; font-weight:800; font-variant-numeric:tabular-nums;
@@ -1459,12 +1523,13 @@ export default function LiveMatchups() {
         table.lineup col.dotcol { width:12px; }
         table.lineup col.poscol { width:30px; }
         table.lineup td { padding:6px 2px; border-bottom:1px solid var(--line); vertical-align:middle; min-width:0; }
-        table.lineup .pcellL { text-align:left; }
-        table.lineup .pcellR { text-align:right; }
+        /* Every cell centred, as every table on the site is (test/tables.mjs). */
+        table.lineup td { text-align:center; }
         table.lineup .pname { display:block; font-weight:800; font-size:10px; white-space:nowrap;
           overflow:hidden; text-overflow:ellipsis; }
         table.lineup .pmeta { display:block; font-size:8px; color:var(--ink-3); white-space:nowrap;
           overflow:hidden; text-overflow:ellipsis; }
+        table.lineup td.live .pmeta { color:var(--ink-2); font-weight:700; }
         table.lineup .dotcell { text-align:center; }
         .godot { width:6px; height:6px; border-radius:50%; display:inline-block; }
         .godot.live { background:var(--accent); box-shadow:0 0 0 2px var(--accent-glow); }
@@ -1472,11 +1537,38 @@ export default function LiveMatchups() {
         .godot.up { background:transparent; border:1px solid var(--line-2); }
         .injbadge { display:inline-block; font-size:7.5px; font-weight:900; color:var(--signal);
           background:var(--signal-soft); padding:1px 3px; margin-left:3px; font-style:normal; }
-        table.lineup .ptscell { font-variant-numeric:tabular-nums; }
-        table.lineup .ptscell.home { text-align:right; }
-        table.lineup .ptscell.away { text-align:left; }
+        table.lineup .ptscell { font-variant-numeric:tabular-nums; position:relative; }
         table.lineup .ptscell b { display:block; font-size:10.5px; }
         table.lineup .ptscell small { display:block; font-size:7.5px; color:var(--ink-3); }
+        /* A live player's side of the row is lit in that side's colour, with the live marker beside them. */
+        table.lineup td.live.home { background:color-mix(in srgb,var(--accent) 11%,transparent); }
+        table.lineup td.live.away { background:color-mix(in srgb,var(--sky) 13%,transparent); }
+        table.lineup td.pcellL.live { box-shadow:inset 2px 0 0 var(--accent); }
+        table.lineup td.pcellR.live { box-shadow:inset -2px 0 0 var(--sky); }
+        table.lineup td.live .pname { color:var(--ink); }
+        .godot.live { animation:livepulse 1.8s ease-in-out infinite; }
+        @keyframes livepulse { 0%,100% { box-shadow:0 0 0 2px var(--accent-glow); } 50% { box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 22%,transparent); } }
+        /* Points against projection: a thin track under the points, full once the projection is reached. */
+        .pbar { display:block; height:2px; margin:3px auto 2px; width:min(30px,100%); background:var(--line-2); position:relative; overflow:hidden; }
+        .pbar i { position:absolute; left:0; top:0; bottom:0; background:var(--ink-3); }
+        .ptscell.home .pbar i, .pbar.sample i { background:var(--accent); }
+        .ptscell.away .pbar i { background:var(--sky); }
+        .pbar.over { box-shadow:0 0 6px var(--accent-glow); }
+        .pbar.none { opacity:.45; }
+        .pbar.sample { display:inline-block; width:18px; margin:0; }
+        .pbar.sample i { width:60%; }
+        .legdash { font-weight:900; color:var(--ink-2); }
+        /* A brief "+6.0" when the points move, rising out of the cell and fading. */
+        .ptsflash { position:absolute; left:50%; top:0; transform:translate(-50%,-30%); z-index:2; pointer-events:none;
+          font-style:normal; font-size:9.5px; font-weight:900; color:var(--field); background:var(--accent); padding:1px 4px;
+          white-space:nowrap; animation:ptsflash 2.6s ease-out forwards; }
+        .ptscell.away .ptsflash { background:var(--sky); }
+        .ptsflash.down { background:var(--flag); }
+        @keyframes ptsflash { 0% { opacity:0; transform:translate(-50%,10%); } 12% { opacity:1; transform:translate(-50%,-30%); }
+          75% { opacity:1; transform:translate(-50%,-55%); } 100% { opacity:0; transform:translate(-50%,-80%); } }
+        /* The line under a name: the quarter, clock and score, or the opponent and kickoff. On a phone each part
+           takes a line of its own, so the score is never cut off. */
+        table.lineup .pmeta .mseg { white-space:nowrap; }
         table.lineup .poscell { text-align:center; font-size:8px; font-weight:900; color:var(--ink-3); }
 
         .lineuplegend { display:flex; flex-direction:column; gap:9px; margin-top:14px;
@@ -1539,10 +1631,12 @@ export default function LiveMatchups() {
         .poslabel { font-size:9px; font-weight:900; color:var(--ink-3); text-align:center; }
 
         .gaugerow { display:flex; gap:24px; justify-content:center; margin-top:4px; }
-        .gauge { flex:1; max-width:170px; text-align:center; min-width:0; }
-        /* The gauge sizes to its label rather than cutting a team's name. */
+        .gauge { flex:1; max-width:170px; text-align:center; min-width:0; display:flex; flex-direction:column; }
+        /* The gauge sizes to its label rather than cutting a team's name. The two gauges always sit level: both
+           columns stretch to the taller one, and a name that does not wrap is centred on the height of one that does. */
         .gaugelabel { font-size:10.5px; font-weight:900; letter-spacing:.08em; text-transform:uppercase;
-          color:var(--ink-2); margin-bottom:8px; overflow-wrap:anywhere; }
+          color:var(--ink-2); margin-bottom:8px; overflow-wrap:anywhere;
+          flex:1 0 auto; display:flex; align-items:center; justify-content:center; }
         .gaugewrap { position:relative; filter:drop-shadow(0 3px 8px rgba(0,0,0,.35)); }
         .gaugewrap svg { width:100%; height:auto; transform:rotate(-90deg); display:block; overflow:visible; }
         .gaugeframe { fill:none; stroke:var(--accent-deep); stroke-width:.6; opacity:.55; }
@@ -1558,10 +1652,10 @@ export default function LiveMatchups() {
         .gaugecenter small { font-size:9px; color:var(--ink-3); font-weight:700; margin-top:1px; }
 
         table.plaintable { width:100%; border-collapse:collapse; font-size:11.5px; margin-top:8px; }
-        table.plaintable th { text-align:left; font-size:9px; font-weight:900; letter-spacing:.08em;
-          text-transform:uppercase; color:var(--ink-3); padding:0 8px 6px 0; border-bottom:1px solid var(--line-2); }
-        table.plaintable td { padding:7px 8px 7px 0; border-bottom:1px solid var(--line); }
-        table.plaintable td.num { text-align:right; font-variant-numeric:tabular-nums; font-weight:800; }
+        table.plaintable th { text-align:center; font-size:9px; font-weight:900; letter-spacing:.08em;
+          text-transform:uppercase; color:var(--ink-3); padding:0 4px 6px; border-bottom:1px solid var(--line-2); }
+        table.plaintable td { padding:7px 4px; border-bottom:1px solid var(--line); text-align:center; }
+        table.plaintable td.num { font-variant-numeric:tabular-nums; font-weight:800; }
 
         .seasoncols { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
         .seasonmini { text-align:center; min-width:0; }
@@ -1659,14 +1753,18 @@ export default function LiveMatchups() {
         .toolfoot .gh:hover { color:var(--accent); }
 
         @media (max-width:560px) {
-          .hlgridouter { grid-template-columns:1fr 1fr; }
-          .hlteamname:nth-of-type(2) { order:3; }
+          .hlgrid { grid-template-columns:minmax(0,1fr); }
+          table.lineup .pmeta { white-space:normal; }
+          table.lineup .pmeta .mseg { display:block; overflow:hidden; text-overflow:ellipsis; }
+          table.lineup .pmeta .msep { display:none; }
           .seasoncols, .benchwrap { grid-template-columns:1fr; }
           .gaugerow { gap:14px; }
           .mlogo { width:38px; height:38px; font-size:10px; }
         }
         @media (prefers-reduced-motion: reduce) {
-          .finalstrip, .mteam.winner .mlogo, .updated i { animation:none !important; }
+          .finalstrip, .mteam.winner .mlogo, .updated i, .godot.live { animation:none !important; }
+          .ptsflash { animation:ptsfade 2.6s step-end forwards !important; }
+          @keyframes ptsfade { 0% { opacity:1; } 100% { opacity:0; } }
           .reveal-stagger > * { transition:none; }
         }
       `}</style>
