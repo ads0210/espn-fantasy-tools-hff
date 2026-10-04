@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import ScrollBox from "../shared/ScrollBox.jsx";
 import { num, shortText, axisText, hourOfDay, dayKey, dayName, clockText, dur, toMs } from "./format.js";
 
 /* Small inline SVG charts only: no chart library. */
@@ -199,7 +200,7 @@ export function DepDiagram({ rows }) {
   return (
     <div>
       <div className={"dep" + (on ? " hl" : "")}>
-        <div className="scrollreal" style={{ overflowX: "auto" }}>
+        <ScrollBox>
           <svg width={model.W} height={model.H} viewBox={`0 0 ${model.W} ${model.H}`} role="img" aria-label="How derived datasets are built">
             {model.edges.map((e, i) => <path key={i} className={`edge ${e.cls}${on && on.has(e.a) && on.has(e.b) ? " on" : ""}`} d={e.d} />)}
             {[...model.pos.entries()].map(([k, p]) => {
@@ -213,7 +214,7 @@ export function DepDiagram({ rows }) {
               );
             })}
           </svg>
-        </div>
+        </ScrollBox>
       </div>
       <div className="legend">
         <span><i className="sw9" style={{ border: "1px solid var(--line-2)" }} />raw dataset</span>
