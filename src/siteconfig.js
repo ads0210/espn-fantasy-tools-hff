@@ -24,22 +24,25 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
   const body = `${adminGateSection()}
 
     <section id="panel" hidden>
-      <!-- The short panels flow into balanced columns on a wide window; the
-           weighting list, far longer than the rest, runs full width beneath them
-           with its own rows in columns. On a narrow screen the wrapper
-           dissolves and every panel keeps its reading order. -->
+      <!-- Every panel starts shut and opens on its header. The short panels are
+           stacked the way the home page stacks its tiles: even columns where the
+           window allows, any left over centred beneath. The weighting list, far
+           longer than the rest, runs full width under them, shut or open. -->
       <div class="cfgflow">
         <div class="panel p-conn">
-          <div class="panelhead"><span class="t">League connection</span></div>
+          <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-conn"><span class="t">League connection</span><i class="cfgchev" aria-hidden="true"></i></button>
+          <div class="cfgbody" id="cb-conn" hidden>
           <div class="row"><span>League ID</span><b id="leagueId">&mdash;</b></div>
           <div class="row"><span>Season</span><b id="season">&mdash;</b></div>
           <div class="row"><span>League type</span><b id="privacy">&mdash;</b></div>
           <div class="row"><span>History seasons</span><b id="history">&mdash;</b></div>
           <p class="hint" style="margin-bottom:0">League ID is fixed after setup.</p>
+          </div>
         </div>
 
         <div class="panel p-cookies">
-          <div class="panelhead"><span class="t">ESPN cookies</span></div>
+          <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-cookies"><span class="t">ESPN cookies</span><i class="cfgchev" aria-hidden="true"></i></button>
+          <div class="cfgbody" id="cb-cookies" hidden>
           <div class="row"><span>espn_s2</span><b id="s2state">&mdash;</b></div>
           <div class="row"><span>SWID</span><b id="swidstate">&mdash;</b></div>
           <p class="hint">Replace these if league data stops loading.</p>
@@ -55,45 +58,63 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
           </div>
           <button class="primary" data-action="cookies">Test and save</button>
           <div class="msg" id="msgCookies"></div>
+          </div>
         </div>
 
         <div class="panel p-pw">
-          <div class="panelhead"><span class="t">Passwords</span></div>
+          <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-pw"><span class="t">Passwords</span><i class="cfgchev" aria-hidden="true"></i></button>
+          <div class="cfgbody" id="cb-pw" hidden>
           ${passwordField({ id: 'newLeaguePw', label: 'New League Password',
-            hint: 'Leave blank to keep the current one. Everyone will need the new one.' })}
+            hint: 'Leave blank to keep the current one. Everyone will need the new one. <span class="warnh">Changing the League Password also replaces the Site API key at once.</span>' })}
           ${passwordField({ id: 'newAdminPw', label: 'New Admin Password',
             hint: 'Leave blank to keep the current one.' })}
           <button class="primary" data-action="passwords">Save passwords</button>
           <div class="msg" id="msgPasswords"></div>
+          </div>
         </div>
 
         <div class="panel p-tools">
-          <div class="panelhead"><span class="t">Tools</span></div>
+          <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-tools"><span class="t">Tools</span><i class="cfgchev" aria-hidden="true"></i></button>
+          <div class="cfgbody" id="cb-tools" hidden>
           <div id="toolRows"></div>
           <div class="msg" id="msgTools"></div>
+          </div>
         </div>
 
         <div class="panel p-order">
-          <div class="panelhead"><span class="t">Home page order</span></div>
+          <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-order"><span class="t">Home page order</span><i class="cfgchev" aria-hidden="true"></i></button>
+          <div class="cfgbody" id="cb-order" hidden>
           <p class="hint">The order the tiles appear in on the home page. A tool that is not
              visible keeps its place for when it is.</p>
           <ol id="orderRows" class="orderlist"></ol>
           <button class="ghost" id="orderReset" hidden>Reset to the default order</button>
           <div class="msg" id="msgOrder"></div>
+          </div>
+        </div>
+
+        <div class="panel p-api" id="cfgApi">
+          <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-api"><span class="t">Site API</span><i class="cfgchev" aria-hidden="true"></i></button>
+          <div class="cfgbody" id="cb-api" hidden>
+          <div id="apiRows"><p class="hint">&mdash;</p></div>
+          <div class="msg" id="msgApi"></div>
+          </div>
         </div>
 
         <div class="panel p-data">
-          <div class="panelhead"><span class="t">League data</span></div>
+          <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-data"><span class="t">League data</span><i class="cfgchev" aria-hidden="true"></i></button>
+          <div class="cfgbody" id="cb-data" hidden>
           <div class="row"><span>Status</span><b id="primeState">&mdash;</b></div>
           <div class="bar"><i id="primeBar"></i></div>
           <p class="hint">Fetches every dataset once. Run this if a page is showing
              blanks, or after replacing your ESPN cookies.</p>
           <button class="primary" id="primeRun">Refresh all league data</button>
           <div class="msg" id="msgPrime"></div>
+          </div>
         </div>
 
         <div class="panel p-hist">
-          <div class="panelhead"><span class="t">League history</span></div>
+          <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-hist"><span class="t">League history</span><i class="cfgchev" aria-hidden="true"></i></button>
+          <div class="cfgbody" id="cb-hist" hidden>
           <div class="row"><span>Status</span><b id="histState">&mdash;</b></div>
           <div class="bar"><i id="histBar"></i></div>
           <p class="hint" id="histDetail">Only re-pull when you need to. This may take a
@@ -101,10 +122,12 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
           <button class="primary" id="histRun">Re-pull league history</button>
           <button class="ghost" id="histResume" style="margin-top:11px" hidden>Resume an interrupted pull</button>
           <div class="msg" id="msgHistory"></div>
+          </div>
         </div>
 
         <div class="panel p-ft">
-          <div class="panelhead"><span class="t">Fortune Teller</span></div>
+          <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-ft"><span class="t">Fortune Teller</span><i class="cfgchev" aria-hidden="true"></i></button>
+          <div class="cfgbody" id="cb-ft" hidden>
           <div class="row"><span>Status</span><b id="ftState">&mdash;</b></div>
           <div class="row"><span>Season</span><b id="ftSeason">&mdash;</b></div>
           <div class="row"><span>Build</span><b id="ftSize">&mdash;</b></div>
@@ -116,11 +139,13 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
           <button class="ghost" id="ftCheck" style="margin-top:11px">Check now</button>
           <button class="ghost" id="ftRebuild" style="margin-top:11px" hidden>Rebuild the map</button>
           <div class="msg" id="msgFt"></div>
+          </div>
         </div>
       </div>
 
       <div class="panel p-weights">
-        <div class="panelhead"><span class="t">Trade Analyzer weighting</span></div>
+        <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-weights"><span class="t">Trade Analyzer weighting</span><i class="cfgchev" aria-hidden="true"></i></button>
+        <div class="cfgbody" id="cb-weights" hidden>
         <p class="hint">What each statistic is worth when Trade Analyzer judges a
            deal. These become your league&rsquo;s defaults; anyone can still move the
            adjustable ones for themselves while they are looking at a trade, and
@@ -132,6 +157,7 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
           <button class="ghost" id="weightReset">Reset all to defaults</button>
         </div>
         <div class="msg" id="msgWeights"></div>
+        </div>
       </div>
 
     </section>`;
@@ -140,26 +166,37 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
     /* The gate's own layout comes from src/admingate.js, shared with admin-only tools. */
     ${ADMIN_GATE_CSS}
 
-    /* Panels flow into columns once there is room for them, so a wide window
-       reads as a control surface rather than one tall ribbon. Each panel keeps
-       its own internal rhythm; only the arrangement changes. */
-    /* Scoped so the grid never contradicts the hidden attribute. */
-    #panel:not([hidden]) { display:grid; grid-template-columns:minmax(0,1fr); gap:0; align-items:start; }
-    #panel .panel { min-width:0; }
-    /* One column: the wrapper dissolves and the panels keep their reading order. */
-    .cfgflow { display:contents; }
-    .p-conn { order:1; } .p-cookies { order:2; } .p-pw { order:3; } .p-tools { order:4; }
-    .p-order { order:5; } .p-weights { order:6; } .p-data { order:7; } .p-hist { order:8; } .p-ft { order:9; }
+    /* Every panel starts shut (its header is the button that opens it), so the page opens as a board of headers
+       rather than one tall ribbon with gaps beside the short panels. The short panels stack like the home page's
+       tiles: one a row, two from 620px, three from 940px, a short last row centred. The weighting panel runs full
+       width beneath them at every width. */
+    /* Scoped so the layout never contradicts the hidden attribute. */
+    #panel:not([hidden]) { display:block; }
+    #panel .panel { min-width:0; margin:0; }
+    .cfgflow { display:flex; flex-wrap:wrap; justify-content:center; align-items:flex-start; gap:14px; container-type:inline-size; }
+    .cfgflow > .panel { flex:0 0 100%; }
+    @container (min-width:620px) { .cfgflow > .panel { flex-basis:calc((100% - 14px) / 2); } }
+    @container (min-width:940px) { .cfgflow > .panel { flex-basis:calc((100% - 28px) / 3); } }
+    @supports not (container-type:inline-size) {
+      @media (min-width:660px) { .cfgflow > .panel { flex-basis:calc((100% - 14px) / 2); } }
+      @media (min-width:1000px) { .cfgflow > .panel { flex-basis:calc((100% - 28px) / 3); } }
+    }
+    .p-weights { margin-top:14px !important; }
+    /* The header is the whole button: the title, and a chevron that turns when the panel is open. */
+    .panelhead.cfgtoggle { width:100%; margin:0; padding:0; border:0; background:none; color:inherit; font:inherit; text-align:left;
+      cursor:pointer; -webkit-tap-highlight-color:transparent; }
+    .cfgtoggle .t { flex:1; min-width:0; }
+    .cfgtoggle:focus-visible { outline:2px solid var(--accent); outline-offset:6px; }
+    .cfgchev { flex:none; width:8px; height:8px; margin-right:3px; border-right:2px solid var(--accent); border-bottom:2px solid var(--accent);
+      transform:rotate(45deg) translate(-2px,-2px); transition:transform .18s ease; }
+    .cfgtoggle[aria-expanded="true"] .cfgchev { transform:rotate(-135deg) translate(-2px,-2px); }
+    .cfgtoggle:hover .cfgchev { filter:drop-shadow(0 0 5px var(--accent-glow)); }
+    .cfgbody:not([hidden]) { display:block; margin-top:14px; animation:cfgopen .2s ease both; }
+    .cfgbody > *:last-child { margin-bottom:0; }
+    @keyframes cfgopen { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:none; } }
+    html.stillness .cfgbody:not([hidden]) { animation:none; }
     .wactions { display:flex; flex-direction:column; gap:11px; }
     @media (min-width:900px) {
-      /* Balanced columns rather than a grid: panels of different heights stack
-         independently, so none leaves a gap beside a taller neighbour. */
-      .cfgflow { display:block; columns:2; column-gap:clamp(18px,2.2vw,32px); order:1; }
-      .cfgflow .panel { break-inside:avoid; -webkit-column-break-inside:avoid; }
-      /* A column break truncates the trailing margin of the tallest column's
-         last panel, so the weighting panel below carried its own spacing or sat
-         flush against whichever column ran longest. */
-      .p-weights { order:2; margin-top:14px; }
       .wactions { flex-direction:row; flex-wrap:wrap; }
       .wactions button { width:auto; flex:0 1 260px; margin:0; }
     }
@@ -168,9 +205,6 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
       #weightRows .wrow { break-inside:avoid; -webkit-column-break-inside:avoid; }
       #weightRows .wgroup { break-after:avoid; -webkit-column-break-after:avoid; }
       #weightRows > :first-child { margin-top:0; }
-    }
-    @media (min-width:1320px) {
-      .cfgflow { columns:3; }
     }
 
     .row { display:flex; justify-content:space-between; gap:14px; padding:9px 0;
@@ -185,10 +219,16 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
                border-bottom:1px solid var(--line); }
     .toolrow:last-child { border-bottom:0; }
     .toolrow .tname { flex:1; min-width:0; font-size:11px; font-weight:900;
-      letter-spacing:.14em; text-transform:uppercase;
+      letter-spacing:.14em; text-transform:uppercase; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .toolrow .tname b { font-weight:900;
       background:linear-gradient(94deg,var(--ink) 10%,var(--accent) 150%);
       -webkit-background-clip:text; background-clip:text;
       color:transparent; -webkit-text-fill-color:transparent; }
+    /* New in this release (C8): set apart from the gradient name, never inside it. */
+    .newtag { display:inline-block; padding:1px 6px; font-size:8.5px; font-weight:900; letter-spacing:.16em;
+      text-transform:uppercase; color:var(--field); background:var(--signal); line-height:1.6;
+      -webkit-text-fill-color:var(--field); vertical-align:2px; margin-left:8px; }
+    .toolrow .newtag { margin-left:0; }
     .toolsel { flex:none; width:164px; }
 
     /* Home page order: a numbered list, each row moved one place at a time. */
@@ -209,6 +249,21 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
     .omove button:disabled { opacity:.3; cursor:default; }
     .omove svg { width:15px; height:15px; }
     .toolsel .xselbtn { padding:9px 11px; }
+
+    /* Site API: the switch, the key's dates, replacing it, and whether it may travel in an address. */
+    .hint.warnh, .hint .warnh { color:var(--signal); }
+    .cfgsw { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:9px 0; border-bottom:1px solid var(--line); }
+    .cfgsw span.l { color:var(--ink-2); font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.13em; }
+    .cfgsw .r { display:flex; align-items:center; gap:10px; font-size:13px; font-weight:700; }
+    .p-api .lbl2 { display:block; margin:16px 0 8px; font-size:10.5px; font-weight:900; color:var(--ink-2); letter-spacing:.2em; text-transform:uppercase; }
+    .p-api .btnstack { display:flex; flex-direction:column; gap:10px; }
+    .p-api .btnstack button { margin-top:0; width:100%; }
+    .p-api .btnstack button.minor { padding:12px 14px; }
+    .p-api .xsellist li small { margin-left:8px; font-size:9px; font-weight:900; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); }
+    .instr .dlgbody p { font-size:13px; line-height:1.55; color:var(--ink-2); margin:0 0 12px; }
+    .instr .dlgbody p b { color:var(--ink); }
+    .instr .dlgbody .dlgbtns { display:flex; flex-direction:column; gap:10px; margin-top:14px; }
+    .instr .dlgbody .dlgbtns button { margin-top:0; }
 
     /* Trade Analyzer weighting. A row per statistic, grouped the way the tool
        groups them, so an administrator reads the same structure they will see
@@ -268,6 +323,18 @@ document.getElementById('adminPw').addEventListener('keydown', function (e) {
   if (e.key === 'Enter') unlock();
 });
 
+// Every panel starts shut; its header opens and shuts it. The body is hidden outright rather than squeezed, so
+// nothing inside (a dropdown's list, a dialog's opener) is ever clipped, and the state is the markup's own.
+document.getElementById('panel').addEventListener('click', function (e) {
+  var b = e.target.closest ? e.target.closest('.cfgtoggle') : null;
+  if (!b) return;
+  var body = document.getElementById(b.getAttribute('aria-controls'));
+  var open = b.getAttribute('aria-expanded') !== 'true';
+  b.setAttribute('aria-expanded', String(open));
+  if (body) body.hidden = !open;
+  if (open) window.dispatchEvent(new Event('resize'));
+});
+
 async function unlock() {
   var el = document.getElementById('adminPw');
   var gm = document.getElementById('gateMsg');
@@ -298,6 +365,7 @@ function render(r) {
   renderWeights((r.config || {}).tradeWeights || {});
   renderHistory(r.history || {});
   renderPrime(r.prime || {});
+  renderApi(r.siteApi || null);
 }
 
 /* The league data panel has to report its state on open, not just while it is
@@ -318,12 +386,14 @@ function renderPrime(p) {
 function set(id, v) { var el = document.getElementById(id); if (el) el.textContent = v; }
 
 var VIS = [['visible', 'Visible'], ['admin', 'Admin only'], ['hidden', 'Not visible']];
+/* A tool that arrived in the release the site is running (C8); never on the home page's own tiles. */
+var NEW_TAG = '<span class="newtag" title="New in this release">New</span>';
 
 function renderTools(tools) {
   var host = document.getElementById('toolRows');
   host.innerHTML = tools.map(function (t) {
     var current = VIS.filter(function (v) { return v[0] === t.visibility; })[0] || VIS[0];
-    return '<div class="toolrow"><span class="tname">' + t.name + '</span>'
+    return '<div class="toolrow' + (t.isNew ? ' newtool' : '') + '"><span class="tname"><b>' + t.name + '</b>' + (t.isNew ? NEW_TAG : '') + '</span>'
       + '<div class="toolsel"><div class="xsel" data-toolkey="' + t.key + '" data-value="'
       + t.visibility + '">'
       + '<button type="button" class="xselbtn" aria-haspopup="listbox" aria-expanded="false">'
@@ -368,7 +438,7 @@ function renderOrder(o, focus) {
     var noteText = VIS_NOTE[t.visibility] || '';
     return '<li class="orow' + (t.visibility === 'hidden' ? ' off' : '') + '" data-key="' + esc(t.key) + '">'
       + '<span class="oidx">' + String(i + 1).padStart(2, '0') + '</span>'
-      + '<span class="oname"><b>' + esc(t.name) + '</b>' + (noteText ? '<em>' + esc(noteText) + '</em>' : '') + '</span>'
+      + '<span class="oname"><b>' + esc(t.name) + '</b>' + (t.isNew ? NEW_TAG : '') + (noteText ? '<em>' + esc(noteText) + '</em>' : '') + '</span>'
       + '<span class="omove">'
       + '<button type="button" data-move="-1" aria-label="Move ' + esc(t.name) + ' up"' + (i === 0 ? ' disabled' : '') + '>' + CHEV.up + '</button>'
       + '<button type="button" data-move="1" aria-label="Move ' + esc(t.name) + ' down"' + (i === n - 1 ? ' disabled' : '') + '>' + CHEV.down + '</button>'
@@ -497,7 +567,8 @@ async function act(action, btn) {
       var ap = document.getElementById('newAdminPw').value;
       if (!lp && !ap) { note('msgPasswords', 'Enter at least one new password.', 'err'); return; }
       var r2 = await call('/api/admin/passwords', { leaguePassword: lp, adminPassword: ap });
-      note('msgPasswords', r2.ok ? 'Saved.' : (r2.error || 'Could not save.'), r2.ok ? 'ok' : 'err');
+      note('msgPasswords', r2.ok ? ('Saved.' + (r2.keyReplaced ? ' The Site API key was replaced at the same time; the old one stops within about a minute.' : '')) : (r2.error || 'Could not save.'), r2.ok ? 'ok' : 'err');
+      if (r2.ok && r2.siteApi) renderApi(r2.siteApi);
       if (r2.ok) {
         if (ap) adminPw = ap;
         document.getElementById('newLeaguePw').value = '';
@@ -579,6 +650,98 @@ document.getElementById('weightReset').addEventListener('click', async function 
   if (r.ok) renderWeights(r.tradeWeights || {});
 });
 
+/* Site API: the switch, the key's short name and dates, Replace now, Replace automatically, and Key in the
+   address. The key itself is only ever on the Site API page. */
+var API = null;
+var API_IVS = [[30, 'Every 30 days'], [60, 'Every 60 days'], [90, 'Every 90 days'], [180, 'Every 180 days'], ['season', 'At Season End']];
+function apiDate(iso) {
+  if (!iso) return '';
+  try { return new Intl.DateTimeFormat(undefined, { timeZone: window.siteTz(), month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(iso)); } catch (e) { return String(iso).slice(0, 10); }
+}
+function apiInDays(iso) {
+  var d = Math.round((Date.parse(iso) - Date.now()) / 86400000);
+  if (d <= 0) return 'today';
+  return d === 1 ? 'tomorrow' : 'in ' + d + ' days';
+}
+function renderApi(f) {
+  if (f) API = f;
+  f = API;
+  var host = document.getElementById('apiRows');
+  if (!host || !f) return;
+  var cur = API_IVS.filter(function (i) { return i[0] === f.interval; })[0] || API_IVS[2];
+  var h = '<div class="cfgsw"><span class="l">API</span><span class="r">' + (f.on ? 'On' : 'Off') +
+    '<button class="sw" role="switch" type="button" aria-checked="' + f.on + '" aria-label="API" id="apiSwitch"></button></span></div>' +
+    '<p class="hint">Off turns every API request away with <code>api_off</code>. Downloads on the Site API page keep working.</p>';
+  if (f.on && f.started) {
+    h += '<span class="lbl2">The key</span>' +
+      '<div class="row"><span>Short name</span><b>ending ' + esc(f.short) + '</b></div>' +
+      '<div class="row"><span>Started</span><b>' + esc(apiDate(f.startedAt)) + '</b></div>' +
+      '<div class="row"><span>Changes</span><b>' + esc(apiDate(f.changesAt)) + ' · ' + esc(apiInDays(f.changesAt)) + '</b></div>' +
+      '<span class="lbl2">Replace now</span><div class="btnstack"><button type="button" class="ghost" id="apiReplace">Replace; old key works 7 more days</button>' +
+      '<button type="button" class="minor" id="apiStop">Replace and stop the old key now</button></div>' +
+      '<p class="hint">Use the first for a routine change. Use the second if the key has leaked: every program using the old key stops within about a minute.</p>';
+  }
+  h += '<span class="lbl2">Replace automatically</span><div class="xsel" id="apiInterval" data-value="' + esc(String(cur[0])) + '">' +
+    '<button type="button" class="xselbtn" aria-haspopup="listbox" aria-expanded="false"><span class="xselval">' + esc(cur[1]) + '</span><span class="xselchev"></span></button>' +
+    '<ul class="xsellist" role="listbox">' + API_IVS.map(function (i) {
+      return '<li role="option" data-v="' + i[0] + '"' + (i === cur ? ' class="on"' : '') + '>' + esc(i[1]) + (i[0] === 90 ? '<small>Default</small>' : '') + '</li>';
+    }).join('') + '</ul></div>' +
+    '<p class="hint">Season End replaces the key when the site moves to its next season, on 1 August (UTC). A changed choice moves the due date, never the key.</p>' +
+    '<div class="cfgsw" style="margin-top:8px"><span class="l">Key in the address</span><span class="r">' + (f.inAddress ? 'Allowed' : 'Header only') +
+    '<button class="sw" role="switch" type="button" aria-checked="' + f.inAddress + '" aria-label="Key in the address" id="apiAddr"></button></span></div>' +
+    '<p class="hint' + (f.inAddress ? '' : ' warnh') + '">' + (f.inAddress ? 'Lets tools that can’t send a header, like a Google Sheets formula, put the key in the address. Anyone who can see the sheet can see the key.' :
+      'Keys in an address are refused with a message saying this site takes the key in a header only; a Google Sheets formula shows that message instead of its table.') + '</p>';
+  host.innerHTML = h;
+  document.getElementById('apiSwitch').addEventListener('click', function () { apiAct({ action: f.on ? 'off' : 'on' }, this); });
+  document.getElementById('apiAddr').addEventListener('click', function () { apiAct({ action: 'settings', inAddress: !f.inAddress }, this); });
+  var rep = document.getElementById('apiReplace');
+  if (rep) rep.addEventListener('click', function () { apiAct({ action: 'replace', stop: false }, this); });
+  var stp = document.getElementById('apiStop');
+  if (stp) stp.addEventListener('click', function () { apiStopAsk(stp); });
+  document.getElementById('apiInterval').addEventListener('xselect', function (e) {
+    var v = e.detail.value;
+    apiAct({ action: 'settings', interval: v === 'season' ? 'season' : Number(v) }, null);
+  });
+}
+async function apiAct(body, btn) {
+  if (btn) btn.disabled = true;
+  var r = await call('/api/admin/site-api', body);
+  if (btn) btn.disabled = false;
+  if (!r.ok) { note('msgApi', r.error || 'Could not save.', 'err'); return; }
+  var f = r.siteApi;
+  var text = 'Saved.';
+  if (body.action === 'on') text = 'The API is on. The key is the same as before.';
+  else if (body.action === 'off') text = 'The API is off. Every request is answered api_off within about a minute.';
+  else if (body.action === 'replace') text = body.stop ? 'Replaced. The old key stops within about a minute.'
+    : 'Replaced. The old key works for 7 more days, until ' + apiDate(f.prev && f.prev.stopsAt) + '.';
+  else if ('interval' in body) text = r.changed === 'due'
+    ? 'Saved. The new due date had already passed, so the key was replaced; the old one works for 7 more days, until ' + apiDate(f.prev && f.prev.stopsAt) + '.'
+    : 'Saved. The key’s due date moved to ' + apiDate(f.changesAt) + '; the key itself did not change.';
+  renderApi(f);
+  note('msgApi', text, 'ok');
+}
+var apiDlgOpener = null;
+function apiStopAsk(opener) {
+  var d = document.getElementById('apiStopDlg');
+  apiDlgOpener = opener;
+  d.hidden = false;
+  var pane = d.querySelector('.instrbody'); if (pane) pane.scrollTop = 0;
+  document.getElementById('apiStopYes').focus({ preventScroll: true });
+}
+function apiStopClose() {
+  document.getElementById('apiStopDlg').hidden = true;
+  var o = document.getElementById('apiStop') || apiDlgOpener;
+  if (o && o.focus) o.focus({ preventScroll: true });
+}
+document.getElementById('apiStopDlg').addEventListener('click', function (e) { if (e.target === this) apiStopClose(); });
+document.getElementById('apiStopNo').addEventListener('click', apiStopClose);
+document.getElementById('apiStopYes').addEventListener('click', function () {
+  document.getElementById('apiStopDlg').hidden = true;
+  apiAct({ action: 'replace', stop: true }, null).then(function () { var o = document.getElementById('apiStop'); if (o) o.focus({ preventScroll: true }); });
+});
+document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !document.getElementById('apiStopDlg').hidden) apiStopClose(); });
+window.addEventListener('tzchange', function () { renderApi(null); });
+
 /* Fortune Teller: where the pipeline stands, and the switch. */
 var ftEnabled = false, ftTimer = null;
 function ftRender(p) {
@@ -635,22 +798,36 @@ async function call(url, body, pwOverride) {
   return shell({
     action: backAction(), title: 'Site Configuration', theme, reduceMotion, rail, body,
     settings: true, stack: true, centred: true, extraCss: css, extraJs: js,
+    overlays: `
+  <div class="instr" id="apiStopDlg" hidden role="dialog" aria-modal="true" aria-label="Stop the old key now?">
+    <div class="instrwrap vwrap">
+      <div class="instrbody vscroll" data-vscroll>
+        <div class="instrhead"><h2>Stop the old key now?</h2></div>
+        <div class="dlgbody"><p>A new key replaces it, and <b>every program using the old key stops within about a minute</b>. Use this if the key has leaked. Programs need the new key from the Site API page to work again.</p>
+          <div class="dlgbtns"><button type="button" class="minor" id="apiStopYes" style="width:100%;padding:13px">Replace and stop the old key now</button>
+          <button type="button" class="ghost" id="apiStopNo">Keep the old key</button></div></div>
+      </div>
+      <div class="vbar" hidden><div class="vbar-thumb"></div></div>
+    </div>
+  </div>`,
     instructions: [
       ['01', 'The Admin Password is asked for every time',
-       'It is needed for each change rather than held onto, so leaving this page open gives nobody else the run of it.'],
+       'It is needed for each change rather than held onto, so leaving this page open gives nobody else the run of it. Every panel starts shut: choose its header to open it, and again to shut it.'],
       ['02', 'Keeping the league connected',
        'League connection shows what the site is pointed at. If pages start coming up empty, replace your ESPN cookies here and save \u2014 that is almost always the cause.'],
       ['03', 'Tools have three settings',
-       'Visible to the league, admin-only, or hidden. Admin-only tools still appear on the home page with a lock, so the league can see they exist.'],
+       'Visible to the league, admin-only, or hidden. Admin-only tools still appear on the home page with a lock, so the league can see they exist. A tool that arrived in this release is marked New here and in the order below.'],
       ['04', 'Home page order',
-       'Move a tile up or down and the home page follows at once. Reset puts the shipped order back.'],
-      ['05', 'Trade Analyzer weighting',
+       'Move a tile up or down and the home page follows at once. Reset puts the shipped order back. A tool that arrived in this release is marked New, so you can see where it landed; the home page\u2019s tiles never are.'],
+      ['05', 'Site API',
+       'Switch the API on or off, see when the key started and when it next changes, replace it now (gently, or at once after a leak), choose how often it is replaced, and whether it may travel in an address. The key itself is on the Site API page.'],
+      ['06', 'Trade Analyzer weighting',
        'Sets what each statistic is worth when the tool judges a deal for your league. Anyone can still move the adjustable ones while they look at a trade; that never changes what you save here.'],
-      ['06', 'Fortune Teller',
+      ['07', 'Fortune Teller',
        'Switch it on and it builds the map by itself as soon as the league is close enough to the end of the regular season, then moves on each week. Check now asks it to look straight away; Rebuild starts the map again from scratch.'],
-      ['07', 'Re-run a pull any time',
+      ['08', 'Re-run a pull any time',
        'Refreshing league data, and re-pulling past seasons, can both be run again whenever you like. Neither loses anything by being repeated.'],
-      ['08', 'Time zone is per person',
+      ['09', 'Time zone is per person',
        'The zone under the gear is yours alone, not a league setting. Everyone picks their own.'],
     ] });
 }
