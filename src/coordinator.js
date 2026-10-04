@@ -19,6 +19,7 @@ import { getDataset } from './datasets.js';
 import { loadConfig } from './config.js';
 import { refreshDataset } from './refresh.js';
 import { sendTally, sendEvents, meteredEnv } from './sitelog.js';
+import { buildSnapshot } from './apibuild.js';
 
 const EMPTY_COUNTERS = { requests: 0, sweeps: 0, coalesced: 0, lastSweepAt: null };
 const hourOf = (ms) => Math.floor(ms / 3600000) * 3600000;
@@ -130,6 +131,8 @@ export class DatasetCoordinator {
       return json({ ok: true, counters: this.counters });
     }
 
+    if (url.pathname === '/api-snapshot') return this.apiSnapshot(url);
+
     if (url.pathname !== '/refresh') {
       return json({ ok: false, error: 'unknown coordinator route' }, 404);
     }
@@ -198,6 +201,46 @@ export class DatasetCoordinator {
     return json({ ok: report.ok, coalesced: false, report, counters: this.counters });
   }
 }
+
+/**
+ * Site API's snapshot, built in its own coordinator instance ('site_api_snapshot'). Isolates ask when theirs is
+ * due; a build already running is shared, and one built within the interval is not repeated. The day's source
+ * refreshes are kept in storage, so an evicted object cannot run past its daily allowance.
+ */
+DatasetCoordinator.prototype.apiSnapshot = async function apiSnapshot(url) {
+  const q = url.searchParams;
+  const every = Math.max(10, Number(q.get('every')) || 300);
+  const force = q.get('force') === '1';
+  const snap = this.snap || (this.snap = { mem: {}, inFlight: null, failedAt: 0 });
+  if (snap.inFlight) return json({ ...(await snap.inFlight), coalesced: true });
+  if (!force && snap.mem.builtAt && Date.now() - snap.mem.builtAt < (every - 2) * 1000) {
+    return json({ ok: true, skipped: true, builtAt: new Date(snap.mem.builtAt).toISOString() });
+  }
+  // --- no awaits between the check above and the assignment below ---
+  const run = (async () => {
+    try {
+      if (snap.mem.day === undefined) {
+        const kept = await this.state.storage.get('apiRefreshes');
+        if (kept) { snap.mem.day = kept.day; snap.mem.refreshes = kept.n; }
+      }
+      const was = snap.mem.refreshes || 0;
+      const r = await buildSnapshot(this.env, snap.mem, { games: q.get('games') === '1', quiet: q.get('quiet') === '1', brake: q.get('brake') === '1' });
+      if ((snap.mem.refreshes || 0) !== was) await this.state.storage.put('apiRefreshes', { day: snap.mem.day, n: snap.mem.refreshes });
+      return r;
+    } catch (err) {
+      const r = { ok: false, error: String((err && err.message) || err).slice(0, 200) };
+      if (Date.now() - snap.failedAt > 3600000) {
+        snap.failedAt = Date.now();
+        try { await sendEvents(this.rawEnv, [{ kind: 'change', sev: 'bad', page: 'site-api', text: `Site API's snapshot failed to build: ${r.error}` }]); } catch { /* recording must never matter */ }
+      }
+      return r;
+    }
+  })();
+  snap.inFlight = run;
+  let r;
+  try { r = await run; } finally { snap.inFlight = null; }
+  return json(r);
+};
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
