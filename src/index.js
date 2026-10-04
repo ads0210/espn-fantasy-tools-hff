@@ -12,8 +12,8 @@ import { llmExportPayload, applyLiveScoring } from './llmexport.js';
 import { fortuneTellerPayload, fortuneTellerMap, simOdds } from './fortuneteller.js';
 export { FortuneTellerDO } from './ftdo.js';
 import { FT_ACTIVE_KEY } from './ftdo.js';
-import { DATASETS, getDataset, planBatches, PARAM_DATASETS } from './datasets.js';
-import { loadConfig, saveConfig, describeConfig, isConfigured, isSetupFinished, canCallEspn } from './config.js';
+import { DATASETS, getDataset, planBatches, PARAM_DATASETS, TTL } from './datasets.js';
+import { loadConfig, saveConfig, describeConfig, isConfigured, isSetupFinished, canCallEspn, workersOriginOf } from './config.js';
 import { coordinatorRefresh } from './dedupe.js';
 import { getPart, headPart, readStatus, isFresh, ageSeconds } from './store.js';
 import {
@@ -32,8 +32,11 @@ import { TOOLS, LEAGUE_TOOLS, describeTools, applyVisibility, visibleTools, visi
   orderTiles, normaliseTileOrder, describeTileOrder, defaultTileOrder, SITE_CONFIG_TOOL } from './tools.js';
 import {
   beginRequest, finishRequest, traceOf, note, markPage, noteLapsed, countException, countOp,
-  sendTick, meteredEnv, isolateFacts, logStub, seasonAt, FIRST_LOG_SEASON,
+  sendTick, meteredEnv, isolateFacts, logStub, seasonAt, FIRST_LOG_SEASON, brakeNow, paceCheckIn, paceUsage, knowsSetUp,
 } from './sitelog.js';
+import { refreshAllowed, objectCallAllowed, BLIND_AFTER_MS } from './budget.js';
+import { MARK_HEADER, busyWarning, LIMIT_COPY } from './pages/limitnotice.js';
+import { swScript, restingPage, RESTING_PATH } from './sw.js';
 import { SHARE_PARAMS, DATA_ROUTE_DATASETS, apiTool } from './readers.js';
 import { BUILD_INFO } from './generated/build-info.js';
 import { runBatch, readJob, jobStatus } from './history.js';
@@ -50,10 +53,16 @@ export { DatasetCoordinator } from './coordinator.js';
 export { LoginThrottle } from './throttle.js';
 export { ScoreTimelineDO } from './scoretimeline.js';
 export { SiteLogDO } from './sitelogdo.js';
+export { SourcePaceDO } from './pacerecord.js';
+export { BackendClockDO } from './clock.js';
+import { handleSiteApi, apiSettings, forgetApiSettings, clientAddress } from './siteapi.js';
+import { fingerprint, programKind } from './sources.js';
+import { siteApiPageRoute } from './siteapipage.js';
+import { started as startedKey, normaliseSiteApi, replaced as replacedKey, dueChange, adminFacts, INTERVALS as KEY_INTERVALS } from './apikey.js';
 import { RELEASE_NOTE_ITEMS } from './release.js';
 import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r179';
+const BUILD_MARKER = 'r199';
 
 
 
@@ -77,8 +86,17 @@ function displayVersion() {
 export default {
   async fetch(request, rawEnv, ctx) {
     rawEnv.BUILD_MARKER = BUILD_MARKER;
+    // The brake (C5): as a daily limit fills, the frontend slows down so the backend keeps its reserve. Every
+    // request here is frontend; the backend (the clock, the cron) runs elsewhere and never reads the brake.
+    const brakeInfo = brakeNow();
+    const brake = brakeInfo.brake;
     // Every R2, KV and Durable Object call is counted for Site Backend's usage panel.
-    const env = meteredEnv(rawEnv);
+    const env = brake === 'normal' ? meteredEnv(rawEnv) : { ...meteredEnv(rawEnv), BRAKE: brake };
+    // An isolate that has not heard the day's counts (or not for 10 minutes) checks in once, behind the response.
+    const usage = paceUsage();
+    if (rawEnv.SITE_LOG && knowsSetUp() && (!usage || Date.now() - usage.heardAt > BLIND_AFTER_MS) && ctx && typeof ctx.waitUntil === 'function') {
+      ctx.waitUntil(paceCheckIn(rawEnv).catch(() => {}));
+    }
     const trace = beginRequest(request);
     let response;
     try {
@@ -90,23 +108,67 @@ export default {
         500
       );
     }
-    finishRequest(rawEnv, ctx, request, response, { recording: Boolean(trace && trace.record), version: BUILD_MARKER });
+    finishRequest(rawEnv, ctx, request, response, { recording: Boolean(trace && trace.record), version: BUILD_MARKER, brake });
+    // Every answer carries the site's own marker, so a page can tell the site's answers from Cloudflare's limit page
+    // (C6); pages read the brake from it and slow their polls to match (the API carries its own pace), and once a
+    // limit is reached it names the limit, so every open page can say so.
+    if (response) {
+      try {
+        response = new Response(response.body, response);
+        response.headers.set(MARK_HEADER, '1');
+        if (brake !== 'normal' && !response.headers.has('x-suggested-interval')) response.headers.set('x-brake', brake);
+        if (brake === 'limit' && brakeInfo.limit && brakeInfo.limit !== 'worker') response.headers.set('x-limit', brakeInfo.limit);
+      } catch { /* an answer that cannot be copied keeps its own headers */ }
+    }
     return response;
   },
 
   /**
    * Cron Trigger, once a minute.
    *
-   * Deliberately cheap in the common case: it reads the already-stored live
-   * digest, and if nothing in it is actually in play it returns without calling
-   * ESPN at all. Gating the work rather than the schedule is what makes this
-   * survive an off-season without anyone having to remember to switch it off.
+   * The minute's work (runMinute below) is the site's backend: it must never stop. Where the backend clock is on
+   * (BACKEND_CLOCK = "on", dev for now), the cron only knocks on the clock object, which does the work once a
+   * minute from its own alarm or this knock, whichever comes first (C5). If the knock fails the cron does the work
+   * itself, so a broken clock can never cost a minute. Everywhere else the cron does the work, as it always has.
    */
   async scheduled(event, rawEnv, ctx) {
     rawEnv.BUILD_MARKER = BUILD_MARKER;
-    const env = meteredEnv(rawEnv);
     const at = (event && event.scheduledTime) || Date.now();
+    if (clockIsOn(rawEnv)) {
+      try {
+        const r = await rawEnv.CLOCK.get(rawEnv.CLOCK.idFromName('clock')).fetch(`https://clock/knock?at=${at}`);
+        if (r.ok) return;
+      } catch (err) {
+        console.log('clock knock failed:', String((err && err.stack) || err));
+      }
+      await runMinute(rawEnv, { at, via: 'cron', cron: event && event.cron, fallback: true });
+      return;
+    }
+    await runMinute(rawEnv, { at, via: 'cron', cron: event && event.cron });
+  },
+};
+
+/** Whether the backend clock does the minute's work (C5): on where the deployment says so, and has the object. */
+export function clockIsOn(env) {
+  return Boolean(env && env.CLOCK && String(env.BACKEND_CLOCK || '').toLowerCase() === 'on');
+}
+
+/**
+ * The minute's work: the score timeline, logos, Fortune Teller's pipeline check and build nudge, the site log's
+ * tick and the Site API key's due date. Run by the cron, or by the backend clock object (src/clock.js) from its
+ * alarm or the cron's knock. Deliberately cheap in the common case: it reads the already-stored live digest, and if
+ * nothing in it is actually in play it returns without calling ESPN at all. `via` (alarm, knock or cron) and how
+ * late the minute's work began are recorded with the tick, so Site Backend can show which clock kept each minute.
+ */
+export async function runMinute(rawEnv, { at = Date.now(), via = 'cron', cron = null, fallback = false, heard = null } = {}) {
+    rawEnv.BUILD_MARKER = BUILD_MARKER;
+    const env = meteredEnv(rawEnv);
+    const event = { scheduledTime: at, cron };
     const jobs = {};
+    const minuteStart = Math.floor(at / 60000) * 60000;
+    jobs.clock = { via, late: Math.max(0, Date.now() - minuteStart), ...(fallback ? { fallback: true } : {}),
+      // Whether the alarm and the cron's knock were each heard the minute before (1 or 0), whoever did the work.
+      ...(heard ? { ha: heard.alarm ? 1 : 0, hk: heard.knock ? 1 : 0 } : {}) };
     const timed = async (name, fn, shape) => {
       const t0 = Date.now();
       try {
@@ -137,8 +199,11 @@ export default {
     } catch (err) {
       console.log('scheduled log tick failed:', String((err && err.stack) || err));
     }
-  },
-};
+    // The backend's own check on the Site API key: a replacement that falls due (Season End above all) happens
+    // even when no request comes. Reads the config the tick just loaded; writes only when a change is due.
+    try { await apiSettings(env, Date.now()); } catch { /* the next request or tick tries again */ }
+    return jobs;
+}
 
 /**
  * Fortune Teller's pipeline check, every 15 minutes: the schedule and settings are brought
@@ -319,6 +384,18 @@ const themeOf = (request) => (readCookie(request, THEME_COOKIE) === 'light' ? 'l
 const motionOf = (request) => readCookie(request, MOTION_COOKIE) === 'reduce';
 const isApi = (path) => path.startsWith('/api/');
 
+/* The site's workers.dev address is noted once, the first time a set-up site is asked for there (one settings
+   write, ever), so Site API's guides can name it even when the page is opened at a custom domain. */
+let workersOriginNoted = false;
+function noteWorkersOrigin(env, ctx, cfg, url) {
+  if (workersOriginNoted || !cfg || cfg.workersOrigin || !isSetupFinished(cfg)) return;
+  const origin = workersOriginOf(url.origin);
+  if (!origin) return;
+  workersOriginNoted = true;
+  const p = saveConfig(env, { workersOrigin: origin }).catch(() => { workersOriginNoted = false; });
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(p);
+}
+
 async function route(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -332,7 +409,7 @@ async function route(request, env, ctx) {
         CONFIG: Boolean(env.CONFIG), DATA: Boolean(env.DATA),
         COORDINATOR: Boolean(env.COORDINATOR), THROTTLE: Boolean(env.THROTTLE),
         SCORE_TIMELINE: Boolean(env.SCORE_TIMELINE),
-        FORTUNE: Boolean(env.FORTUNE), SITE_LOG: Boolean(env.SITE_LOG),
+        FORTUNE: Boolean(env.FORTUNE), SITE_LOG: Boolean(env.SITE_LOG), SOURCE_PACE: Boolean(env.SOURCE_PACE), CLOCK: Boolean(env.CLOCK),
         ASSETS: Boolean(env.ASSETS),
       },
     });
@@ -359,12 +436,37 @@ async function route(request, env, ctx) {
     });
   }
 
-  const cfg = await loadConfig(env);
+  /* The browser helper (C6) and the resting page it keeps, ahead of the gate: neither holds league data. The
+     helper is fetched afresh on every check (no-cache), so its kill switch reaches every browser within about a day. */
+  if (path === '/sw.js') {
+    return new Response(swScript(), { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache', 'service-worker-allowed': '/' } });
+  }
+  if (path === RESTING_PATH) {
+    return new Response(restingPage('worker', { clockOn: clockIsOn(env) }), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } });
+  }
+
+  /* Site API, first in line: opened by the league's key alone, never by the sign-in cookie, and answered
+     before the League Password gate with the site's settings held 60 seconds per isolate. */
+  if (path === '/api/v1' || path.startsWith('/api/v1/')) return handleSiteApi(request, env, ctx);
+
+  // An isolate that cannot read its settings (the day's KV reads spent) shows the site's own resting page (C6).
+  let cfg;
+  try { cfg = await loadConfig(env); } catch (err) {
+    console.log('settings could not be read:', String((err && err.message) || err));
+    if (isApi(path)) return json({ ok: false, error: 'The site has used today’s free allowance of settings reads; it carries on at 00:00 UTC.', limit: 'kvR' }, 503, { 'x-limit': 'kvR' });
+    return new Response(restingPage('kv', { clockOn: clockIsOn(env) }), { status: 503, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-limit': 'kvR' } });
+  }
   const theme = themeOf(request);
   const reduceMotion = motionOf(request);
+  noteWorkersOrigin(env, ctx, cfg, url);
   // Recording starts when setup finishes: a site still in its wizard records nothing.
   const trace = traceOf(request);
   if (trace) trace.record = isSetupFinished(cfg);
+  // Every recorded request is counted by its source (D36, D37): a keyed fingerprint of the address, never the
+  // address, and the kind of program in one word, never the user agent. Only for High activity and the likely member.
+  if (trace && trace.record && cfg.sessionSecret) {
+    try { trace.fp = await fingerprint(cfg.sessionSecret, clientAddress(request)); trace.kind = programKind(request.headers.get('user-agent')); } catch { trace.fp = null; }
+  }
 
   // ---- first run --------------------------------------------------------
   if (!isConfigured(cfg)) {
@@ -439,9 +541,18 @@ async function route(request, env, ctx) {
 
   // ---- authenticated -----------------------------------------------------
   if (path === '/api/auth/status') return json({ ok: true, authenticated: true, build: BUILD_MARKER });
-  if (path === '/api/dashboard/status') return dashboardStatus(env, ctx);
+  if (path === '/api/dashboard/status') return dashboardStatus(env, ctx, url);
   if (path === '/api/dashboard/board') return dashboardBoard(env, ctx, url);
-  if (path.startsWith('/api/admin/')) return handleAdmin(request, env, cfg, path);
+  if (path.startsWith('/api/admin/')) {
+    // Saving settings is the one thing the day's KV writes limit stops (C6): Site Configuration says why and when.
+    try { return await handleAdmin(request, env, cfg, path); } catch (err) {
+      const msg = String((err && err.message) || err);
+      if (brakeNow().limit === 'kvW' || /\bKV\b|limit|exceed|quota/i.test(msg)) {
+        return json({ ok: false, error: 'Saving settings waits until 00:00 UTC: the site has used today’s free allowance of settings writes. Everything else carries on.', limit: 'kvW' }, 503, { 'x-limit': 'kvW' });
+      }
+      throw err;
+    }
+  }
 
   if (path === '/api/meta') {
     return json({
@@ -474,6 +585,9 @@ async function route(request, env, ctx) {
   if (path.startsWith('/api/live/')) {
     return handleLive(env, cfg, path.slice('/api/live/'.length), url, ctx);
   }
+
+  // Draft Helper's poll: every dataset that is due, in one request.
+  if (path === '/api/data') return dataBatch(env, cfg, url, ctx);
 
   if (path.startsWith('/api/data/')) {
     const rest = path.slice('/api/data/'.length).replace(/\.json$/, '');
@@ -542,8 +656,11 @@ async function route(request, env, ctx) {
 
     const vis = visibilityOf(cfg, key);
     const siteBackendApi = key === 'site-backend' && path === '/apps/site-backend/api';
+    // Site API's page route: under the tool's own path, so the unlock cookie reaches it; never cached.
+    const siteApiPage = key === 'site-api' && path === '/apps/site-api/api';
     if (vis === VISIBILITY.HIDDEN) {
       if (siteBackendApi) return json({ ok: false, error: 'Site Backend is switched off.' }, 403);
+      if (siteApiPage) return json({ ok: false, error: 'Site API is switched off.' }, 403, { 'cache-control': 'no-store' });
       return html(shell({
         title: 'Not available',
         theme, reduceMotion, settings: true, action: backAction(),
@@ -559,11 +676,13 @@ async function route(request, env, ctx) {
       const unlocked = await hasToolUnlock(request, cfg, key);
       if (!unlocked) {
         if (siteBackendApi) return json({ ok: false, error: 'locked', locked: true }, 403);
+        if (siteApiPage) return json({ ok: false, error: 'locked', locked: true }, 401, { 'cache-control': 'no-store' });
         if (isDocument) markPage(request, key, `${tool.name} (Admin Password prompt)`);
         return html(adminGatePage({ tool, theme, reduceMotion }), 200);
       }
     }
     if (siteBackendApi) return siteBackendRoute(request, env, cfg, url);
+    if (siteApiPage) return siteApiPageRoute(request, env, cfg, url, ctx);
     if (isDocument) {
       markPage(request, key, tool.name);
       // A shared link being opened: its parameters say so, and nothing else about it is kept.
@@ -590,6 +709,11 @@ const CLIENT_EVENTS = {
   'export-copy-compact': { text: 'Exported league data (copy, compact)', page: 'llm-export' },
   'export-download-full': { text: 'Exported league data (download, full)', page: 'llm-export' },
   'export-download-compact': { text: 'Exported league data (download, compact)', page: 'llm-export' },
+  // Site API: the key copied on the page, and a download taken. Never which key, never which rows.
+  'api-key-copy': { text: 'Copied the Site API key', page: 'site-api' },
+  'api-download': { text: 'Downloaded Site API data', page: 'site-api' },
+  // A page that saw Cloudflare's daily limit page, reported once the site answered again (C6): the cutoff's record.
+  'limit-seen': { text: 'A page saw Cloudflare’s daily limit and rested until 00:00 UTC', page: null, limit: true },
 };
 
 async function siteLogEvent(request, env) {
@@ -599,13 +723,15 @@ async function siteLogEvent(request, env) {
   if (!ev) return json({ ok: false, error: 'unknown event' }, 400);
   const trace = traceOf(request);
   if (!trace || !trace.record) return json({ ok: true, recorded: false });
+  // At Protect the event waits for the isolate's next report rather than calling the log now (C5).
+  if (!objectCallAllowed(env.BRAKE, 'client-event')) { note(request, 'operation', ev.text, { page: ev.page }); return json({ ok: true }); }
   const stub = logStub(env);
   if (stub) {
     const m = /(?:^|;\s*)eft_team=([^;]*)/.exec(request.headers.get('cookie') || '');
     const team = m && Number(decodeURIComponent(m[1])) > 0 ? Number(decodeURIComponent(m[1])) : null;
     try {
       const r = await stub.fetch('https://site-log/client', { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text: ev.text, page: ev.page, team }) });
+        body: JSON.stringify({ text: ev.text, page: ev.page, team, ...(ev.limit ? { limit: true, seenAt: Number(body.at) || null } : {}) }) });
       if (r.body && r.body.cancel) await r.body.cancel().catch(() => {});
     } catch { /* recording must never matter */ }
   }
@@ -619,6 +745,9 @@ async function siteLogEvent(request, env) {
  */
 export async function siteBackendRoute(request, env, cfg, url) {
   if (!env.SITE_LOG) return json({ ok: false, error: 'The site log is not available on this deployment.' }, 503);
+  // At Protect the frontend calls no object but sign-in and the log's report, and Site Backend is assembled inside
+  // the log object, so it rests until the day's use falls back (C5).
+  if (!objectCallAllowed(env.BRAKE, 'site-backend')) return json({ ok: false, paused: 'protect', error: 'Site Backend rests while the site saves its daily allowance.' }, 503);
   const q = Object.fromEntries(url.searchParams);
   const now = seasonAt();
   const setupSeason = cfg.setupCompletedAt ? seasonAt(Date.parse(cfg.setupCompletedAt)) : now;
@@ -638,6 +767,8 @@ export async function siteBackendRoute(request, env, cfg, url) {
     // Shown to the viewer about their own connection; the log never stores facts.
     viewer: { colo: cf.colo || null, httpProtocol: cf.httpProtocol || null, tlsVersion: cf.tlsVersion || null, rtt: cf.clientTcpRtt ?? null },
     devHooks: Boolean(env.DEV_TOKEN),
+    // The viewer's own source, only to mark their alias You; redacted from every payload.
+    you: cfg.sessionSecret ? await fingerprint(cfg.sessionSecret, clientAddress(request)).then((f) => (f ? f.id : null)).catch(() => null) : null,
     releaseItems: RELEASE_NOTE_ITEMS,
     needsHistoryRepull: NEEDS_HISTORY_REPULL,
   };
@@ -765,8 +896,8 @@ async function handleSetupPasswords(request, env, cfg) {
 async function handleLogin(request, env, cfg) {
   const gate = await throttleCheck(env, request);
   if (gate.blocked) {
-    note(request, 'sign-in', 'Sign-in blocked by the throttle', { sev: 'warn', page: 'signin' });
-    return json({ ok: false, error: 'Too many attempts. Try again in a few minutes.' }, 429,
+    note(request, 'sign-in', gate.busy ? 'Sign-in asked to wait: the site is saving its daily allowance' : 'Sign-in blocked by the throttle', { sev: 'warn', page: 'signin' });
+    return json({ ok: false, error: gate.busy ? 'The site is very busy right now. Try again in a minute.' : 'Too many attempts. Try again in a few minutes.' }, 429,
       { 'retry-after': String(gate.retryAfterSeconds || 600) });
   }
   const body = await readJson(request);
@@ -887,7 +1018,9 @@ async function handleSetupTools(request, env, cfg) {
 async function handleSetupFinish(request, env, cfg) {
   if (request.method !== 'POST') return json({ ok: false, error: 'POST required' }, 405);
   if (!cfg.leagueId) return json({ ok: false, error: 'Connect your league first.' }, 400);
-  await saveConfig(env, { setupCompletedAt: new Date().toISOString() });
+  // Site API's key exists from the moment setup finishes: generation 1 starts now.
+  const sa = cfg.siteApi && cfg.siteApi.gen ? cfg.siteApi : startedKey(cfg.siteApi || normaliseSiteApi(null));
+  await saveConfig(env, { setupCompletedAt: new Date().toISOString(), siteApi: sa });
   // Recording starts here, so this request is its first entry.
   const trace = traceOf(request);
   if (trace) trace.record = true;
@@ -922,12 +1055,19 @@ async function handleHistoryBatch(request, env, cfg) {
  * admin password" ambiguous with "authenticate as admin". Verified afresh on
  * every single call: there is no admin session by design.
  */
+/** Site Configuration's Site API facts, after any replacement that is due (a page view counts as a request). */
+async function siteApiFacts(env, cfg, { lazy = true } = {}) {
+  let c = cfg;
+  if (lazy && isSetupFinished(cfg)) { try { c = await apiSettings(env, Date.now(), { fresh: true }); } catch { c = cfg; } }
+  return adminFacts(c.sessionSecret, c.siteApi);
+}
+
 async function handleAdmin(request, env, cfg, path) {
   const supplied = request.headers.get('x-admin-password');
   const body = request.method === 'POST' ? (await readJson(request)) || {} : {};
 
   const gate = await throttleCheck(env, request);
-  if (gate.blocked) return json({ ok: false, error: 'Too many attempts. Try again in a few minutes.' }, 429);
+  if (gate.blocked) return json({ ok: false, error: gate.busy ? 'The site is very busy right now. Try again in a minute.' : 'Too many attempts. Try again in a few minutes.' }, 429);
 
   if (!(await checkAdminPassword(cfg, supplied))) {
     await throttleFail(env, request);
@@ -949,6 +1089,7 @@ async function handleAdmin(request, env, cfg, path) {
       config: describeConfig(cfg),
       tools: describeTools(cfg),
       order: describeTileOrder(cfg),
+      siteApi: await siteApiFacts(env, cfg),
       history: jobStatus(await readJob(env)),
       // Reported alongside history for the same reason: the panel has to be
       // able to say what state it is in when the page opens, not only while a
@@ -995,13 +1136,72 @@ async function handleAdmin(request, env, cfg, path) {
       patch.adminPasswordHash = await hashPassword(ap);
     }
     if (!Object.keys(patch).length) return json({ ok: false, error: 'Enter at least one new password.' }, 400);
+    // A changed League Password usually means someone is being locked out, so the Site API key is replaced
+    // with it, at once and with no grace period.
+    const saNow = normaliseSiteApi(cfg.siteApi);
+    if (lp && saNow.gen) patch.siteApi = replacedKey(saNow, Date.now(), { grace: false, how: 'password' });
     patch.stamps = {};
     if (lp) patch.stamps.leaguePassword = stamp();
     if (ap) patch.stamps.adminPassword = stamp();
-    await saveConfig(env, patch);
+    const savedPw = await saveConfig(env, patch);
     if (lp) note(request, 'admin', 'League Password changed', { page: 'config' });
     if (ap) note(request, 'admin', 'Admin Password changed', { page: 'config' });
-    return json({ ok: true });
+    if (patch.siteApi) {
+      forgetApiSettings();
+      note(request, 'admin', 'Site API key replaced with the League Password; the old key stopped', { page: 'site-api' });
+    }
+    return json({ ok: true, keyReplaced: Boolean(patch.siteApi), siteApi: await siteApiFacts(env, savedPw, { lazy: false }) });
+  }
+
+  if (path === '/api/admin/site-api-members') {
+    // High activity's likely members, for the aliases on screen: the only answer that ever carries one. It changes
+    // nothing; the page holds what it gets in memory and drops it when it is left.
+    if (!env.SITE_LOG) return json({ ok: false, error: 'The site log is not available on this deployment.' }, 503);
+    const aliases = (Array.isArray(body.aliases) ? body.aliases : []).map(String).filter((a) => /^IPv[46]:\d{1,5}$/.test(a)).slice(0, 200);
+    const r = await logStub(env).fetch('https://site-log/members', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ aliases }) });
+    const j = await r.json().catch(() => ({}));
+    note(request, 'admin', `Likely members shown on Site Backend (${aliases.length} ${aliases.length === 1 ? 'source' : 'sources'})`, { page: 'site-backend' });
+    return json({ ok: true, members: (j && j.members) || {} }, 200, { 'cache-control': 'no-store' });
+  }
+
+  if (path === '/api/admin/site-api') {
+    // The Site API panel: the switch, replace now (gently, or stopping the old key), how often it is
+    // replaced, and whether the key may travel in an address. Answers with the panel's facts, never the key.
+    const action = String(body.action || '');
+    if (!['on', 'off', 'replace', 'settings'].includes(action)) return json({ ok: false, error: 'unknown action' }, 400);
+    const now = Date.now();
+    let sa = normaliseSiteApi(cfg.siteApi);
+    if (!sa.gen) sa = startedKey(sa, now);
+    const said = [];
+    let changed = null;
+    if (action === 'on' || action === 'off') {
+      sa = { ...sa, on: action === 'on' };
+      said.push(action === 'on' ? 'Site API switched on' : 'Site API switched off');
+    } else if (action === 'replace') {
+      const stop = body.stop === true;
+      sa = replacedKey(sa, now, { grace: !stop, how: stop ? 'stop' : 'manual' });
+      changed = stop ? 'stopped' : 'grace';
+      said.push(stop ? 'Site API key replaced and the old key stopped' : 'Site API key replaced; the old one works for 7 more days');
+    } else {
+      if ('interval' in body) {
+        const iv = body.interval === 'season' ? 'season' : Number(body.interval);
+        if (!KEY_INTERVALS.includes(iv)) return json({ ok: false, error: 'Choose 30, 60, 90 or 180 days, or Season End.' }, 400);
+        sa = { ...sa, interval: iv };
+        said.push(`Site API key now replaced ${iv === 'season' ? 'at Season End' : `every ${iv} days`}`);
+        // A changed interval moves the due date, never the key; a date already passed replaces it with the usual grace.
+        const due = dueChange(sa, now);
+        if (due) { sa = due; changed = 'due'; said.push('Site API key replaced: its new due date had already passed'); }
+      }
+      if ('inAddress' in body) {
+        sa = { ...sa, inAddress: body.inAddress !== false };
+        said.push(sa.inAddress ? 'Site API key allowed in the address' : 'Site API key refused in the address: header only');
+      }
+      if (!said.length) return json({ ok: false, error: 'Nothing to change.' }, 400);
+    }
+    const saved = await saveConfig(env, { siteApi: sa, stamps: { siteApi: stamp() } });
+    forgetApiSettings();
+    for (const text of said) note(request, 'admin', text, { page: 'site-api' });
+    return json({ ok: true, action, changed, siteApi: await siteApiFacts(env, saved, { lazy: false }) });
   }
 
   if (path === '/api/admin/fortune-teller') {
@@ -1125,6 +1325,13 @@ async function handleLive(env, cfg, rest, url, ctx) {
  */
 async function liveWeek(env, cfg, url, ctx) {
   const out = await liveWeekPayload(env, cfg, Number(url.searchParams.get('w') || 0), ctx);
+  // Once a minute the page's 15-second poll also asks for the week's score history (?timeline=1), answered here in
+  // the same response, so following a game takes one request where it took two.
+  if (url.searchParams.get('timeline') === '1' && objectCallAllowed(env.BRAKE, 'timeline') && out.status === 200 && out.body && out.body.live && out.body.digest && out.body.digest.season) {
+    const season = String(out.body.digest.season), week = out.body.week;
+    const t = await timelineRead(env, season, week).catch(() => null);
+    if (t) out.body = { ...out.body, timeline: { season, week, rows: t.rows || [], events: t.events || [], lastTick: t.lastTick || null } };
+  }
   return json(out.body, out.status);
 }
 
@@ -1339,6 +1546,8 @@ async function liveTimeline(env, url, ctx) {
   if (!season || !week) {
     return json({ ok: false, error: 'season and w are required' }, 400);
   }
+  // At Protect the page keeps the history it has (the timeline lives in an object, and the frontend calls none).
+  if (!objectCallAllowed(env.BRAKE, 'timeline')) return json({ ok: false, paused: true, error: 'The site is saving its daily allowance; the score history will catch up.' }, 503);
   const out = await timelineRead(env, season, week);
   return json({
     ok: true, season, week,
@@ -1359,6 +1568,43 @@ async function liveTimeline(env, url, ctx) {
  * freshness window — the page would feel broken while it waited. Only a
  * complete cache miss blocks, since there is nothing to show otherwise.
  */
+/**
+ * Several of Draft Helper's datasets in one answer: ?k=<key>&e=<tag held>&k=<key>&e=… . Each is judged exactly as
+ * /api/data/<key> judges it (refreshed behind the answer when stale, never forced); one the page already holds,
+ * named by its tag, comes back as { etag, same: true } with no body, the rest as { etag, data }. The stored text
+ * is passed through as it is, never parsed.
+ */
+async function dataBatch(env, cfg, url, ctx) {
+  const keys = url.searchParams.getAll('k');
+  const tags = url.searchParams.getAll('e');
+  if (!keys.length || keys.length > DATA_ROUTE_DATASETS.size || new Set(keys).size !== keys.length || keys.some((k) => !DATA_ROUTE_DATASETS.has(k))) {
+    return json({ ok: false, error: 'ask for one or more of Draft Helper’s datasets, each once' }, 400);
+  }
+  const one = async (key, held) => {
+    const dataset = getDataset(key);
+    let head = await headPart(env, key, 'main');
+    if (!brakeAllowsRefresh(env, dataset, Boolean(head))) {
+      /* the brake (C5): what is stored is served as it is */
+    } else if (!head) {
+      await coordinatorRefresh(env, key, false);
+      head = await headPart(env, key, 'main');
+    } else if (!isFresh(head.uploaded, dataset.ttl)) {
+      const task = coordinatorRefresh(env, key, false);
+      if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(task);
+      else await task;
+    }
+    if (!head) return `${JSON.stringify(key)}:{"ok":false}`;
+    if (held && head.httpEtag && held === head.httpEtag) return `${JSON.stringify(key)}:{"etag":${JSON.stringify(head.httpEtag)},"same":true}`;
+    const obj = await getPart(env, key, 'main');
+    if (!obj) return `${JSON.stringify(key)}:{"ok":false}`;
+    return `${JSON.stringify(key)}:{"etag":${JSON.stringify(obj.httpEtag || '')},"data":${await obj.text()}}`;
+  };
+  const parts = await Promise.all(keys.map((k, i) => one(k, tags[i] || '')));
+  return new Response(`{"ok":true,"sets":{${parts.join(',')}}}`, {
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+  });
+}
+
 async function serveDataset(env, cfg, key, part, url, ctx, request = null) {
   const dataset = getDataset(key);
   if (!dataset) return json({ ok: false, error: `unknown dataset "${key}"` }, 404);
@@ -1374,7 +1620,9 @@ async function serveDataset(env, cfg, key, part, url, ctx, request = null) {
   let refreshed = null;
   let revalidating = false;
 
-  if (!head) {
+  if (!brakeAllowsRefresh(env, dataset, Boolean(head))) {
+    /* the brake (C5): what is stored is served as it is */
+  } else if (!head) {
     // Nothing cached: this one has to wait.
     refreshed = await coordinatorRefresh(env, key, false);
     head = await headPart(env, key, part);
@@ -1423,8 +1671,17 @@ async function serveDataset(env, cfg, key, part, url, ctx, request = null) {
  * a 10ms CPU budget is not viable, so the reduction happens once at refresh
  * time and is cached in R2.
  */
-async function dashboardStatus(env, ctx) {
-  return json(await dashboardPayload(env, ctx));
+/**
+ * The home page's poll. Every 90 seconds it also asks for the board (?board=1&team=…), which is then answered in
+ * the same response, so the page makes one request where it used to make two.
+ */
+async function dashboardStatus(env, ctx, url) {
+  if (!url || url.searchParams.get('board') !== '1') return json(await dashboardPayload(env, ctx));
+  const [status, board] = await Promise.all([
+    dashboardPayload(env, ctx),
+    boardPayload(env, ctx, url.searchParams.get('team')).catch(() => ({ ok: false })),
+  ]);
+  return json({ ...status, board });
 }
 
 /**
@@ -1468,6 +1725,22 @@ function matchupStates(live, period) {
   return byTeam;
 }
 
+/**
+ * The home page's notice about the free limits (C6), from this isolate's counts: from Protect on Worker requests a
+ * warning before Cloudflare's daily limit; once another limit is reached, what is paused and until when; and for a
+ * day after pages saw Cloudflare's limit page, when it happened. Null when there is nothing to say.
+ */
+export function siteNoticeOf(env, now = Date.now()) {
+  const b = brakeNow(now);
+  const usage = paceUsage();
+  const outage = usage && usage.outage ? usage.outage : null;
+  let notice = null;
+  if (b.brake === 'limit' && b.limit && b.limit !== 'worker' && LIMIT_COPY[b.limit]) notice = { kind: 'limit', limit: b.limit, text: LIMIT_COPY[b.limit] };
+  else if ((b.brake === 'protect' || b.brake === 'limit') && b.limit === 'worker') notice = { kind: 'busy', text: busyWarning(clockIsOn(env)) };
+  if (!notice && !outage) return null;
+  return { ...(notice || {}), ...(outage ? { outage: { ...outage, clockOn: clockIsOn(env) } } : {}) };
+}
+
 export async function dashboardPayload(env, ctx) {
   const [scoreboard, matchups, live, schedules] = await Promise.all([
     readDigest(env, 'scoreboard_digest', ctx),
@@ -1509,6 +1782,9 @@ export async function dashboardPayload(env, ctx) {
 
   return {
     ok: true,
+    // The site's own notices (C6): a warning before the daily Worker request limit, a limit reached that the site's
+    // code runs past, and the next day's note about a cutoff pages saw. Templates; the page fills in the times.
+    siteNotice: siteNoticeOf(env),
     nfl: {
       live: nflLive,
       summary: nflLive
@@ -1736,10 +2012,20 @@ export async function boardPayload(env, ctx, teamId) {
  * nothing in the request path ever asked for those payloads, so the miss was
  * permanent rather than momentary.
  */
+/**
+ * The brake on a page view's refreshes (C5): at Economy a page refreshes nothing but live scoring (or a dataset
+ * never stored at all, so no page shows nothing for want of one); at Protect, and once a limit is reached, nothing.
+ * The backend's own work carries no brake, so it is never held here.
+ */
+function brakeAllowsRefresh(env, dataset, stored) {
+  return refreshAllowed(env && env.BRAKE, { live: dataset.ttl === TTL.LIVE, stored });
+}
+
 async function ensureDataset(env, key, ctx) {
   const dataset = getDataset(key);
   if (!dataset) return null;
   const head = await headPart(env, key, 'main');
+  if (!brakeAllowsRefresh(env, dataset, Boolean(head))) return head ? getPart(env, key, 'main') : null;
   if (!head) {
     await coordinatorRefresh(env, key, false);
   } else if (!isFresh(head.uploaded, dataset.ttl)) {
@@ -1764,7 +2050,7 @@ function revalidate(env, key, ctx) {
   if (!dataset || !ctx || typeof ctx.waitUntil !== 'function') return;
   ctx.waitUntil((async () => {
     const head = await headPart(env, key, 'main');
-    if (head && !isFresh(head.uploaded, dataset.ttl)) {
+    if (head && !isFresh(head.uploaded, dataset.ttl) && brakeAllowsRefresh(env, dataset, true)) {
       await coordinatorRefresh(env, key, false);
     }
   })());
