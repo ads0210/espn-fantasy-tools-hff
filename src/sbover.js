@@ -3,6 +3,7 @@
  * (usage against the free limits, page states, the verdict).
  */
 
+import { apiReasons } from './sbapi.js';
 import { DATASETS } from './datasets.js';
 import { TOOLS, visibilityOf, VISIBILITY, describeTileOrder } from './tools.js';
 import { RELEASE_NOTE_ITEMS } from './release.js';
@@ -13,9 +14,10 @@ import { BYTE_BUDGET } from './scoretimeline.js';
 import { LOG_BUDGET_REF } from './sblimits.js';
 import {
   C, B, worst, hourOf, utcMidnight, median, ttlText, datasetRows, paramRows, upstream,
-  eventsSince, countEvents, groupEvents, latestEvents, sumReq, ticksOf, pageVisibility, visibilityLabel, PAGES, pageOf,
+  eventsSince, countEvents, groupEvents, latestEvents, sumReq, servedReq, ticksOf, pageVisibility, visibilityLabel, PAGES, pageOf,
 } from './sbcore.js';
 import { pageForRoute } from './readers.js';
+import { levelFrom, paceOf, BRAKE_OF, BRAKE_WORDS, LIMIT_WORDS } from './budget.js';
 
 export const LIMITS = {
   worker: 100000, doReq: 100000, rowsW: 100000, rowsR: 5000000, kvR: 100000, kvW: 1000,
@@ -46,7 +48,7 @@ export function usage(src, dayStart = null) {
 
 async function usageOf(src, mid, isToday) {
   const rows = (await src.hours(48)).filter((r) => r.hour >= mid && r.hour < mid + 86400000);
-  const req = sumReq(rows).n;
+  const req = servedReq(rows);
   const ticks = Object.keys(ticksOf(rows)).length;
   const day = new Date(mid).toISOString().slice(0, 10);
   const logM = isToday ? src.meter() : ((src.deps.meta('daily', []) || []).find((x) => x.day === day) || { req: 0, rows: 0, read: 0 });
@@ -100,6 +102,7 @@ export function pageState(page, ctx) {
   }
   if (page.key === 'live-matchups' && ctx.window.open) s.push('run');
   if (page.key === 'config' && ctx.espn.failing) s.push('warn');
+  if (page.key === 'site-api' && ctx.apiHot) s.push(ctx.apiHot);
   return s.length ? worst(s) : 'ok';
 }
 
@@ -138,8 +141,22 @@ export async function reasons(src, ctx) {
   const u = await usage(src);
   const over = [['Worker requests', u.worker / LIMITS.worker], ['Durable Object requests', u.doReq / LIMITS.doReq], ['rows written', u.rowsW / LIMITS.rowsW], ['KV writes', u.kvW / LIMITS.kvW], ['KV reads', u.kvR / LIMITS.kvR]].filter((x) => x[1] > 0.7);
   for (const [n, p] of over) r.push({ s: 'warn', text: `${n} at ${Math.round(p * 100)}% of today's free limit`, go: 'p-usage' });
+  // The brake (C5): which level, and which limit put it there.
+  const lvl = levelFrom({ counts: { worker: u.worker, doReq: u.doReq, rowsW: u.rowsW, kvR: u.kvR, kvW: u.kvW }, rate: {} });
+  const brake = BRAKE_OF[lvl.key] || 'normal';
+  if (brake !== 'normal') r.push({ s: brake === 'economy' ? 'warn' : 'bad', text: `The brake is at ${BRAKE_WORDS[brake]}: ${LIMIT_WORDS[lvl.limit] || 'a limit'} at ${Math.round(lvl.frac * 100)}% of today's free limit, so pages slow down until the day's use falls back or 00:00 UTC`, go: 'p-usage' });
+  // The backend clock (C5): a clock silent this hour, or the cron doing the work because the clock could not be reached.
+  const cs = clockSummary(ctx.ticks, src.now - 3600000);
+  // Judged on whether each clock was heard, not on which did the work: the one that arrives second does none.
+  if (cs.clockOn && cs.heard.judged >= 30) {
+    if (!cs.heard.alarm) r.push({ s: 'warn', text: 'The backend clock\'s own alarm has not fired this hour: the cron\'s knock is keeping every minute', go: 'p-cron' });
+    else if (!cs.heard.knock && !cs.fallback) r.push({ s: 'warn', text: 'The cron has not knocked this hour: the backend clock\'s alarm is keeping every minute', go: 'p-cron' });
+  }
+  if (cs.fallback) r.push({ s: 'warn', text: `The cron did ${cs.fallback} minute${cs.fallback === 1 ? '' : 's'} of work itself this hour: the backend clock could not be reached`, go: 'p-cron' });
   const m = src.meter();
   if (m.paused) r.push({ s: 'warn', text: 'The log reached its daily budget: counters and status reports pause until 00:00 UTC', go: 'p-usage' });
+  // Site API: a source in High activity (its likely member locked), an old key on its grace's last day, a failing snapshot.
+  for (const x of await apiReasons(src)) r.push(x);
   return r;
 }
 
@@ -235,6 +252,23 @@ export function feedRows(rows, reports) {
   return items;
 }
 
+/* The brake's lines on every daily limit the site watches (C5): Economy at 60%, Protect at 80%. */
+const BRAKE_LINES = [[0.6, 'Economy: pages slow down'], [0.8, 'Protect: the frontend calls no object; the rest is the backend\'s reserve']];
+
+/** The brake and the suggested pace now, from the same counts as the gauges, with the limit nearest its line. */
+function brakeFacts(u) {
+  const counts = { worker: u.worker, doReq: u.doReq, rowsW: u.rowsW, kvR: u.kvR, kvW: u.kvW };
+  const lvl = levelFrom({ counts, rate: {} });
+  const brake = BRAKE_OF[lvl.key] || 'normal';
+  const pace = paceOf(lvl.key, false);
+  const near = lvl.limit ? `${LIMIT_WORDS[lvl.limit]} at ${(lvl.frac * 100).toFixed(1)}%` : 'nothing near a line';
+  return B.kv([
+    ['The brake now', C.pill(brake === 'normal' ? 'ok' : brake === 'economy' ? 'warn' : 'bad', BRAKE_WORDS[brake], near)],
+    ['Suggested pace for the API', C.txt(pace.secs == null ? 'not until 00:00 UTC' : pace.secs === 60 ? 'once a minute' : pace.secs < 60 ? `every ${pace.secs} seconds` : `once every ${pace.secs / 60} minutes`)],
+    ['What the brake does', C.txt(brake === 'normal' ? 'Nothing: every page runs as usual.' : brake === 'economy' ? 'Pages ask every minute while games are on and every 5 minutes otherwise; a page view refreshes only live scoring; settings are held 5 minutes.' : 'Pages ask every 5 minutes; no page view refreshes anything; the frontend calls no object but sign-in (capped) and the log’s report; Site Backend rests; settings are held 30 minutes.')],
+  ]);
+}
+
 function gauge(label, used, limit, opts = {}) {
   return { label, used: used == null ? null : Math.round(used), limit, ...opts };
 }
@@ -244,7 +278,7 @@ export const OVERVIEW = [
     live: true,
     sum: async (src, ctx) => (ctx.reasons.length ? [ctx.verdict.s, `${ctx.reasons.length} ${ctx.reasons.length === 1 ? 'item' : 'items'}`] : ['ok', 'nothing needs attention']),
     body: async (src, ctx) => (ctx.reasons.length
-      ? [{ t: 'attn', items: ctx.reasons.map((x) => ({ s: x.s, text: x.text, go: x.go, since: x.since || null })) }]
+      ? [{ t: 'attn', items: ctx.reasons.map((x) => ({ s: x.s, text: x.text, go: x.go, since: x.since || null, ...(x.tab ? { tab: x.tab } : {}), ...(x.lock ? { lock: x.lock } : {}) })) }]
       : [B.empty('Nothing needs attention. Every dataset\'s last refresh worked, the cron has ticked every minute this hour, and ESPN is accepting the league\'s cookies.')]),
   }),
   P('p-since', 'Since you last opened', {
@@ -290,18 +324,18 @@ export const OVERVIEW = [
       const wk = (k) => u.week.map((x) => x[k] || 0).concat([u[k] || 0]);
       return [{
         t: 'gauges', resetsAt: new Date(u.resetsAt).toISOString(), items: [
-          gauge('Worker requests', u.worker, LIMITS.worker, { est: true, spark: wk('worker') }),
-          gauge('Durable Object requests', u.doReq, LIMITS.doReq, { est: true, spark: wk('doReq'), reserved: u.ftDo, caps: [[0.1, 'the log\'s budget: 10%'], [0.5, 'Fortune Teller\'s allowance: up to 50%']] }),
-          gauge('Durable Object rows written', u.rowsW, LIMITS.rowsW, { est: true, spark: wk('rowsW'), caps: [[0.1, 'the log\'s budget: 10%']] }),
+          gauge('Worker requests', u.worker, LIMITS.worker, { est: true, lines: BRAKE_LINES, spark: wk('worker'), note: 'every request the site served, recorded or not, and every cron run' }),
+          gauge('Durable Object requests', u.doReq, LIMITS.doReq, { est: true, lines: BRAKE_LINES, spark: wk('doReq'), reserved: u.ftDo, caps: [[0.1, 'the log\'s budget: 10%'], [0.5, 'Fortune Teller\'s allowance: up to 50%']] }),
+          gauge('Durable Object rows written', u.rowsW, LIMITS.rowsW, { est: true, lines: BRAKE_LINES, spark: wk('rowsW'), caps: [[0.1, 'the log\'s budget: 10%']] }),
           gauge('Durable Object rows read', u.rowsR, LIMITS.rowsR, { est: true, note: 'the log\'s own reads' }),
-          gauge('KV reads', u.kvR, LIMITS.kvR, { est: true, spark: wk('kvR') }),
-          gauge('KV writes', u.kvW, LIMITS.kvW, { spark: wk('kvW') }),
+          gauge('KV reads', u.kvR, LIMITS.kvR, { est: true, lines: BRAKE_LINES, spark: wk('kvR') }),
+          gauge('KV writes', u.kvW, LIMITS.kvW, { lines: BRAKE_LINES, spark: wk('kvW') }),
           gauge('Workers Logs events', u.logs, LIMITS.logs, { est: true }),
           gauge('R2 storage', u.r2Bytes, LIMITS.r2Bytes, { bytes: true, per: 'of 10 GB' }),
           gauge('R2 Class A operations', u.r2AMonth, LIMITS.r2A, { est: true, per: 'this month' }),
           gauge('R2 Class B operations', u.r2BMonth, LIMITS.r2B, { est: true, per: 'this month' }),
         ],
-      }, B.note('Daily limits reset at 00:00 UTC. These are the site\'s own counts: Cloudflare\'s exact figures need an API token, which setup does not ask for, so a count marked estimate can differ a little from the Cloudflare dashboard.')];
+      }, brakeFacts(u), B.note('Daily limits reset at 00:00 UTC. These are the site\'s own counts: Cloudflare\'s exact figures need an API token, which setup does not ask for, so a count marked estimate can differ a little from the Cloudflare dashboard.')];
     },
   }),
   P('p-pages', 'Pages', {
@@ -346,7 +380,7 @@ export const OVERVIEW = [
     sum: async (src) => {
       const rows = await src.hours(48);
       const cur = rows.filter((r) => r.hour === hourOf(src.now));
-      return [null, `${sumReq(cur).n.toLocaleString('en-US')} requests this hour`];
+      return [null, `${servedReq(cur).toLocaleString('en-US')} requests this hour`];
     },
     body: async (src) => {
       const rows = await src.hours(48);
@@ -359,8 +393,11 @@ export const OVERVIEW = [
           const p = pageForRoute(k) || 'other';
           byPage[p] = (byPage[p] || 0) + (v.n || 0);
           total += v.n || 0;
-          if (/\/api\/(dashboard\/status|live\/week|live\/timeline|data\/|fortune-teller$)|site-backend\/api/.test(k)) polls += v.n || 0;
+          if (/\/api\/(dashboard\/status|live\/week|live\/timeline|data(\/|$)|fortune-teller$)|site-backend\/api/.test(k)) polls += v.n || 0;
         }
+        // Requests served but never recorded (the health check, the tab icon, the developer hooks) count as other.
+        const served = r ? servedReq([r]) : 0;
+        if (served > total) { byPage.other = (byPage.other || 0) + (served - total); total = served; }
         hours.push({ at: new Date(h).toISOString(), byPage, cron: r ? Object.keys(r.d.ticks || {}).length : 0, total, polls, errors: r ? sumReq([r]).e + (r.d.exc || 0) : 0 });
       }
       const busiest = hours.reduce((a, h) => (h.total > (a ? a.total : -1) ? h : a), null);
@@ -393,7 +430,7 @@ export const OVERVIEW = [
   }),
   P('p-do', 'Durable Objects', {
     sub: 'Each class, its instances and what it holds', live: true,
-    sum: async (src, ctx) => [ctx.window.open || (ctx.ftp && ['building', 'updating'].includes(ctx.ftp.state)) ? 'run' : 'ok', `5 classes; this week's timeline at ${Math.round(ctx.timelinePct * 100)}% of its budget`],
+    sum: async (src, ctx) => [ctx.window.open || (ctx.ftp && ['building', 'updating'].includes(ctx.ftp.state)) ? 'run' : 'ok', `${doClassCount(src.env)} classes; this week's timeline at ${Math.round(ctx.timelinePct * 100)}% of its budget`],
     body: async (src, ctx) => doBody(src, ctx),
   }),
   P('p-storage', 'Storage', {
@@ -521,6 +558,105 @@ export const fmtHours = (h) => {
   return `${Math.round(h / 24 / 365).toLocaleString('en-US')} years`;
 };
 
+/**
+ * Which clock kept each minute (C5): of the minutes with a tick, how many the backend clock's alarm did, how many the
+ * cron's knock did, how many the cron did itself (where the clock is off, or as a fallback), and how late the work
+ * began. A plain function of the stored ticks, tested by behaviour.
+ */
+export function clockSummary(ticks, since = 0) {
+  const by = { alarm: 0, knock: 0, cron: 0 }, lates = [];
+  // Minutes in which each clock was heard at all, among the minutes that say (the one that arrives second does no work).
+  const heard = { judged: 0, alarm: 0, knock: 0 };
+  let fallback = 0, minutes = 0;
+  for (const [m, t] of Object.entries(ticks || {})) {
+    if (Number(m) < since) continue;
+    const c = t && t.clock;
+    minutes += 1;
+    if (!c) { by.cron += 1; continue; }
+    by[c.via] = (by[c.via] || 0) + 1;
+    if (c.fallback) fallback += 1;
+    if (c.ha != null) { heard.judged += 1; heard.alarm += c.ha ? 1 : 0; heard.knock += c.hk ? 1 : 0; }
+    if (Number.isFinite(c.late)) lates.push(c.late);
+  }
+  lates.sort((a, b) => a - b);
+  const med = lates.length ? lates[Math.floor(lates.length / 2)] : null;
+  return { minutes, by, heard, fallback, late: { median: med, max: lates.length ? lates[lates.length - 1] : null }, clockOn: by.alarm + by.knock > 0 };
+}
+
+/* ---------------------------------------------------------------- the Data Layer tab (C9)
+   The dev portal's data-layer status, adapted to Site Backend's panels: read-only, redacted by the same rules,
+   every panel shut until opened. Duplication with the Overview is welcome: a dataset read by many places appears
+   in each. */
+
+/** The dataset coordinators' work today, per dataset, from the hourly tallies they hand to the log. */
+export function coordinatorTotals(rows) {
+  const per = {};
+  for (const { d } of rows) {
+    for (const [k, t] of Object.entries(d.ds || {})) {
+      const x = per[k] || (per[k] = { req: 0, sweeps: 0, coalesced: 0, fetched: 0, failed: 0, bytes: 0, ms: 0 });
+      for (const f of Object.keys(x)) x[f] += Number(t[f]) || 0;
+    }
+  }
+  return Object.entries(per).map(([key, t]) => ({ key, ...t })).sort((a, b) => b.req - a.req || a.key.localeCompare(b.key));
+}
+
+export const DATA_LAYER = [
+  P('dl-ds', 'Every dataset', {
+    sub: 'Raw and derived: state, parts, stored size, age against its interval, last fetch and failure, what it derives from', asof: 'ages update every second',
+    sum: async (src, ctx) => {
+      const c = { ok: 0, idle: 0, bad: 0 };
+      for (const r of ctx.rows) { if (r.sev === 'ok') c.ok++; else if (r.sev === 'idle') c.idle++; else c.bad++; }
+      return [worst(ctx.rows.map((r) => r.sev)), `${ctx.rows.length} datasets: ${c.ok} fresh, ${c.idle} resting or manual${c.bad ? `, ${c.bad} in trouble` : ''}`];
+    },
+    body: async (src, ctx) => [{ t: 'datasets', rows: ctx.rows, param: await paramRows(src) }],
+  }),
+  P('dl-coord', 'Coordinators', {
+    sub: 'Each dataset\'s coordinator today: refreshes asked for, joined and fetched, failures and time', live: true,
+    sum: async (src) => {
+      const day = (await src.hours(48)).filter((r) => r.hour >= utcMidnight(src.now));
+      const t = coordinatorTotals(day);
+      const f = t.reduce((a, x) => a + x.failed, 0);
+      return [f ? 'warn' : 'ok', `${t.reduce((a, x) => a + x.req, 0).toLocaleString('en-US')} refreshes asked for today${f ? `, ${f} failed` : ''}`];
+    },
+    body: async (src) => {
+      const day = (await src.hours(48)).filter((r) => r.hour >= utcMidnight(src.now));
+      const t = coordinatorTotals(day);
+      if (!t.length) return [B.empty('No coordinator has handed over a tally yet today. Each hands over on its dataset\'s first refresh after the hour turns.')];
+      return [B.table([['Dataset'], ['Asked', 'n'], ['Sweeps', 'n'], ['Joined', 'n'], ['Fetched', 'n'], ['Failed', 'n'], ['Received', 'n'], ['Time', 'n']],
+        t.map((x) => B.row([C.code(x.key), C.n(x.req), C.n(x.sweeps), C.n(x.coalesced), C.n(x.fetched), x.failed ? C.txt(String(x.failed), null, 'warn') : C.n(0), C.bytes(x.bytes), C.dur(x.ms)], x.failed ? 'warn' : null))),
+      B.note('A coordinator is one Durable Object per dataset: two pages asking for the same stale dataset at once share one refresh (joined). Tallies arrive hourly, so the current hour fills in as each dataset next refreshes.')];
+    },
+  }),
+  P('dl-espn', 'ESPN hosts', {
+    sub: 'The league\'s cookies, each host the site reaches, and calls made outside the dataset registry', live: true,
+    sum: async (src, ctx) => (ctx.espn.failing ? ['bad', 'cookies refused'] : ['ok', 'cookies accepted']),
+    body: async (src, ctx) => espnBody(src, ctx),
+  }),
+  P('dl-repull', 'Re-pull state', {
+    sub: 'Whether an update left anything unfetched, and the past-seasons pull',
+    sum: async (src, ctx) => { const miss = ctx.rows.filter((r) => r.state === 'missing' && r.tier !== 'probe').length; return [miss ? 'warn' : 'ok', miss ? `${miss} dataset${miss === 1 ? '' : 's'} never fetched` : 'nothing to re-pull']; },
+    body: async (src, ctx) => {
+      const miss = ctx.rows.filter((r) => r.state === 'missing' && r.tier !== 'probe');
+      return [B.kv([['Re-pull banner on the home page', miss.length ? C.pill('warn', 'showing', `${miss.length} dataset${miss.length === 1 ? '' : 's'} never fetched`) : C.txt('not needed')],
+        ['Datasets last checked for', C.txt(ctx.cfg.datasetsCheckedVersion || 'not yet')],
+        ['Box-score history re-pull', C.txt(src.facts.needsHistoryRepull ? 'asked for by this release' : 'not needed')]]),
+      ...(miss.length ? [B.sub('Never fetched on this deployment'), B.list(miss.map((m) => `${m.key}: ${m.label}`))] : []),
+      B.note('A re-pull is started from Site Configuration, which asks for the Admin Password; Site Backend only reads.')];
+    },
+  }),
+];
+
+/** The Data Layer tab's strip: how many datasets, how fresh, how much is stored. */
+export function dataStrip(src, ctx) {
+  const rows = ctx.rows;
+  return { kv: [
+    ['Datasets', C.n(rows.length, `${rows.filter((r) => r.derivedFrom).length} derived`)],
+    ['Fresh', C.n(rows.filter((r) => r.state === 'fresh').length)],
+    ['In trouble', C.n(rows.filter((r) => r.sev === 'warn' || r.sev === 'bad').length)],
+    ['Stored', C.bytes(rows.reduce((a, d) => a + (d.bytes || 0), 0))],
+  ] };
+}
+
 async function cronBody(src, ctx) {
   const now = src.now, minute = Math.floor(now / 60000) * 60000;
   const last = ctx.ticks[ctx.lastTick] || {};
@@ -539,9 +675,19 @@ async function cronBody(src, ctx) {
   ];
   const cells = [];
   for (let i = 59; i >= 0; i--) { const m = minute - i * 60000; const st = tickState(ctx, m, now); cells.push({ at: new Date(m).toISOString(), s: st === 'pending' ? 'none' : st }); }
+  const cs = clockSummary(ctx.ticks, src.now - 3600000);
+  const secs = (ms) => (ms == null ? '—' : `${(ms / 1000).toFixed(1)} s`);
+  const clockRows = cs.clockOn ? [B.sub('Which clock kept each minute, this hour'), B.kv([
+    ['The clock’s own alarm', C.n(cs.by.alarm, cs.heard.judged ? `fired in ${cs.heard.alarm} of ${cs.heard.judged} minutes` : null)],
+    ['The cron’s knock', C.n(cs.by.knock, cs.heard.judged ? `arrived in ${cs.heard.knock} of ${cs.heard.judged} minutes` : null)],
+    ['The cron by itself (the clock unreachable)', C.n(cs.fallback)],
+    ['Work began, typically', C.txt(`${secs(cs.late.median)} into the minute`)], ['Latest start', C.txt(`${secs(cs.late.max)} into the minute`)],
+  ])] : [];
   return [B.table([['Job'], ['Runs'], ['Last run', 'n'], ['Result'], ['Next run', 'n'], ['Took', 'n']], rows.map((r) => B.row(r))),
-    B.sub('Ticks in the last hour, oldest first'), { t: 'cells', items: cells },
-    B.note('One schedule, * * * * *, runs every job above, with 10 ms of CPU each run; heavier work is handed to a Durable Object.')];
+    B.sub('Ticks in the last hour, oldest first'), { t: 'cells', items: cells }, ...clockRows,
+    B.note(cs.clockOn
+      ? 'The backend clock, one Durable Object, does every job above once a minute: from its own alarm or the cron\'s knock, whichever comes first, with 30 s of CPU. If the knock cannot reach the clock, the cron does the work itself.'
+      : 'One schedule, * * * * *, runs every job above, with 10 ms of CPU each run; heavier work is handed to a Durable Object.')];
 }
 
 async function doBody(src, ctx) {
@@ -554,10 +700,25 @@ async function doBody(src, ctx) {
     [C.dot(ctx.ftp && ['building', 'updating'].includes(ctx.ftp.state) ? 'run' : 'ok', 'FortuneTellerDO'), C.code('FORTUNE'), C.txt('one: fortune-teller'), peek ? C.txt(`job, meter, settings and log`, peek.dbBytes ? fmtB(peek.dbBytes) : null) : C.txt('—')],
     [C.dot(m.paused ? 'warn' : 'ok', 'SiteLogDO'), C.code('SITE_LOG'), C.txt(`one per season: site-log-${ctx.cfg.season}`), C.txt(`${fmtB(src.deps.size())} of 1 GB`, `${m.req.toLocaleString('en-US')} requests, ${m.rows.toLocaleString('en-US')} rows written today`)],
   ];
+  // Site API's pace record and the backend clock (C5), where the deployment binds them.
+  if (src.env && src.env.SOURCE_PACE) rows.push([C.dot('ok', 'SourcePaceDO'), C.code('SOURCE_PACE'), C.txt('one per key and address; cannot be listed'), C.txt('each program\'s round and pace, and when the address\'s recent rounds began')]);
+  if (src.env && src.env.CLOCK) {
+    const u = clockUse(src.env, clockSummary(ctx.ticks, src.now - 3600000));
+    rows.push([C.dot(u.s, 'BackendClockDO'), C.code('CLOCK'), C.txt('one: clock'), C.txt(u.holds)]);
+  }
   const weeks = ctx.timelineWeeks || [];
   return [B.table([['Class'], ['Binding'], ['Instances'], ['Holds']], rows.map((r) => B.row(r))),
     ...(weeks.length ? [B.sub('Score timeline, bytes per week against its 96 KB budget'), B.bars(weeks.map((w) => ({ l: C.txt(`Week ${w.week}`, `${(w.rows || 0).toLocaleString('en-US')} rows, ${(w.events || 0).toLocaleString('en-US')} events`), v: w.bytes || 0, max: BYTE_BUDGET, r: C.bytes(w.bytes || 0), s: (w.bytes || 0) > BYTE_BUDGET * 0.8 ? 'warn' : null })))] : []),
-    B.note('All five classes keep their data in SQLite. One stored value may reach 2 MB and one object 1 GB on the Free plan; the timeline holds each week under a 96 KB budget of its own.')];
+    B.note(`All ${DO_WORDS[rows.length] || rows.length} classes keep their data in SQLite. One stored value may reach 2 MB and one object 1 GB on the Free plan; the timeline holds each week under a 96 KB budget of its own.`)];
+}
+
+const DO_WORDS = { 5: 'five', 6: 'six', 7: 'seven' };
+/** How many Durable Object classes the Durable Objects panel lists: five always, plus the two a deployment may bind. */
+export function doClassCount(env) { return 5 + (env && env.SOURCE_PACE ? 1 : 0) + (env && env.CLOCK ? 1 : 0); }
+/** The backend clock's row: in use where the deployment switches it on, otherwise bound and idle (the cron works). */
+export function clockUse(env, cs) {
+  const on = String((env && env.BACKEND_CLOCK) || '').toLowerCase() === 'on';
+  return { on, s: !on ? 'idle' : cs && cs.fallback ? 'warn' : 'ok', holds: on ? 'the last minute it kept, and its alarm' : 'bound but not in use: the cron does the minute\'s work' };
 }
 
 async function storageBody(src) {
@@ -745,7 +906,8 @@ export function securityChecks(src) {
     [true, 'Tool unlock cookie scoped to its own tool, 30 minutes'],
     [!f.devHooks, f.devHooks ? 'Developer hooks are present: this is a development deployment' : 'No developer hooks in this build'],
     [true, 'Public routes: /api/health and the favicon only'],
-    [true, 'Visitor IP addresses, locations and devices are never recorded'],
+    [true, 'Visitor IP addresses, locations and devices are never recorded: an address is kept only as a keyed fingerprint, shown as an alias'],
+    [true, 'Site API answers only reads (GET, HEAD, OPTIONS), ignores the sign-in cookie and serves no credential; its key opens nothing else'],
   ];
 }
 
