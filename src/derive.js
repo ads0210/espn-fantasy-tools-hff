@@ -334,6 +334,8 @@ export function buildScoreboardDigest(doc) {
     const away = cs.find((c) => c.homeAway === 'away') || {};
     const st = (e.status && e.status.type) || {};
     const started = st.state !== 'pre';
+    // The quarter and the clock as numbers, so a live lineup can say "Q3 4:21" without parsing ESPN's text.
+    const status = e.status || {};
     return {
       home: (home.team && home.team.abbreviation) || '?',
       away: (away.team && away.team.abbreviation) || '?',
@@ -342,6 +344,9 @@ export function buildScoreboardDigest(doc) {
       homeScore: started ? String(home.score ?? '0') : null,
       awayScore: started ? String(away.score ?? '0') : null,
       state: st.shortDetail || st.description || '',
+      period: st.state === 'in' && Number.isFinite(status.period) ? status.period : null,
+      clock: st.state === 'in' && typeof status.displayClock === 'string' ? status.displayClock : null,
+      phase: st.state === 'in' ? (st.name || null) : null,
       inProgress: st.state === 'in',
       final: st.state === 'post',
       started,
@@ -1057,6 +1062,7 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
       away: g.away, home: g.home,
       awayScore: g.awayScore, homeScore: g.homeScore,
       state: g.state, kickoff: g.kickoff,
+      period: g.period ?? null, clock: g.clock ?? null, phase: g.phase ?? null,
       status: g.final ? 'final' : (g.inProgress ? 'live' : 'pre'),
     };
     if (g.home && g.home !== '?') gameByTeam[g.home] = entry;
@@ -1175,6 +1181,7 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
               key: p.game, away: g.away, home: g.home,
               awayScore: g.awayScore, homeScore: g.homeScore,
               state: g.state, status: g.status, kickoff: g.kickoff,
+              period: g.period, clock: g.clock, phase: g.phase,
               players: [],
             });
           }
@@ -2119,6 +2126,132 @@ export async function buildLeagueHistoryDigest(rawCtx) {
  * ========================================================================== */
 
 /**
+ * Player form: every rostered player's season, week by week (C1).
+ *
+ * One ESPN read (kona_player_info, rostered players, their last seventeen scored games) carries every week already
+ * played this season and, early on, last season's weeks too, so a site set up in the middle of a season has the
+ * whole picture at once: nothing here depends on the site having been running when a game was played. A second read
+ * carries the best free agents, for the replacement level each position can be refilled at.
+ *
+ * Reduced to what the Trade Analyzer's rows read: ESPN's updated projection as a per-game rate and the games it
+ * expects, the season so far, last season, each played game's points and opportunities, touchdowns, and the market's
+ * view. The raw payload (about 3 MB) never reaches a browser.
+ */
+const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+function formOf(entry, season) {
+  const p = (entry && entry.player) || entry || {};
+  const pos = POSITION_MAP[p.defaultPositionId] || null;
+  const byId = {};
+  const weeks = [], last = [];
+  for (const st of p.stats || []) {
+    if (st.statSplitTypeId === 1 && st.statSourceId === 0) {
+      const raw = st.stats || {};
+      const played = Number(raw['210']) > 0;
+      // Opportunities: a passer's attempts and runs; anyone else's runs and targets.
+      const opp = pos === 'QB' ? (Number(raw['0']) || 0) + (Number(raw['23']) || 0) : (Number(raw['23']) || 0) + (Number(raw['58']) || 0);
+      const row = [st.scoringPeriodId, r1(st.appliedTotal), played ? 1 : 0, Math.round(opp)];
+      if (st.seasonId === season) weeks.push(row);
+      else if (st.seasonId === season - 1 && played) last.push(r1(st.appliedTotal));
+    } else byId[st.id] = st;
+  }
+  weeks.sort((a, b) => a[0] - b[0]);
+  const upd = byId[`12${season}`] || null, pre = byId[`10${season}`] || null;
+  const act = byId[`00${season}`] || null, ly = byId[`00${season - 1}`] || null;
+  const games = (st) => (st && st.stats && Number(st.stats['210'])) || 0;
+  const raw = (act && act.stats) || {};
+  const own = p.ownership || {};
+  return {
+    pos,
+    tm: PRO_TEAM_MAP[p.proTeamId] ?? 'FA',
+    // ESPN's updated projection: a per-game rate, over the games ESPN expects the player to play all season.
+    rate: upd && upd.appliedAverage != null ? r2(upd.appliedAverage) : null,
+    games: upd ? games(upd) || null : null,
+    pre: pre ? r1(pre.appliedTotal) : null,
+    act: act ? r1(act.appliedTotal) : 0,
+    gp: games(act),
+    ly: ly ? r1(ly.appliedTotal) : null,
+    lyg: ly ? games(ly) : null,
+    wk: weeks,
+    lw: last,
+    // Touchdowns so far: thrown, and run or caught.
+    td: [Number(raw['4']) || 0, (Number(raw['25']) || 0) + (Number(raw['43']) || 0)],
+    own: r1(own.percentOwned), st: r1(own.percentStarted), chg: r1(own.percentChange),
+    adp: own.averageDraftPosition != null ? r1(own.averageDraftPosition) : null,
+    auc: own.auctionValueAverage != null ? r1(own.auctionValueAverage) : null,
+  };
+}
+
+export async function buildPlayerFormDigest({ readPart, now = Date.now() }) {
+  const rostered = (await readPart('rostered')) || {};
+  const free = (await readPart('free')) || {};
+  // The payload names its season on every stat line; the newest one is this season.
+  let season = rostered.seasonId || free.seasonId || 0;
+  if (!season) for (const e of rostered.players || []) for (const st of (e.player && e.player.stats) || []) if (st.seasonId > season) season = st.seasonId;
+  if (!season) season = seasonForDate(new Date(now));
+  const players = {};
+  for (const e of rostered.players || []) {
+    const id = (e.player && e.player.id) ?? e.id;
+    if (id == null) continue;
+    players[String(id)] = formOf(e, season);
+  }
+  // The free agents each position can be refilled from, best first by ESPN's own rate.
+  const fa = {};
+  for (const e of free.players || []) {
+    const f = formOf(e, season);
+    if (!f.pos || f.rate == null) continue;
+    (fa[f.pos] = fa[f.pos] || []).push(f.rate);
+  }
+  for (const k of Object.keys(fa)) fa[k] = fa[k].sort((a, b) => b - a).slice(0, 12);
+  return {
+    generatedAt: new Date(now).toISOString(),
+    season,
+    count: Object.keys(players).length,
+    players,
+    freeAgents: fa,
+  };
+}
+
+/** The season a date falls in: the NFL year turns over in the spring. */
+function seasonForDate(d) { return d.getUTCMonth() >= 2 ? d.getUTCFullYear() : d.getUTCFullYear() - 1; }
+
+/**
+ * Depth charts, reduced to where each skill player stands (C1, the Role security row).
+ *
+ * ESPN's depth chart for a team lists each offensive place (qb, rb, te, wr1, wr2, wr3) and the kicker with its
+ * players in order. Kept per athlete: the place, how far down it he is (1 is the starter) and how many are listed.
+ * The athlete id is the id the fantasy game uses for the same player. Thirty-two team payloads of about 200 KB
+ * each come down to a few kilobytes.
+ */
+const DEPTH_PLACES = { qb: 'QB', rb: 'RB', te: 'TE', wr: 'WR', wr1: 'WR', wr2: 'WR', wr3: 'WR', pk: 'K', fb: 'RB' };
+export async function buildDepthDigest({ teamIds, readPart, now = Date.now() }) {
+  const players = {};
+  let teams = 0;
+  for (const id of teamIds || []) {
+    let doc = null;
+    try { doc = await readPart(id); } catch { doc = null; }
+    const charts = (doc && (doc.depthchart || (doc.items) || [])) || [];
+    if (!Array.isArray(charts) || !charts.length) continue;
+    teams += 1;
+    for (const chart of charts) {
+      for (const [place, slot] of Object.entries((chart && chart.positions) || {})) {
+        const pos = DEPTH_PLACES[String(place).toLowerCase()];
+        if (!pos) continue;
+        const list = (slot && slot.athletes) || [];
+        list.forEach((a, i) => {
+          const pid = a && a.id != null ? String(a.id) : null;
+          if (!pid) return;
+          const rec = { p: pos, s: String(place).toLowerCase(), d: i + 1, n: list.length };
+          // A player listed in two places keeps the one he stands highest in.
+          if (!players[pid] || rec.d < players[pid].d) players[pid] = rec;
+        });
+      }
+    }
+  }
+  return { generatedAt: new Date(now).toISOString(), teams, count: Object.keys(players).length, players };
+}
+
+/**
  * Everything the Trade Analyzer needs, in one payload.
  *
  * The tool evaluates a trade entirely in the browser — the slider arithmetic
@@ -2143,6 +2276,13 @@ export function buildTradeDigest(doc, ctx = {}) {
   const rosterDoc = src.rosters || null;
   const standingsDoc = src.standings || null;
   const settingsDoc = src.league_settings || null;
+  // For the 28 rows (C1). Each is optional: a site that has not pulled one yet still gets a board, and the rows
+  // that needed it say there is not enough data rather than guessing.
+  const form = (src.player_form_digest && src.player_form_digest.players) || {};
+  const freeAgents = (src.player_form_digest && src.player_form_digest.freeAgents) || {};
+  const depth = (src.depth_digest && src.depth_digest.players) || {};
+  const byes = (src.bye_weeks && src.bye_weeks.byes) || {};
+  const scheduleDoc = src.season_schedule || null;
 
   const status = (doc && doc.status) || (rosterDoc && rosterDoc.status) || {};
   const settings = (settingsDoc && settingsDoc.settings) || {};
@@ -2164,11 +2304,18 @@ export function buildTradeDigest(doc, ctx = {}) {
     const ordered = bySlotOrder((t.roster && t.roster.entries) || [], (e) => e.lineupSlotId);
     rosterOf[t.id] = ordered.map((e) => {
       const p = (e.playerPoolEntry && e.playerPoolEntry.player) || {};
-      let proj = 0;
+      let proj = 0, upd = null;
       for (const st of p.stats || []) {
         // statSourceId 1 is a projection; statSplitTypeId 0 is the whole season.
         if (st.statSourceId === 1 && st.statSplitTypeId === 0) proj = st.appliedTotal || 0;
+        // Split 2 is ESPN's updated projection: a per-game rate over the games it expects him to play.
+        if (st.statSourceId === 1 && st.statSplitTypeId === 2) upd = st;
       }
+      const pid = p.id ?? e.playerId ?? null;
+      const f = form[String(pid)] || null;
+      const tm = PRO_TEAM_MAP[p.proTeamId] ?? 'FA';
+      const own = p.ownership || {};
+      const dc = depth[String(pid)] || null;
       return {
         id: p.id ?? e.playerId ?? null,
         n: p.fullName || 'Unknown Player',
@@ -2179,14 +2326,34 @@ export function buildTradeDigest(doc, ctx = {}) {
         inj: p.injuryStatus || 'ACTIVE',
         ow: Math.round(((p.ownership && p.ownership.percentOwned) || 0) * 10) / 10,
         bl: null,
+        // ESPN's updated projection as a rate a game, and the games it expects all season.
+        rt: f && f.rate != null ? f.rate : (upd && upd.appliedAverage != null ? r2(upd.appliedAverage) : null),
+        eg: f && f.games != null ? f.games : ((upd && upd.stats && Number(upd.stats['210'])) || null),
+        // This season so far, and last season.
+        ac: f ? f.act : null, gp: f ? f.gp : null, ly: f ? f.ly : null, lyg: f ? f.lyg : null,
+        // Each week so far: [week, points, played, opportunities]; and last season's played games.
+        wk: f ? f.wk : null, lw: f ? f.lw : null, td: f ? f.td : null,
+        st: r1(own.percentStarted), chg: r1(own.percentChange),
+        adp: own.averageDraftPosition != null ? r1(own.averageDraftPosition) : null,
+        auc: own.auctionValueAverage != null ? r1(own.auctionValueAverage) : null,
+        bye: byes[tm] ?? null,
+        dc: dc ? { s: dc.s, d: dc.d, n: dc.n } : null,
       };
     });
   }
 
   const odds = {};
+  const standing = {};
   for (const t of (standingsDoc && standingsDoc.teams) || []) {
     const sim = t.currentSimulationResults || {};
     if (typeof sim.playoffPct === 'number') odds[t.id] = sim.playoffPct;
+    const rec = (t.record && t.record.overall) || {};
+    standing[t.id] = {
+      w: rec.wins ?? null, l: rec.losses ?? null, t: rec.ties ?? null,
+      pf: rec.pointsFor != null ? r1(rec.pointsFor) : (t.points != null ? r1(t.points) : null),
+      top: typeof sim.divisionWinPct === 'number' ? sim.divisionWinPct : null,
+      clinch: t.playoffClinchType || null,
+    };
   }
 
   const teams = [];
@@ -2205,6 +2372,9 @@ export function buildTradeDigest(doc, ctx = {}) {
       logo: teamLogoUrl(t.id, t.logo),
       waiverRank: t.waiverRank ?? null,
       playoffPct: typeof odds[t.id] === 'number' ? odds[t.id] : null,
+      // Mathematical only, from ESPN's own flags: never inferred from a low chance.
+      eliminated: Boolean(t.eliminated),
+      ...(standing[t.id] || {}),
       roster,
     });
   }
@@ -2281,8 +2451,39 @@ export function buildTradeDigest(doc, ctx = {}) {
   const finalScoringPeriod = statedFinal
     || (regular ? regular + rounds * roundLength : null);
 
+  /* The regular-season games still to play, for the Schedule strength row: [matchup period, home, away]. */
+  const nowPeriod = status.currentMatchupPeriod || null;
+  const games = [];
+  for (const g of (scheduleDoc && scheduleDoc.schedule) || []) {
+    const mp = g.matchupPeriodId;
+    if (!g.home || !g.away || mp == null) continue;
+    if (regular && mp > regular) continue;
+    if (nowPeriod && mp < nowPeriod) continue;
+    if (g.winner && g.winner !== 'UNDECIDED') continue;
+    games.push([mp, g.home.teamId, g.away.teamId]);
+  }
+  /* Position limits by position name; 0 means no cap. */
+  const limits = {};
+  for (const [posId, n] of Object.entries(rosterSettings.positionLimits || {})) {
+    const name = POSITION_MAP[Number(posId)];
+    if (name && Number(n) > 0) limits[name] = Number(n);
+  }
+  const draftSettings = settings.draftSettings || {};
+
   return {
     generatedAt: new Date().toISOString(),
+    // What the rows had to work from, so the tool can say which are waiting on data.
+    inputs: {
+      form: Object.keys(form).length > 0, depth: Object.keys(depth).length > 0,
+      byes: Object.keys(byes).length > 0, schedule: games.length > 0 || Boolean(scheduleDoc),
+    },
+    freeAgents,
+    positionLimits: limits,
+    seedingRule: schedule.playoffSeedingRule || null,
+    playoffRoundLength: roundLength,
+    pickTrading: Boolean(draftSettings.isTradingEnabled),
+    keepers: Number(draftSettings.keeperCountFuture) > 0,
+    remainingGames: games,
     leagueName: settings.name || null,
     season: (doc && doc.seasonId) || (rosterDoc && rosterDoc.seasonId) || null,
     // The scoring period is on whichever payload carries the league status;
@@ -2326,6 +2527,14 @@ export const DERIVATIONS = {
   nfl_team_schedules: {
     target: 'bye_weeks',
     buildMulti: buildByeWeeks,
+  },
+  player_weeks: {
+    target: 'player_form_digest',
+    buildMulti: buildPlayerFormDigest,
+  },
+  nfl_depth_charts: {
+    target: 'depth_digest',
+    buildMulti: buildDepthDigest,
   },
   league_history: [
     {
@@ -2405,7 +2614,8 @@ export const DERIVATIONS = {
     // Identity for names and logos, rosters for projections, standings for
     // ESPN's published playoff odds, settings for roster shape and the trade
     // deadline. All four resolved through the coordinator, never read hopefully.
-    needs: ['league_teams', 'rosters', 'standings', 'league_settings'],
+    // And, for the 28 rows (C1): every player's season week by week, depth charts, bye weeks and the schedule.
+    needs: ['league_teams', 'rosters', 'standings', 'league_settings', 'player_form_digest', 'depth_digest', 'bye_weeks', 'season_schedule'],
   },
 };
 
