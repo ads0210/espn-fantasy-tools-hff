@@ -11,12 +11,16 @@
  * else: no IP address, location, device or user agent is ever read here.
  */
 
+import { countSource, busiest } from './sources.js';
 import { currentSeason, loadConfig, isSetupFinished } from './config.js';
+import { brakeFrom } from './budget.js';
 
 export const SITE_LOG_PREFIX = 'site-log-';
 /** The first season a store can exist for: the release that shipped the log. */
 export const FIRST_LOG_SEASON = 2026;
 const FLUSH_EVERY_MS = 60 * 1000;
+/** At Protect an isolate's report to the log goes once every 5 minutes (C5). */
+const PROTECT_FLUSH_MS = 5 * 60 * 1000;
 const MAX_SAMPLES = 16;
 const MAX_BUFFERED_EVENTS = 200;
 
@@ -42,6 +46,8 @@ const minuteOf = (ms) => Math.floor(ms / 60000) * 60000;
 // The clock does not run while a Worker's global scope is evaluated (Date.now() is 0 there),
 // so an isolate's start is taken from its first request instead.
 const ISO = {
+  pace: null,
+  paceAskedAt: 0,
   startedAt: 0,
   served: 0,
   events: [],
@@ -49,6 +55,10 @@ const ISO = {
   lastFlush: 0,
   flushing: false,
   lapsed: new Map(),
+  // Whether this isolate has seen the site set up (a recorded request proves it), so a flush of the counts of
+  // requests that are never recorded (/api/health, the tab icon) is never sent from a site still in its wizard.
+  setUp: false,
+  checkingSetUp: false,
 };
 
 /** What this isolate knows about itself, for the Deployment panel. */
@@ -62,7 +72,7 @@ function bucket(ms = Date.now()) {
   const h = hourOf(ms);
   let b = ISO.hours.get(h);
   if (!b) {
-    b = { req: {}, ops: {}, poll: {}, settings: {}, exc: 0 };
+    b = { req: {}, ops: {}, poll: {}, settings: {}, exc: 0, api: {}, all: 0 };
     ISO.hours.set(h, b);
   }
   return b;
@@ -76,8 +86,50 @@ export function countOp(kind, n = 1) {
   } catch { /* counting must never matter */ }
 }
 
+/** Site API's hourly counters: answers by endpoint, too_soon by kind, holds, 304s, bad keys, downloads. Never throws. */
+export function countApi(kind, key, n = 1) {
+  try {
+    const b = bucket();
+    const g = (b.api = b.api || {})[kind] || (b.api[kind] = {});
+    g[key] = (g[key] || 0) + n;
+  } catch { /* counting must never matter */ }
+}
+
+/** A source's request, counted by its fingerprint in this hour (see src/sources.js). Never throws. */
+export function countSourceNow(fp, fields) {
+  try { if (fp) countSource(bucket(), fp, fields); } catch { /* counting must never matter */ }
+}
+
+/**
+ * The day's use of each free limit, as the site log last replied with it: the pace and the load level are read
+ * from this. { day, counts, rate, heardAt }, or null before the first reply.
+ */
+export function paceUsage() { return ISO.pace; }
+function notePace(p) { if (p && p.counts) ISO.pace = { ...p, heardAt: Date.now() }; }
+/** Take the day's counts as the site log replied with them (also how a test sets the level). */
+export function acceptPace(p) { notePace(p); }
+
+/** Whether this isolate has seen the site set up (a recorded request proves it): nothing is asked of the log before. */
+export function knowsSetUp() { return ISO.setUp; }
+
+/** This isolate's brake now (C5), from the counts the site log last replied with. */
+export function brakeNow(now = Date.now()) { return brakeFrom(ISO.pace, now); }
+
+/** One check-in for an isolate with no counts yet (or none for 10 minutes), at most once a minute. */
+export async function paceCheckIn(env, now = Date.now()) {
+  if (now - ISO.paceAskedAt < 60000) return;
+  ISO.paceAskedAt = now;
+  try {
+    const stub = logStub(env);
+    if (!stub) return;
+    const r = await stub.fetch('https://site-log/pace');
+    const j = await r.json().catch(() => null);
+    if (j && j.pace) notePace(j.pace);
+  } catch { /* the pace falls back as the plan says */ }
+}
+
 /** Routes worth a per-minute count, so "open tabs now" can be estimated. */
-const POLLED = new Set(['/api/dashboard/status', '/api/live/week', '/api/data/draft_results',
+const POLLED = new Set(['/api/dashboard/status', '/api/live/week', '/api/data', '/api/data/draft_results',
   '/api/fortune-teller', '/apps/site-backend/api']);
 
 /**
@@ -96,6 +148,7 @@ export function routeKey(method, path) {
   else if (p === '/index.html') p = '/';
   else if (p === '/config/') p = '/config';
   else if (/^\/api\/_dev\//.test(p)) p = '/api/_dev/*';
+  else if (/^\/api\/v1(\/|$)/.test(p)) p = /^\/api\/v1\/(full|scoreboard|standings|rosters|activity)(\.csv)?$/.test(p) ? p : '/api/v1/:unknown';
   else if (!/^\/(api|apps)\//.test(p) && !['/', '/config', '/favicon.svg', '/favicon.ico'].includes(p)) p = '(other)';
   if (p.length > 80) p = p.slice(0, 80);
   return `${method === 'GET' || method === 'HEAD' ? 'GET' : method} ${p}`;
@@ -173,13 +226,37 @@ export function noteLapsed(request) {
  * Finish a request: count it, collect its events, and schedule a flush when one
  * is due. `recording` is false until setup has finished.
  */
-export function finishRequest(env, ctx, request, response, { recording, version }) {
+export function finishRequest(env, ctx, request, response, { recording, version, brake = 'normal' }) {
+  // At Protect the isolate reports to the log once every 5 minutes, and events wait for that report (C5).
+  const resting = brake === 'protect' || brake === 'limit';
+  const every = resting ? PROTECT_FLUSH_MS : FLUSH_EVERY_MS;
   try {
     if (!ISO.startedAt) ISO.startedAt = Date.now();
     ISO.served += 1;
     const trace = traceOf(request);
-    if (!recording) return;
-    const now = Date.now();
+    // Every request counts against the account's daily Worker requests the moment it arrives, recorded or not
+    // (C7): the health check, the tab icon and the developer hooks included. The recorded routes below are a part.
+    const at = Date.now();
+    const all = bucket(at);
+    all.all = (all.all || 0) + 1;
+    if (!recording) {
+      // An isolate that only ever serves unrecorded requests still sends its count once a minute, once it knows the
+      // site is set up (one config read, held five seconds, at most once a minute).
+      if (at - ISO.lastFlush >= every && !ISO.checkingSetUp) {
+        ISO.checkingSetUp = true;
+        const task = (async () => {
+          try {
+            if (!ISO.setUp) { countOp('kvr'); ISO.setUp = isSetupFinished(await loadConfig(env)); }
+            if (ISO.setUp) await flush(env, { version });
+            else ISO.hours.clear();   // a site in its wizard records nothing
+          } catch { /* a lost count costs a minute */ } finally { ISO.checkingSetUp = false; }
+        })();
+        if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(task);
+      }
+      return;
+    }
+    ISO.setUp = true;
+    const now = at;
     const url = new URL(request.url);
     const status = response ? response.status : 500;
     const key = routeKey(request.method, url.pathname);
@@ -214,10 +291,16 @@ export function finishRequest(env, ctx, request, response, { recording, version 
         s.tz = s.tz || {}; s.tz[tz] = (s.tz[tz] || 0) + 1;
         s.team = s.team || {}; const tk = team == null ? 'none' : String(team); s.team[tk] = (s.team[tk] || 0) + 1;
       }
+      // The source of every recorded request (the API counts its own), and page visits by the team chosen on that
+      // browser: what names a likely member in High activity. Never the address, never the user agent.
+      if (trace.fp) {
+        const served = Boolean(trace.page && (status === 200 || (trace.page === 'signin' && status === 401)));
+        countSource(b, trace.fp, { kind: trace.kind, page: served, team: served ? readTeam(request) : null });
+      }
       for (const ev of trace.events) if (ISO.events.length < MAX_BUFFERED_EVENTS) ISO.events.push(ev);
       trace.events = [];
     }
-    if (ISO.events.length || now - ISO.lastFlush >= FLUSH_EVERY_MS) {
+    if ((ISO.events.length && !resting) || now - ISO.lastFlush >= every) {
       const task = flush(env, { version });
       if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(task);
     }
@@ -232,7 +315,8 @@ export function countException() {
 /** Take everything buffered, leaving the isolate empty. Synchronous, so two flushes never send the same thing. */
 function take() {
   const events = ISO.events.splice(0);
-  const hours = [...ISO.hours.entries()].map(([hour, counts]) => ({ hour, counts }));
+  // Each hour sends its 20 busiest sources; the rest are summed as other sources.
+  const hours = [...ISO.hours.entries()].map(([hour, counts]) => ({ hour, counts: counts.src ? { ...counts, src: busiest(counts.src, 20) } : counts }));
   ISO.hours.clear();
   return { events, hours };
 }
@@ -259,10 +343,11 @@ export async function flush(env, { version = null, extra = null } = {}) {
     for (const [season, body] of bySeason) {
       const stub = logStub(env, season);
       if (!stub) continue;
+      // The reply carries the day's counts, which set the pace (plan: Site API, D22).
       await stub.fetch('https://site-log/ingest', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ...body, version, isolate: isolateFacts() }),
-      }).then((r) => r.body && r.body.cancel ? r.body.cancel().catch(() => {}) : null).catch(() => null);
+      }).then((r) => r.json()).then((j) => notePace(j && j.pace)).catch(() => null);
     }
   } catch { /* a lost flush costs a minute of counts, never a request */ } finally {
     ISO.flushing = false;
@@ -354,7 +439,8 @@ function wrapNamespace(ns, name, add) {
   };
 }
 
-const DO_BINDINGS = ['COORDINATOR', 'THROTTLE', 'SCORE_TIMELINE', 'FORTUNE', 'SITE_LOG'];
+// Every object binding, so the Durable Object requests gauge counts them all (the pace record's were missed).
+const DO_BINDINGS = ['COORDINATOR', 'THROTTLE', 'SCORE_TIMELINE', 'FORTUNE', 'SITE_LOG', 'SOURCE_PACE', 'CLOCK'];
 
 /**
  * The same bindings, counted. Every R2, KV and Durable Object call made through
