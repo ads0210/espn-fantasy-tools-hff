@@ -17,6 +17,7 @@ import { mkdirSync, existsSync, writeFileSync, readFileSync, statSync } from 'no
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { generateSetupCode } from './generate-setup-code.mjs';
+import { LIMIT_JS } from '../src/pages/limitnotice.js';
 
 const TOOLS = [
   {
@@ -57,6 +58,12 @@ const TOOLS = [
     css: 'app/llm-export/styles.css',
   },
   {
+    key: 'site-api',
+    title: 'Site API',
+    entry: 'app/site-api/main.jsx',
+    css: 'app/site-api/styles.css',
+  },
+  {
     key: 'site-backend',
     title: 'Site Backend',
     entry: 'app/site-backend/main.jsx',
@@ -89,6 +96,7 @@ document.documentElement.dataset.theme=(m&&decodeURIComponent(m[1])==='light')?'
 var r=document.cookie.match(/(?:^|; )eft_motion=([^;]*)/);
 if(r&&decodeURIComponent(r[1])==='reduce')document.documentElement.classList.add('stillness');}catch(e){}
 </script>
+<script>${LIMIT_JS.split('</script').join('<\\/script')}</script>
 </head>
 <body>
 <div id="root"></div>
