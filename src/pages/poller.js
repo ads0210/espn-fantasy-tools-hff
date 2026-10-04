@@ -30,11 +30,20 @@ export function idleAwarePoller(fnName, intervalMs, idleMs = 4 * 60 * 60 * 1000)
     if (timer) clearTimeout(timer);
     if (Date.now() - lastActive > ${idleMs}) { stopped = true; showResume(); return; }
     if (!document.hidden) { try { ${fnName}(); } catch (e) {} }
-    timer = setTimeout(tick, ${intervalMs});
+    timer = setTimeout(tick, wait());
+  }
+  /* Less often while the site saves its daily allowance (C5): the page's answers carry X-Brake, and the page says
+     whether something is live; window.__eftPollDelay turns both into the wait. */
+  function wait() {
+    try {
+      // Resting at Cloudflare's daily limit (C6): nothing is asked until a minute past midnight UTC.
+      if (window.__eftLimit && window.__eftLimit.resting()) return Math.max(${intervalMs}, window.__eftLimit.wakeIn());
+      return window.__eftPollDelay ? window.__eftPollDelay(${intervalMs}) : ${intervalMs};
+    } catch (e) { return ${intervalMs}; }
   }
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden && !stopped) { lastActive = Date.now(); tick(); }
   });
-  timer = setTimeout(tick, ${intervalMs});
+  timer = setTimeout(tick, wait());
 })();`;
 }

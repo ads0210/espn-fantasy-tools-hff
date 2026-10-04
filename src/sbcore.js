@@ -440,6 +440,21 @@ export function latestEvents(src, where = '', limit = 1, ...binds) {
 }
 
 /** Sum one hour-level field over a set of hour rows. */
+/**
+ * Every request the site served in these hours: the count of all of them where it exists (from C7), and the
+ * recorded ones for an hour before it did. The recorded routes are a part of the whole; the health check, the tab
+ * icon and the developer hooks are served but never recorded.
+ */
+export function servedReq(rows) {
+  let n = 0;
+  for (const { d } of rows) {
+    let rec = 0;
+    for (const r of Object.values(d.req || {})) rec += r.n || 0;
+    n += Math.max(d.all || 0, rec);
+  }
+  return n;
+}
+
 export function sumReq(rows, pred = () => true) {
   let n = 0, e = 0, c4 = 0, nm = 0; const ms = []; let mx = 0;
   for (const { d } of rows) {

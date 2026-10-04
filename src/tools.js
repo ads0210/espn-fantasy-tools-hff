@@ -11,6 +11,8 @@
  *               that already gates Site Configuration, reused rather than reinvented
  */
 
+import { NEW_TOOLS } from './release.js';
+
 export const VISIBILITY = { VISIBLE: 'visible', HIDDEN: 'hidden', ADMIN: 'admin' };
 
 /* The order here is the default order everywhere: the home page's tiles (until an
@@ -58,6 +60,16 @@ export const TOOLS = [
     description: 'For those who wish to outsource their thinking.',
     href: '/apps/llm-export/',
     defaultVisibility: VISIBILITY.VISIBLE,
+  },
+  /* Scripts, spreadsheets and phones: the league's data through a small read-only API opened by
+     the league's key, and downloads. Admin-only by default, like Site Backend, on new and upgrading
+     sites alike: nothing stored means the default. */
+  {
+    key: 'site-api',
+    name: 'Site API',
+    description: 'Your league\u2019s data for spreadsheets, scripts and phones.',
+    href: '/apps/site-api/',
+    defaultVisibility: VISIBILITY.ADMIN,
   },
   /* The site's own workings. Admin-only by default, because it shows who visited
      and when, which members cannot see anywhere else. It never counts toward the
@@ -157,6 +169,7 @@ export function describeTools(cfg) {
     href: t.href,
     visibility: visibilityOf(cfg, t.key),
     ...(t.backstage ? { backstage: true } : {}),
+    ...(NEW_TOOLS.includes(t.key) ? { isNew: true } : {}),
   }));
 }
 
@@ -202,7 +215,7 @@ export function describeTileOrder(cfg) {
     tiles: normaliseTileOrder(cfg.toolOrder).map((k) => {
       if (k === SITE_CONFIG_TOOL.key) return { key: k, name: SITE_CONFIG_TOOL.name, visibility: 'always' };
       const t = getTool(k);
-      return { key: k, name: t.name, visibility: visibilityOf(cfg, k) };
+      return { key: k, name: t.name, visibility: visibilityOf(cfg, k), ...(NEW_TOOLS.includes(k) ? { isNew: true } : {}) };
     }),
   };
 }

@@ -10,6 +10,7 @@ import { shareLinkFor, parseSharedBuild, parseSharedOffer } from "./sharelink.js
 import { logEvent } from "../shared/sitelog.js";
 import Instructions from "../shared/Instructions.jsx";
 import { freshenWhenStale } from "../shared/freshen.js";
+import VScrollBox from "../shared/VScrollBox.jsx";
 
 /* ==========================================================================
  * Trade Analyzer
@@ -496,8 +497,7 @@ input[type=range].wslider:focus-visible { outline:1px solid var(--accent);
   transition:opacity var(--dur-2) var(--ease-out); }
 html[data-theme="light"] .rwrap::after {
   background:linear-gradient(180deg, rgba(255,255,255,0), var(--inset) 82%); }
-.rlist { display:flex; flex-direction:column; max-height:calc(var(--row-h) * 8);
-  overflow-y:auto; }
+.rlist { display:flex; flex-direction:column; max-height:calc(var(--row-h) * 8); }
 .rrow { display:flex; align-items:center; gap:9px; flex:none; height:var(--row-h);
   padding:0 10px; background:var(--inset); border:0; color:inherit; font:inherit;
   cursor:pointer; text-align:left;
@@ -597,7 +597,7 @@ html.stillness .meterneedle, html.stillness .lv::before { transition:none; }
 
 const INSTRUCTIONS = [
   ["01", "On the table", "Every trade proposed in this league and not yet answered, already analysed. Each card shows what either side is giving up; open one for the full breakdown. Nothing here accepts, declines or changes anything in ESPN."],
-  ["02", "Build a trade", "Any two teams, not just yours. Tap players on either roster and the verdict follows as you go. A standing offer can be opened in the builder and taken apart."],
+  ["02", "Build a trade", "Any two teams, not just yours. Tap players on either roster and the verdict follows as you go. The figure beside each player is his projected points over the rest of the season. A standing offer can be opened in the builder and taken apart."],
   ["03", "Two ways in, one answer", "A standing offer and one you put together yourself run through exactly the same evaluation, so they cannot disagree about the same deal."],
   ["04", "Twenty-eight statistics, eleven you can move", "Eleven carry a slider. The rest are fixed, and when they are folded away the total line says exactly what they are still contributing."],
   ["05", "A slider scales a result, not the model", "Setting injury risk to 0% removes the points that row was charging. It does not re-imagine a season in which nobody gets hurt."],
@@ -843,7 +843,7 @@ function Analysis({ engine, trade, surfaceKey, weights, onWeights, onOpenInBuild
             : null}
           {overlapIds.has(p.id)
             ? <span className="mk overlap" title="also in another pending offer" /> : null}
-          <span className="pj">{p.pr.toFixed(0)}</span>
+          <span className="pj">{(p.rosPts != null ? p.rosPts : p.pr).toFixed(0)}</span>
         </div>
       )) : <div className="pline"><span className="nm"><i>nothing selected</i></span></div>}
     </div>
@@ -1196,7 +1196,7 @@ const OfferCard = React.memo(function OfferCard(
         <div className="ocplayer" key={p.id}>
           <span className={"posbadge " + posClassOf(p.pos)}>{p.pos}</span>
           <span className="nm">{p.n}</span>
-          <span className="pj">{p.pr.toFixed(0)}</span>
+          <span className="pj">{(p.rosPts != null ? p.rosPts : p.pr).toFixed(0)}</span>
         </div>
       )) : <span className="ocnone">{unsupported ? "—" : "nothing"}</span>}
     </div>
@@ -1535,7 +1535,9 @@ export default function TradeAnalyzer() {
       .map((id) => engine.playerById(id)).filter(Boolean);
     const after = engine.applyTrade(team.roster, sel, incoming);
     const over = engine.overLimits(after);
-    const cut = Math.max(0, after.length - engine.ROSTER_CAP);
+    // The cap leaves out anyone held in an injured-reserve slot, as the engine's own count does.
+    const counted = engine.capCount(after);
+    const cut = Math.max(0, counted - engine.ROSTER_CAP);
     return (
       <div className="bcol">
         <div className="bhead">
@@ -1552,23 +1554,23 @@ export default function TradeAnalyzer() {
           <span>{engine.ownerOf(team)}</span>
           <span>waiver <b>{team.wr}</b></span>
           {team.pp != null ? <span>odds <b>{(team.pp * 100).toFixed(0)}%</b></span> : null}
-          <span>roster <b>{after.length}/{engine.ROSTER_CAP}</b></span>
+          <span>roster <b>{counted}/{engine.ROSTER_CAP}</b></span>
           {cut ? <span className="over">{cut} cut{cut > 1 ? "s" : ""} forced</span> : null}
           {over.length ? <span className="over">over {over.join(", ")}</span> : null}
         </div>
         <div className="rwrap">
-          <div className="rlist scrollpane" onScroll={onScroll}>
-            {team.roster.slice().sort((x, y) => y.pr - x.pr).map((p) => (
+          <VScrollBox className="rlist scrollpane" onScroll={onScroll}>
+            {team.roster.slice().sort((x, y) => (y.rosPts != null ? y.rosPts : y.pr) - (x.rosPts != null ? x.rosPts : x.pr)).map((p) => (
               <button key={p.id} type="button"
                 className={"rrow" + (sel.indexOf(p.id) >= 0 ? " on" : "")}
                 aria-pressed={sel.indexOf(p.id) >= 0}
                 onClick={() => togglePlayer(side, p.id)}>
                 <span className={"posbadge " + posClassOf(p.pos)}>{p.pos}</span>
                 <span className="nm">{p.n}</span>
-                <span className="pj">{p.pr.toFixed(0)}</span>
+                <span className="pj">{(p.rosPts != null ? p.rosPts : p.pr).toFixed(0)}</span>
               </button>
             ))}
-          </div>
+          </VScrollBox>
         </div>
       </div>
     );

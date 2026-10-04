@@ -18,8 +18,8 @@ export const SCHEMA_VERSION = 1;
 
 
 const POS = { 1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K', 16: 'D/ST' };
-const SLOT = { 0: 'QB', 2: 'RB', 4: 'WR', 6: 'TE', 16: 'D/ST', 17: 'K', 20: 'Bench', 21: 'IR', 23: 'FLEX' };
-const SLOT_ORDER = [0, 2, 4, 6, 23, 16, 17, 20, 21];
+const SLOT = { 0: 'QB', 2: 'RB', 3: 'RB/WR', 4: 'WR', 5: 'WR/TE', 6: 'TE', 7: 'OP', 16: 'D/ST', 17: 'K', 20: 'Bench', 21: 'IR', 23: 'FLEX' };
+const SLOT_ORDER = [0, 2, 4, 6, 3, 5, 23, 7, 16, 17, 20, 21];
 const POS_ORDER = ['QB', 'RB', 'WR', 'TE', 'D/ST', 'K'];
 const PRO = { 0: 'FA', 1: 'ATL', 2: 'BUF', 3: 'CHI', 4: 'CIN', 5: 'CLE', 6: 'DAL', 7: 'DEN', 8: 'DET',
   9: 'GB', 10: 'TEN', 11: 'IND', 12: 'KC', 13: 'LV', 14: 'LAR', 15: 'MIA', 16: 'MIN', 17: 'NE',
@@ -39,7 +39,7 @@ const DAYS = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'
 /* ESPN scoring stat ids, in words. An id missing here is written as
    "stat <id>" rather than guessed at. 198 and 209 are absent from the public
    stat maps; their labels are inferred from the point values leagues give them. */
-const STAT = {
+export const STAT = {
   3: ['offense', 'Passing yards', 'yard'], 4: ['offense', 'Passing touchdown'],
   19: ['offense', 'Two-point conversion (pass)'], 20: ['offense', 'Interception thrown'],
   24: ['offense', 'Rushing yards', 'yard'], 25: ['offense', 'Rushing touchdown'],

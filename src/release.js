@@ -14,15 +14,29 @@
  * outside the repo would notice.
  */
 export const RELEASE_NOTE_ITEMS = [
-  'New tool: Site Backend. How the site is running at a glance: its health, its '
-  + 'data, its traffic and its logs. Admin-only by default.',
-  'Added support for traded draft picks, alternate roster sizes, and alternate '
-  + 'draft formats in Draft Helper.',
-  'LLM Data Export now makes sure the data is always fresh on every copy or download.',
-  'Tools on the home page have a new order, and whoever administers this site can '
-  + 'now arrange them in Site Configuration.',
-  'The Setup Wizard now allows defaulting tools to admin-only, in addition to '
-  + 'visible and hidden.',
-  'Added uniform rounding rules to prevent percentage mismatches across pages.',
+  'New tool: Site API. Your league\u2019s data for spreadsheets, scripts and phones, with step-by-step '
+  + 'guides for Google Sheets, Excel, Python, iPhone, Android, Home Assistant, Discord and more, and '
+  + 'downloads of every dataset. Every example keeps to the pace the site sets and stops itself if it '
+  + 'asks too often. Admin-only by default.',
+  'Live Matchups is made for following a game: a player whose game is on is lit up with the quarter, '
+  + 'the clock and the score, a dash marks a player yet to play, a bar shows points against projection, '
+  + 'and a brief +6.0 appears when points change. Highlights show each team\u2019s panels on its own side, '
+  + 'the optimal lineup gauges always sit level, and team names on the matchup card take the site\u2019s colours.',
+  'Trade Analyzer now judges every deal on real figures: each player\u2019s projection for the rest of the season, his '
+  + 'weeks so far, injuries, bye weeks, depth charts, your league\u2019s free agents and its playoff odds.',
+  'Site Configuration opens as a board of panels: choose one to open it.',
+  'If the site ever reaches one of Cloudflare\u2019s free daily limits, pages now say so and pick up again '
+  + 'by themselves.',
   'Various bug fixes and performance improvements.',
 ];
+
+/**
+ * The tools new in this release (C8). Site Configuration marks each with a small New tag in its Tools and Home page
+ * order panels, so whoever administers the site sees what arrived before setting its visibility or arranging its
+ * tile. The home page's own tiles never carry the tag.
+ *
+ * Kept here, beside the release notes, because both are written for the same release at the same moment (a
+ * production package's Step 0): the list is reviewed with the notes, and like them it is cleared or rewritten for the
+ * next release. Keys are those in src/tools.js; a test holds every one to a registered tool.
+ */
+export const NEW_TOOLS = ['site-api'];

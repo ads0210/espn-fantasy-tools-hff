@@ -136,12 +136,13 @@ h1 .cur { display:inline-block; width:.55em; height:1.05em; margin-left:3px; ver
 .tbl { border:1px solid var(--line); border-radius:5px; overflow:hidden; }
 .tbl .scrollwrap .sbar { margin:0; border-radius:0; border-width:0 0 1px; }
 table { border-collapse:collapse; width:100%; font-size:12px; }
-th { background:var(--head); color:var(--dim); font-weight:400; text-align:left; padding:6px 8px; white-space:nowrap; }
+/* Every header and value is centred, as on every table on the site (test/tables.mjs). */
+th { background:var(--head); color:var(--dim); font-weight:400; text-align:center; padding:6px 8px; white-space:nowrap; }
 th.sort { cursor:pointer; user-select:none; }
 th.sort:hover { color:var(--ink); }
 th .arr { color:var(--acc); margin-left:3px; }
-td { padding:6px 8px; border-top:1px solid var(--line); vertical-align:top; }
-td.n, th.n { text-align:right; white-space:nowrap; }
+td { padding:6px 8px; border-top:1px solid var(--line); vertical-align:top; text-align:center; }
+td.n, th.n { white-space:nowrap; font-variant-numeric:tabular-nums; }
 td.nw { white-space:nowrap; }
 tr.bad td { background:var(--t-red); } tr.warn td { background:var(--t-amber); } tr.run td { background:var(--t-blue); }
 tr.click { cursor:pointer; } tr.click:hover td { background:var(--t-acc); }
@@ -169,7 +170,7 @@ input[type="search"] { font:inherit; font-size:12px; color:var(--ink); backgroun
   border-radius:4px; padding:5px 8px; min-width:0; width:min(260px,100%); }
 .btn { background:var(--panel-2); border:1px solid var(--line-2); color:var(--ink); border-radius:5px; padding:4px 10px; cursor:pointer; font-size:12px; }
 .btn:hover { border-color:var(--acc); color:var(--acc); }
-.linkbtn { background:none; border:0; color:var(--link); cursor:pointer; padding:0; font-size:inherit; text-align:left; }
+.linkbtn { background:none; border:0; color:var(--link); cursor:pointer; padding:0; font-size:inherit; text-align:inherit; }
 .linkbtn:hover { text-decoration:underline; }
 .mini { background:none; border:1px solid var(--line-2); color:var(--link); border-radius:12px; padding:1px 10px; font-size:12px; cursor:pointer; white-space:nowrap; }
 .mini:hover { border-color:var(--link); }
@@ -224,6 +225,8 @@ input[type="search"] { font:inherit; font-size:12px; color:var(--ink); backgroun
 .fill { position:absolute; left:0; top:0; bottom:0; background:var(--acc); }
 .fill.w { background:var(--amber); } .fill.b { background:var(--red); } .fill.r { background:var(--blue); }
 .capmark { position:absolute; top:0; bottom:0; width:0; border-left:1px dashed var(--blue); }
+.brakemark { position:absolute; top:-2px; bottom:-2px; width:0; border-left:1px dashed var(--amber); }
+.brakemark.p { border-left-color:var(--red); }
 .gs { grid-column:1 / -1; display:flex; justify-content:space-between; gap:10px; color:var(--faint); font-size:11px; }
 .spark { width:84px; height:18px; display:block; }
 .spark path { fill:none; stroke:var(--dim); stroke-width:1.2; }
@@ -352,3 +355,54 @@ button.t { background:none; border:0; border-bottom:1px dotted var(--faint); pad
 
 :root.stillness *, :root.stillness *::before, :root.stillness *::after { animation:none !important; transition:none !important; }
 @media (prefers-reduced-motion:reduce) { *, *::before, *::after { animation:none !important; transition:none !important; } }
+
+/* ---- Site API: High activity, the likely member's lock, the pace chart and the Admin Password popup ---------- */
+.hot { border:1px solid var(--line); border-radius:5px; overflow:hidden; }
+.hrow { display:grid; grid-template-columns:minmax(0,1fr); gap:0; border-top:1px solid var(--line); }
+.hrow:first-child { border-top:0; }
+.hrow.heavy { background:linear-gradient(90deg,var(--t-red),transparent 60%); }
+.hrow.watch { background:linear-gradient(90deg,var(--t-amber),transparent 60%); }
+.htop { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; padding:10px 12px 6px; }
+.alias { font-weight:700; font-size:15px; }
+.alias small { color:var(--dim); font-weight:400; font-size:11px; margin-left:4px; }
+.youtag { display:inline-block; margin-left:6px; padding:0 6px; border-radius:8px; background:var(--link); color:var(--bg); font-size:10px; line-height:16px; vertical-align:2px; }
+.hgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:6px 14px; padding:4px 12px 8px; }
+.hgrid > div { min-width:0; }
+.hgrid .k { display:block; color:var(--dim); font-size:11px; }
+.hgrid .v { font-size:13px; overflow-wrap:anywhere; }
+.hbars { display:flex; align-items:flex-end; gap:2px; height:28px; padding:0 12px; }
+.hbars.flat { height:44px; padding:0; margin-bottom:6px; }
+.hbars i { flex:1 1 0; background:var(--acc); opacity:.8; min-height:1px; border-radius:1px 1px 0 0; }
+.hbars i.refused { background:var(--red); }
+.hcap { display:flex; justify-content:space-between; padding:2px 12px 6px; color:var(--faint); font-size:10px; }
+.lockf { display:inline-flex; align-items:center; gap:7px; padding:2px 4px 2px 8px; border:1px dashed var(--line-2); border-radius:12px; color:var(--dim); font-size:12px; }
+.lockf svg { width:12px; height:12px; }
+.lockf .mini { padding:0 8px; line-height:18px; }
+.lockf.open { border-style:solid; border-color:var(--acc); color:var(--ink); padding-right:8px; }
+.pacechart { width:100%; height:auto; display:block; }
+.pacechart .lv { font-size:10px; fill:var(--faint); }
+.pacechart .gridline { stroke:var(--line); }
+.pacechart .step { fill:none; stroke:var(--acc); stroke-width:1.6; vector-effect:non-scaling-stroke; }
+.pacechart .nowl { stroke:var(--link); stroke-dasharray:3 3; }
+tr.dim td { opacity:.6; }
+.pwscrim { position:fixed; inset:0; z-index:85; padding:16px; background:var(--scrim); display:flex; align-items:center; justify-content:center; }
+.pwbox { width:min(100%,380px); background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:18px; box-shadow:0 20px 50px rgba(0,0,0,.4); }
+.pwbox h2 { margin:0 0 6px; font-size:15px; color:var(--acc); }
+.pwbox p { margin:0 0 12px; color:var(--dim); font-size:12px; line-height:1.5; }
+.pwbox label { display:block; font-size:11px; color:var(--dim); margin-bottom:4px; }
+.pwbox .pwr { display:flex; border:1px solid var(--line-2); border-radius:5px; background:var(--panel-2); }
+.pwbox input { flex:1; min-width:0; background:none; border:0; color:var(--ink); font:inherit; padding:8px 10px; outline:none; }
+.pwbox .pwr:focus-within { border-color:var(--acc); }
+.pwbox .eye { background:none; border:0; color:var(--dim); cursor:pointer; padding:0 9px; }
+.pwbox .eye svg { width:16px; height:16px; }
+.pwbox .bt { display:flex; gap:8px; justify-content:flex-end; margin-top:14px; }
+.pwbox .err { color:var(--red); font-size:12px; margin-top:8px; }
+
+/* ---- the site's GitHub credit, at the foot as on every page: centred under a rule, micro-caps, a small diamond,
+   muted, the accent on hover. Set in the site's own type rather than this page's terminal face. ---- */
+.toolfoot { margin-top:24px; padding:10px 0 4px; text-align:center; border-top:1px solid var(--line); }
+.toolfoot .gh { display:inline-flex; align-items:center; gap:7px; color:var(--dim);
+  font:900 10px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  text-transform:uppercase; letter-spacing:.16em; text-decoration:none; transition:color .16s ease; }
+.toolfoot .gh::before { content:""; width:5px; height:5px; background:currentColor; transform:rotate(45deg); }
+.toolfoot .gh:hover { color:var(--acc); text-decoration:none; }

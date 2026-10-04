@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import FortuneTeller from "./FortuneTeller.jsx";
 import { freshenWhenStale } from "../shared/freshen.js";
+import { noteBrake, pollDelay } from "../shared/brake.js";
 
 /* The preview inlines everything, because it has no session to fetch with;
    the page fetches the summary, then each team's map when it is first shown. */
@@ -60,12 +61,22 @@ root.render(<FortuneTeller data={null} />);
       apply: (fresh) => { if (current.ready) return; current = fresh; root.render(<FortuneTeller data={fresh} loadMap={(i, onP) => fetchMap(fresh, i, onP)} />); },
     });
   }
+  // Like every poller on the site, it rests while the tab is hidden and stops after four hours without a tap.
+  let lastActive = Date.now();
+  ["pointerdown", "keydown", "scroll", "touchstart", "focus"].forEach((e) => window.addEventListener(e, () => { lastActive = Date.now(); }, { passive: true }));
+  let lastAsk = 0;
   setInterval(async () => {
+    if (document.hidden || Date.now() - lastActive > 4 * 60 * 60 * 1000) return;
     // Only while a build or an update is running: weeks before one can start, there is nothing to wait for.
     const st = current && current.pipeline && current.pipeline.state;
     if (!["building", "updating"].includes(st)) return;
+    // Less often while the site saves its daily allowance (C5).
+    if (Date.now() - lastAsk < pollDelay(30000) - 1000) return;
+    lastAsk = Date.now();
     try {
-      const fresh = prepare(await (await fetch("/api/fortune-teller", { credentials: "same-origin" })).json());
+      const res = await fetch("/api/fortune-teller", { credentials: "same-origin" });
+      noteBrake(res);
+      const fresh = prepare(await res.json());
       if (!current.ready) { current = fresh; root.render(<FortuneTeller data={fresh} loadMap={(i, onP) => fetchMap(fresh, i, onP)} />); return; }
       const changed = fresh.ready && (fresh.updatedAt || fresh.builtAt) !== (current.updatedAt || current.builtAt);
       current = { ...current, pipeline: fresh.pipeline };

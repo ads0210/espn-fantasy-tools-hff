@@ -131,6 +131,27 @@ const freeAgentFilter = (season, slot, limit) =>
     },
   });
 
+/* Every rostered player with his last seventeen scored games (this season's weeks and, early on, last season's),
+   and the best free agents by ESPN's updated projection. Two reads carry what one read per played week would. */
+const rosteredFormFilter = (season) =>
+  JSON.stringify({
+    players: {
+      filterStatus: { value: ['ONTEAM'] },
+      limit: 600,
+      sortPercOwned: { sortPriority: 1, sortAsc: false },
+      filterStatsForTopScoringPeriodIds: { value: 17, additionalValue: [`00${season}`, `10${season}`, `12${season}`, `00${season - 1}`] },
+    },
+  });
+const freeFormFilter = (season) =>
+  JSON.stringify({
+    players: {
+      filterStatus: { value: ['FREEAGENT', 'WAIVERS'] },
+      limit: 150,
+      sortAppliedStatTotal: { sortAsc: false, sortPriority: 1, value: `12${season}` },
+      filterStatsForTopScoringPeriodIds: { value: 2, additionalValue: [`00${season}`, `12${season}`] },
+    },
+  });
+
 /** Convenience: a dataset that is one single call. */
 const one = (url, headers) => () => [{ part: 'main', url, headers }];
 
@@ -283,6 +304,21 @@ export const DATASETS = [
     })),
     expect: 'players',
     notes: 'Feeds the LLM Data Export. One part per position, so every position gets its full depth.',
+  },
+  {
+    key: 'player_weeks',
+    label: 'Every rostered player, week by week',
+    group: 'fantasy',
+    timeoutMs: TIMEOUT.LARGE,
+    ttl: TTL.MIN_30,
+    auth: true,
+    tier: 'core',
+    parts: (cfg) => [
+      { part: 'rostered', url: `${leagueBase(cfg)}?view=kona_player_info`, headers: { 'X-Fantasy-Filter': rosteredFormFilter(cfg.season) } },
+      { part: 'free', url: `${leagueBase(cfg)}?view=kona_player_info`, headers: { 'X-Fantasy-Filter': freeFormFilter(cfg.season) } },
+    ],
+    expect: 'players',
+    notes: 'Feeds the Trade Analyzer. Past weeks come from ESPN whenever asked, so a site set up mid-season has them all.',
   },
   {
     key: 'season_schedule',
@@ -488,6 +524,28 @@ export const DATASETS = [
     parts: () => [{ part: 'main', url: null }],
   },
   {
+    key: 'player_form_digest',
+    label: 'Player form: projections, weeks played, market',
+    group: 'derived',
+    ttl: TTL.MIN_30,
+    auth: true,
+    tier: 'core',
+    derivedFrom: 'player_weeks',
+    parts: () => [{ part: 'main', url: null }],
+    notes: 'Built from player_weeks for the Trade Analyzer\'s rows.',
+  },
+  {
+    key: 'depth_digest',
+    label: 'Depth charts, reduced to each skill player\'s place',
+    group: 'derived',
+    ttl: TTL.HOUR_6,
+    auth: false,
+    tier: 'core',
+    derivedFrom: 'nfl_depth_charts',
+    parts: () => [{ part: 'main', url: null }],
+    notes: 'Built from nfl_depth_charts for the Trade Analyzer\'s Role security row.',
+  },
+  {
     key: 'bye_weeks',
     label: 'NFL bye weeks by team',
     group: 'derived',
@@ -644,7 +702,7 @@ export const DATASETS = [
     timeoutMs: TIMEOUT.LARGE,
     label: 'Depth charts (per team)',
     group: 'nfl_site',
-    ttl: TTL.MIN_30,
+    ttl: TTL.HOUR_6,
     auth: false,
     tier: 'aux',
     parts: perTeam((id) => `${siteBase()}/teams/${id}/depthcharts`),

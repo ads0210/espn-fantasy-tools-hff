@@ -8,7 +8,7 @@
  * 00:00 UTC reset, and holds slices while NFL games are in their windows.
  * Everything is metered here, since nothing reports account usage to a Worker.
  */
-import { buildTeam, buildTeamPart, mergeParts, finishFromPart, partPlan, assembleSummary, deflateRaw, pathCount, PATH_CEILING } from './ftbuild.js';
+import { buildTeam, buildTeamPart, mergeParts, finishFromPart, partPlan, assembleSummary, deflateRaw, pathCount, PATH_CEILING, placesOf } from './ftbuild.js';
 import { FT_SUMMARY_KEY, ftMapKey } from './fortuneteller.js';
 import { getPart } from './store.js';
 import { FT_DEV_VIEW_KEY, FT_ESPN_ODDS_KEY } from './fortuneteller.js';
@@ -128,21 +128,21 @@ export class FortuneTellerDO {
     await this.env.DATA.put(FT_SUMMARY_KEY, JSON.stringify({ ...summary, activeTrim: summary.activeTrim ?? summary.trims.length - 1 }), { httpMetadata: { contentType: 'application/json' } });
   }
 
-  /** Dev: every team's odds for every week of a dataset built before the build recorded them, counted from its maps. */
+  /** Dev: every team's odds and chance of every place for every week of a dataset built before the build recorded them, counted from its maps. */
   async backfillOdds(id) {
     const prefix = `fortune-teller/library/${id}/`, o = await this.env.DATA.get(`${prefix}summary.json`);
     if (!o) return { ok: false, error: `no dataset ${id}` };
-    const s = await o.json(), G = s.games.length, odds = s.trims.map(() => new Array(s.teams.length).fill(null)), t0 = Date.now();
+    const s = await o.json(), G = s.games.length, n = s.teams.length, odds = s.trims.map(() => new Array(n).fill(null)), places = s.trims.map(() => new Array(n).fill(null)), t0 = Date.now();
     for (let i = 0; i < s.teams.length; i++) {
       const mo = await this.env.DATA.get(`${prefix}maps/${s.teams[i].id}.bin`); if (!mo) continue;
       const raw = await inflateBytes(new Uint8Array(await mo.arrayBuffer())), meta = s.maps[i];
       const map = { nodes: new Int32Array(raw.buffer, raw.byteOffset, raw.length / 4), root: meta.root, G, leafBase: meta.leafBase || 256, leaves: meta.leaves || null };
-      s.trims.forEach((tr, k) => { const pins = new Int8Array(G).fill(-1); for (let j = 0; j < tr.fixed; j++) pins[j] = s.future[j].digit; const t = totalsOf(map, pins, s.places, 0); odds[k][i] = +(t[1] / t[0]).toFixed(6); });
+      s.trims.forEach((tr, k) => { const pins = new Int8Array(G).fill(-1); for (let j = 0; j < tr.fixed; j++) pins[j] = s.future[j].digit; const t = totalsOf(map, pins, s.places, n); odds[k][i] = +(t[1] / t[0]).toFixed(6); places[k][i] = Array.from(t.slice(2, 2 + n), (v) => +(v / t[0]).toFixed(6)); });
     }
-    s.trims.forEach((tr, k) => { tr.odds = finalOdds(s, tr) || odds[k]; });
+    s.trims.forEach((tr, k) => { tr.odds = finalOdds(s, tr) || odds[k]; if (places[k].every(Array.isArray)) tr.places = places[k]; });
     await this.env.DATA.put(`${prefix}summary.json`, JSON.stringify(s), { httpMetadata: { contentType: 'application/json' } });
     const live = await this.activeSummary();
-    if (live && live.datasetId === id) { live.trims.forEach((tr, k) => { tr.odds = s.trims[k].odds; }); await this.env.DATA.put(FT_SUMMARY_KEY, JSON.stringify(live), { httpMetadata: { contentType: 'application/json' } }); }
+    if (live && live.datasetId === id) { live.trims.forEach((tr, k) => { tr.odds = s.trims[k].odds; if (s.trims[k].places) tr.places = s.trims[k].places; }); await this.env.DATA.put(FT_SUMMARY_KEY, JSON.stringify(live), { httpMetadata: { contentType: 'application/json' } }); }
     return { ok: true, id, ms: Date.now() - t0, sums: odds.map((a) => +a.reduce((x, v) => x + (v || 0), 0).toFixed(4)) };
   }
 
@@ -334,7 +334,7 @@ export class FortuneTellerDO {
         simplest = r.set ? { k: r.k, set: r.set } : { k: r.k, set: null, timedOut: !!r.timedOut };
       }
       const to = part.trimOdds && part.trimOdds[0];
-      out.push({ defaultPath: digits, best: { start: b.s, size: b.k, lead: b.lead >= 1e14 ? null : +b.lead.toFixed(2) }, simplest, odds: to && to[1] ? +(to[0] / to[1]).toFixed(6) : null });
+      out.push({ defaultPath: digits, best: { start: b.s, size: b.k, lead: b.lead >= 1e14 ? null : +b.lead.toFixed(2) }, simplest, odds: to && to[1] ? +(to[0] / to[1]).toFixed(6) : null, places: placesOf(part, 0) });
     }
     await s.put('trimteam:' + i, out); this.rows += 1;
     return `${summary.teams[i].name}: updated through week ${ti.trims[ti.trims.length - 1].thru}`;
@@ -343,7 +343,8 @@ export class FortuneTellerDO {
   async trimFinalize(job) {
     const s = this.s(), summary = await this.pipelineSummary(), ti = await s.get('trimInput'), per = [];
     for (let i = 0; i < job.n; i++) per.push(await s.get('trimteam:' + i));
-    ti.trims.forEach((tr, q) => summary.trims.push({ ...tr, defaultPath: per.map((p) => p[q].defaultPath), best: per.map((p) => p[q].best), simplest: per.map((p) => p[q].simplest), odds: per.map((p) => p[q].odds ?? null) }));
+    ti.trims.forEach((tr, q) => summary.trims.push({ ...tr, defaultPath: per.map((p) => p[q].defaultPath), best: per.map((p) => p[q].best), simplest: per.map((p) => p[q].simplest), odds: per.map((p) => p[q].odds ?? null),
+      places: per.every((p) => Array.isArray(p[q].places)) ? per.map((p) => p[q].places) : null }));
     summary.future = ti.future; summary.games = ti.games; summary.activeTrim = summary.trims.length - 1; summary.updatedAt = new Date(this.now()).toISOString();
     for (const tr of summary.trims) { const f = finalOdds(summary, tr); if (f) tr.odds = f; }   // the season over: exactly in or out
     await this.env.DATA.put(`${job.prefix}summary.json`, JSON.stringify(summary), { httpMetadata: { contentType: 'application/json' } });

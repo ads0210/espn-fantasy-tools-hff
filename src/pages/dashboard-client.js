@@ -8,6 +8,10 @@
  */
 import { TEAM_COOKIE, LOGO_FALLBACK_SVG } from '../ui.js';
 import { idleAwarePoller } from './poller.js';
+import { pollSecsFor } from '../budget.js';
+
+/* The brake's poll rates (C5), from the one rule in budget.js: [nothing live, something live] in seconds. */
+const BRAKE_SECS = Object.fromEntries(['economy', 'protect', 'limit'].map((b) => [b, [pollSecsFor(b, { live: false }), pollSecsFor(b, { live: true })]]));
 
 export function dashboardClientJs({ version = '', initial = null, board = null } = {}) {
   return `
@@ -698,12 +702,18 @@ function paintBoard(d) {
   renderTransactions();
 }
 
+/* The board (your matchup, standings, injuries, league activity) is asked for on its own only when the page opens
+   without one or the team changes. Otherwise it rides along with the status poll once every 90 seconds, so the
+   page makes one request where it used to make two, and the board pauses with the status poll in a hidden tab
+   and after four idle hours. */
+var BOARD_EVERY = 90000, lastBoardAt = 0;
 async function loadBoard() {
   try {
     var q = teamValue() ? ('?team=' + encodeURIComponent(teamValue())) : '';
     var res = await fetch('/api/dashboard/board' + q);
     if (!res.ok) throw new Error(res.status);
     paintBoard(await res.json());
+    lastBoardAt = Date.now();
   } catch (e) { /* keep whatever is on screen */ }
 }
 
@@ -725,8 +735,41 @@ window.addEventListener('resize', function () {
   clearTimeout(rt); rt = setTimeout(window.__relayout, 180);
 }, { passive: true });
 
+/* The site's notices about its free limits (C6): a warning before Cloudflare's daily limit, a limit the site runs
+   past, and for a day afterwards a dismissible note about a cutoff pages saw. Times in the reader's chosen zone. */
+var NOTICE_ICON = '<span class="alerticon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg></span>';
+function noticeClock(iso) { try { return new Date(iso).toLocaleTimeString(undefined, { timeZone: (typeof window.siteTz === 'function' ? window.siteTz() : undefined), hour: 'numeric', minute: '2-digit' }); } catch (e) { return new Date(iso).toISOString().slice(11, 16) + ' UTC'; } }
+function paintNotice(n) {
+  var host = document.getElementById('sitenotice');
+  if (!host) return;
+  var parts = [];
+  var midnight = new Date(Math.floor(Date.now() / 86400000) * 86400000 + 86400000).toISOString();
+  if (n && n.text) {
+    parts.push('<div class="alertbar" role="status">' + NOTICE_ICON + '<span><b>' + (n.kind === 'busy' ? 'A very busy day' : 'Resting until midnight UTC') + '</b><p>'
+      + esc(n.text.split('{until}').join(noticeClock(midnight))) + '</p></span></div>');
+  }
+  if (n && n.outage) {
+    var key = 'eftOutage:' + n.outage.seenAt, gone = false;
+    try { gone = localStorage.getItem(key) === '1'; } catch (e) { gone = false; }
+    if (!gone) {
+      parts.push('<div class="alertbar" role="status">' + NOTICE_ICON + '<span><b>Earlier today</b><p>The site reached Cloudflare\u2019s free daily limit, so pages could not load from '
+        + esc(noticeClock(n.outage.seenAt)) + ' until ' + esc(noticeClock(n.outage.until)) + ' (00:00 UTC).' + (n.outage.clockOn ? ' Live scores kept being recorded.' : '')
+        + ' <button type="button" class="linkbtn" id="noticeOk" data-key="' + esc(key) + '">Dismiss</button></p></span></div>');
+    }
+  }
+  var markup = parts.join('');
+  if (host.innerHTML !== markup) host.innerHTML = markup;
+  host.hidden = !markup;
+  var ok = document.getElementById('noticeOk');
+  if (ok && !ok.dataset.wired) {
+    ok.dataset.wired = '1';
+    ok.addEventListener('click', function () { try { localStorage.setItem(ok.dataset.key, '1'); } catch (e) { /* hidden for this view only */ } paintNotice({ text: n && n.text, kind: n && n.kind }); });
+  }
+}
+
 function paint(d) {
     LAST = d;
+    paintNotice(d.siteNotice);
     var nfl = d.nfl || {};
     document.getElementById('ndot').className = 'dot' + (nfl.live ? ' live' : '');
     document.getElementById('nmeta').textContent = nfl.summary || '';
@@ -762,11 +805,30 @@ window.addEventListener('tzchange', function () {
   renderTransactions();
 });
 
+/* The brake (C5): every answer says whether the site is saving its daily allowance, and the poll waits longer
+   while it is: every minute while a game is on and every 5 minutes otherwise at Economy, every 5 at Protect. */
+var BRAKE = 'normal', BRAKE_SECS = ${JSON.stringify(BRAKE_SECS)};
+function noteBrake(res) { try { var b = res.headers.get('x-brake'); BRAKE = BRAKE_SECS[b] ? b : 'normal'; } catch (e) { BRAKE = 'normal'; } }
+window.__eftPollDelay = function (base) {
+  var t = BRAKE_SECS[BRAKE];
+  if (!t) return base;
+  var live = Boolean(LAST_STATUS && ((LAST_STATUS.nfl && LAST_STATUS.nfl.live) || (LAST_STATUS.fantasy && LAST_STATUS.fantasy.live)));
+  return Math.max(base, (live ? t[1] : t[0]) * 1000);
+};
+
 async function loadStatus() {
   try {
-    var res = await fetch('/api/dashboard/status');
+    // A second short of the interval, so a poll that lands a moment early still brings the board.
+    var withBoard = Date.now() - lastBoardAt >= BOARD_EVERY - 1000;
+    var q = withBoard ? ('?board=1' + (teamValue() ? '&team=' + encodeURIComponent(teamValue()) : '')) : '';
+    var res = await fetch('/api/dashboard/status' + q);
+    noteBrake(res);
+    // Cloudflare's own limit page (C6): keep what is shown, put the site's notice up, and rest until midnight UTC.
+    if (window.__eftLimit && await window.__eftLimit.check(res)) return;
     if (!res.ok) throw new Error(res.status);
-    LAST_STATUS = await res.json();
+    var d = await res.json();
+    if (d.board) { var b = d.board; delete d.board; if (b.ok !== false) { paintBoard(b); lastBoardAt = Date.now(); } }
+    LAST_STATUS = d;
     paint(LAST_STATUS);
   } catch (e) {
     document.getElementById('nmeta').textContent = 'Unavailable';
@@ -775,8 +837,7 @@ async function loadStatus() {
 }
 
 if (INITIAL) { LAST_STATUS = INITIAL; paint(INITIAL); } else loadStatus();
-if (BOARD) paintBoard(BOARD); else loadBoard();
-setInterval(loadBoard, 90000);
+if (BOARD) { paintBoard(BOARD); lastBoardAt = Date.now(); } else loadBoard();
 ${idleAwarePoller('loadStatus', 15000)}
 
 /* The update notice, shown once per browser per version.

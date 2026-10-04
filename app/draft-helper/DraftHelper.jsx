@@ -9,6 +9,8 @@ import { PALETTES, BASE_CSS, BACKDROP } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamSelect from "../shared/TeamSelect.jsx";
 import Instructions from "../shared/Instructions.jsx";
+import ScrollBox from "../shared/ScrollBox.jsx";
+import { noteBrake, pollDelay } from "../shared/brake.js";
 import { teamLogoUrl } from "../../src/teamlogo.js";
 import { rosterShape, assignRoster as assignLineup, fits } from "./rosterShape.js";
 import { draftPlan, DEFAULT_ROUNDS } from "./draftPlan.js";
@@ -101,48 +103,67 @@ function useIdleClock() {
   return idle;
 }
 
-function useDataset(key, intervalMs, idle) {
-  const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const etagRef = useRef(null);
-  const timerRef = useRef(null);
+/**
+ * Every dataset the page reads, asked for together: each tick (every 15 seconds) makes one request for every
+ * dataset that is due, the draft and rosters every 15 seconds and the player pool, injuries and news every
+ * minute, so a draft costs about a third of the requests it did when each dataset was polled on its own. Each copy
+ * the page already holds is named by its tag, and the server answers "same" for it rather than sending it again.
+ * Like every poller on the site it rests in a hidden tab and stops after four idle hours.
+ */
+const DH_SETS = [["draft_results", 15000], ["rosters", 15000], ["player_digest", 60000], ["injuries_digest", 60000], ["nfl_news", 60000]];
 
-  const load = useCallback(async () => {
+function useDatasets(spec, idle) {
+  const blank = () => Object.fromEntries(spec.map(([k]) => [k, { data: null, error: null, lastUpdated: null }]));
+  const [state, setState] = useState(blank);
+  const tags = useRef({}), asked = useRef({}), timerRef = useRef(null);
+  const liveRef = useRef(true);   // whether the draft is under way, for the brake's poll rate
+  const load = useCallback(async (only) => {
+    const now = Date.now();
+    const due = spec.filter(([k, every]) => (only ? only.includes(k) : !asked.current[k] || now - asked.current[k] >= every - 1000)).map(([k]) => k);
+    if (!due.length) return;
+    due.forEach((k) => { asked.current[k] = now; });
+    const q = due.map((k) => `k=${encodeURIComponent(k)}&e=${encodeURIComponent(tags.current[k] || "")}`).join("&");
     try {
-      const headers = {};
-      if (etagRef.current) headers["If-None-Match"] = etagRef.current;
-      const res = await fetch(`/api/data/${key}`, { headers, credentials: "same-origin" });
-      if (res.status === 401) { setError("session expired"); return; }
-      if (res.status === 304) { setLastUpdated(new Date()); setError(null); return; }
+      const res = await fetch(`/api/data?${q}`, { credentials: "same-origin" });
+      noteBrake(res);
+      if (res.status === 401) { setState((st) => ({ ...st, ...Object.fromEntries(due.map((k) => [k, { ...st[k], error: "session expired" }])) })); return; }
       if (!res.ok) throw new Error(`${res.status}`);
-      etagRef.current = res.headers.get("etag");
-      const json = await res.json();
-      setData(json);
-      setLastUpdated(new Date());
-      setError(null);
+      const body = await res.json();
+      const at = new Date();
+      setState((st) => {
+        const next = { ...st };
+        for (const k of due) {
+          const one = body.sets && body.sets[k];
+          if (!one || one.ok === false) { next[k] = { ...st[k], error: "unavailable" }; continue; }
+          if (one.etag) tags.current[k] = one.etag;
+          next[k] = one.same ? { ...st[k], lastUpdated: at, error: null } : { data: one.data, lastUpdated: at, error: null };
+          if (k === "draft_results" && !one.same) liveRef.current = Boolean(one.data && one.data.draftDetail && one.data.draftDetail.inProgress);
+        }
+        return next;
+      });
     } catch (e) {
-      setError(e.message || "fetch failed");
+      const msg = e.message || "fetch failed";
+      setState((st) => ({ ...st, ...Object.fromEntries(due.map((k) => [k, { ...st[k], error: msg }])) }));
     }
-  }, [key]);
+  }, [spec]);
 
   useEffect(() => {
     load();
-    if (!intervalMs) return undefined;
+    // Every 15 seconds, or less often while the site saves its daily allowance (C5).
     function tick() {
       if (!document.hidden && !idle) load();
-      timerRef.current = setTimeout(tick, intervalMs);
+      timerRef.current = setTimeout(tick, pollDelay(15000, { live: liveRef.current }));
     }
-    timerRef.current = setTimeout(tick, intervalMs);
+    timerRef.current = setTimeout(tick, pollDelay(15000, { live: liveRef.current }));
     function onVisible() { if (!document.hidden && !idle) load(); }
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearTimeout(timerRef.current);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [load, intervalMs, idle]);
+  }, [load, idle]);
 
-  return { data, error, lastUpdated, refetch: load };
+  return useMemo(() => ({ ...Object.fromEntries(spec.map(([k]) => [k, { ...state[k], refetch: () => load([k]) }])), refetchSome: (keys) => load(keys) }), [state, spec, load]);
 }
 
 // The team selection is site-wide: the dashboard sets it, every tool reads it,
@@ -405,11 +426,9 @@ export default function DraftHelper() {
 
   // live data — tiered polling per the planning doc (15s critical, 60s the rest)
   const idle = useIdleClock();
-  const draftResultsRes = useDataset("draft_results", 15000, idle);
-  const rostersRes = useDataset("rosters", 15000, idle);
-  const playerPoolRes = useDataset("player_digest", 60000, idle);
-  const injuriesRes = useDataset("injuries_digest", 60000, idle);
-  const newsRes = useDataset("nfl_news", 60000, idle);
+  const sets = useDatasets(DH_SETS, idle);
+  const draftResultsRes = sets.draft_results, rostersRes = sets.rosters, playerPoolRes = sets.player_digest,
+    injuriesRes = sets.injuries_digest, newsRes = sets.nfl_news;
 
   const teams = useMemo(() => deriveTeams(rostersRes.data), [rostersRes.data]);
   const teamsDropdown = useMemo(() => [...teams].sort((a, b) => {
@@ -537,7 +556,7 @@ export default function DraftHelper() {
     setBlacklist(new Set()); setWatchlist(new Set()); setNotes({}); setEmphasize(null); setResetArmed(false);
   };
 
-  const refresh = () => { draftResultsRes.refetch(); rostersRes.refetch(); };
+  const refresh = () => sets.refetchSome(["draft_results", "rosters"]);
   const lastUpdatedLabel = draftResultsRes.lastUpdated
     ? draftResultsRes.lastUpdated.toLocaleTimeString(undefined, { timeZone: siteZone, hour: "numeric", minute: "2-digit", second: "2-digit" })
     : "loading…";
@@ -734,7 +753,7 @@ export default function DraftHelper() {
 
         /* ---- board ---- */
         /* The scrollbar treatment is the shared one, in ui.js. */
-        .boardscroll { overflow-x:auto; padding:0 15px 15px; }
+        .boardscroll { padding:0 15px 15px; min-width:0; }
         .board { border-collapse:collapse; font-size:10px; width:100%; }
         .board th { position:sticky; top:0; font-size:8.5px; font-weight:900; letter-spacing:.1em;
           text-transform:uppercase; color:var(--ink-3); padding:6px 4px; white-space:nowrap;
@@ -1031,7 +1050,7 @@ export default function DraftHelper() {
               <Blank title="Board not available yet" sub="It appears once the draft order is set." />
             </div>
           ) : (
-            <div className="boardscroll">
+            <div className="boardscroll"><ScrollBox>
               <table className="board">
                 <thead>
                   <tr>
@@ -1070,7 +1089,7 @@ export default function DraftHelper() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </ScrollBox></div>
           )}
         </Panel>
 

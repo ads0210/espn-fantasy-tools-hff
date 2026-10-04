@@ -18,8 +18,8 @@ const FIXED = [
   {
     key: 'home', name: 'Home', path: '/',
     routes: [
-      ['GET', '/', 'document'], ['GET', '/api/dashboard/status', 'every 15 s', 15],
-      ['GET', '/api/dashboard/board', 'every 90 s and on a team change', 90], ['GET', '/api/logo/:team', 'on load'],
+      ['GET', '/', 'document'], ['GET', '/api/dashboard/status', 'every 15 s, with the board every 90 s', 15],
+      ['GET', '/api/dashboard/board', 'on load and on a team change'], ['GET', '/api/logo/:team', 'on load'],
       ['GET', '/api/img', 'on load'], ['GET', '/favicon.svg', 'on load'], ['POST', '/api/auth/logout', 'on sign out'],
     ],
     datasets: ['scoreboard_digest', 'matchup_digest', 'live_scoring_digest', 'bye_weeks', 'standings_digest',
@@ -61,18 +61,17 @@ const FIXED = [
 const TOOL_READS = {
   'draft-helper': {
     routes: [
-      ['GET', '/apps/draft-helper/', 'document'], ['GET', '/api/data/draft_results', 'every 15 s', 15],
-      ['GET', '/api/data/rosters', 'every 15 s', 15],
-      ['GET', '/api/data/player_digest', 'every 60 s', 60], ['GET', '/api/data/injuries_digest', 'every 60 s', 60],
-      ['GET', '/api/data/nfl_news', 'every 60 s', 60], ['GET', '/api/meta', 'on load'],
+      ['GET', '/apps/draft-helper/', 'document'],
+      ['GET', '/api/data', 'every 15 s: the draft and rosters each time, the player pool, injuries and news every minute', 15],
+      ['GET', '/api/meta', 'on load'],
     ],
     // The draft payload carries the league's settings, roster shape included.
     datasets: ['draft_results', 'rosters', 'player_digest', 'injuries_digest', 'nfl_news'],
   },
   'live-matchups': {
     routes: [
-      ['GET', '/apps/live-matchups/', 'document'], ['GET', '/api/live/week', 'every 15 s', 15],
-      ['GET', '/api/live/timeline', 'every 60 s', 60], ['GET', '/api/live/h2h', 'on load'],
+      ['GET', '/apps/live-matchups/', 'document'], ['GET', '/api/live/week', 'every 15 s, with the score history every minute', 15],
+      ['GET', '/api/live/timeline', 'once for a past week'], ['GET', '/api/live/h2h', 'on load'],
       ['GET', '/api/meta', 'on load'], ['GET', '/api/logo/:team', 'on load'],
     ],
     datasets: ['live_scoring_digest', 'h2h_digest', 'season_schedule'],
@@ -98,6 +97,14 @@ const TOOL_READS = {
     routes: [['GET', '/apps/llm-export/', 'document'], ['GET', '/api/llm-export', 'on load and before a copy or download'],
       ['POST', '/api/site-log/event', 'on copy or download']],
     datasets: ['llm_export_digest', 'live_scoring_digest'],
+  },
+  'site-api': {
+    routes: [['GET', '/apps/site-api/', 'document'], ['POST', '/api/tools/unlock', 'on unlock'],
+      ['GET', '/apps/site-api/api', 'on load, on return to the tab, Try it, previews and downloads'],
+      ['GET', '/api/v1/*', 'programs holding the league\u2019s key'], ['POST', '/api/site-log/event', 'on a key copy or download']],
+    // Everything it serves comes from Site API's snapshot, built from these.
+    datasets: ['league_settings', 'llm_export_digest', 'standings_digest', 'live_scoring_digest', 'season_schedule', 'player_digest',
+      'transaction_digest', 'draft_results', 'bye_weeks', 'scoreboard_digest', 'injuries_digest', 'nfl_news', 'league_history_digest', 'h2h_full_digest'],
   },
   'site-backend': {
     routes: [['GET', '/apps/site-backend/', 'document'], ['POST', '/api/tools/unlock', 'on unlock'],
@@ -137,13 +144,14 @@ export function pageForRoute(routeKey) {
   if (path.startsWith('/api/auth/') || path === '/api/health') return 'signin';
   if (path.startsWith('/api/setup/')) return 'wizard';
   if (path === '/config' || path.startsWith('/api/admin/') || path === '/api/meta') return path === '/api/admin/fortune-teller' ? 'fortune-teller' : 'config';
-  if (path.startsWith('/api/data/')) return 'draft-helper';
+  if (path === '/api/data' || path.startsWith('/api/data/')) return 'draft-helper';
   if (path.startsWith('/api/live/')) return 'live-matchups';
   if (path === '/api/hof') return 'hall-of-fame';
   if (path === '/api/trade') return 'trade-analyzer';
   if (path.startsWith('/api/fortune-teller')) return 'fortune-teller';
   if (path === '/api/llm-export') return 'llm-export';
   if (path === '/api/tools/unlock') return 'site-backend';
+  if (path === '/api/v1' || path.startsWith('/api/v1/')) return 'site-api';
   return null;
 }
 
