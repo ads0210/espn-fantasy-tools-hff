@@ -46,7 +46,7 @@ function scanFast(input, ti, k, c, opts = {}) {
   const trims = (input.trims || []).map((tr) => {
     let pre = 0; for (let j = 0; j < tr.fixed; j++) pre = pre * 3 + input.future[j].digit;
     const span = RESULTS_PER_GAME ** (G - tr.fixed);
-    return { lo: pre * span, hi: pre * span + span, pf: tr.pf, best: null, pl: 0, n: 0 };
+    return { lo: pre * span, hi: pre * span + span, pf: tr.pf, best: null, pl: 0, n: 0, pd: new Float64Array(n) };
   });
   const leaf = new Uint8Array(NP), fin = new Float64Array(n);
   for (let x = 0; x < NP; x++) {
@@ -59,6 +59,7 @@ function scanFast(input, ti, k, c, opts = {}) {
     for (let q = 0; q < trims.length; q++) {
       const tr = trims[q]; if (X < tr.lo || X >= tr.hi) continue;
       tr.n++; tr.pl += Math.max(0, Math.min(input.places, above + level) - above) / level;   // this week's odds, counted as we pass
+      for (let p = above; p < above + level; p++) tr.pd[p] += 1 / level;   // and its chance of every place
       const b = tr.best;
       if (b && (above > b.s || (above === b.s && level > b.k))) continue;
       let lead = NO_LEAD;
@@ -67,7 +68,7 @@ function scanFast(input, ti, k, c, opts = {}) {
     }
   }
   const { nodes, root } = opts.scanOnly ? { nodes: new Int32Array(0), root: 0 } : reduceLeaves(leaf, G, 256, k);
-  return { nodes, root, LB: 256, leaves: null, fin: Array.from(fin), best: trims.map((t) => t.best), trimOdds: trims.map((t) => [t.pl, t.n]), paths: NP };
+  return { nodes, root, LB: 256, leaves: null, fin: Array.from(fin), best: trims.map((t) => t.best), trimOdds: trims.map((t) => [t.pl, t.n]), trimPlaces: trims.map((t) => Array.from(t.pd)), paths: NP };
 }
 
 /**
@@ -133,7 +134,7 @@ function buildTeamGeneral(input, ti, rules, k = 0, c = 0, opts = {}) {
   const trims = (input.trims || []).map((tr) => {
     let pre = 0; for (let j = 0; j < tr.fixed; j++) pre = pre * 3 + input.future[j].digit;
     const span = RESULTS_PER_GAME ** (G - tr.fixed);
-    return { lo: pre * span, hi: pre * span + span, pf: tr.pf, best: null, pl: 0, n: 0 };
+    return { lo: pre * span, hi: pre * span + span, pf: tr.pf, best: null, pl: 0, n: 0, pd: new Float64Array(n) };
   });
   const leaf = new Uint16Array(NP), fin = new Float64Array(n), memo = new Map(), members = [];
   const rankBase = new Int32Array(n);
@@ -191,7 +192,7 @@ function buildTeamGeneral(input, ti, rules, k = 0, c = 0, opts = {}) {
     for (let i = 0; i < info.size; i++) fin[info.start + i] += info.counts ? info.counts[i] / info.total : 1 / info.size;
     for (let q = 0; q < trims.length; q++) {
       const tr = trims[q]; if (X < tr.lo || X >= tr.hi) continue;
-      tr.n++; for (let i2 = 0; i2 < info.size; i2++) if (info.start + i2 < input.places) tr.pl += info.counts ? info.counts[i2] / info.total : 1 / info.size;
+      tr.n++; for (let i2 = 0; i2 < info.size; i2++) { const sh = info.counts ? info.counts[i2] / info.total : 1 / info.size; tr.pd[info.start + i2] += sh; if (info.start + i2 < input.places) tr.pl += sh; }
       const b = tr.best, above = info.start, level = info.size;
       if (b && (above > b.s || (above === b.s && level > b.k))) continue;
       let lead = NO_LEAD;
@@ -202,7 +203,7 @@ function buildTeamGeneral(input, ti, rules, k = 0, c = 0, opts = {}) {
   if (table.length > 1500) throw new Error(`too many kinds of finish for one team (${table.length})`);
   const LB = table.length <= 256 ? 256 : 65536;
   const { nodes, root } = opts.scanOnly ? { nodes: new Int32Array(0), root: 0 } : reduceLeaves(leaf, G, LB, k);
-  return { nodes, root, LB, leaves: table, fin: Array.from(fin), best: trims.map((t) => t.best), trimOdds: trims.map((t) => [t.pl, t.n]), paths: NP };
+  return { nodes, root, LB, leaves: table, fin: Array.from(fin), best: trims.map((t) => t.best), trimOdds: trims.map((t) => [t.pl, t.n]), trimPlaces: trims.map((t) => Array.from(t.pd)), paths: NP };
 }
 
 /**
@@ -247,7 +248,10 @@ export function makeMerger(metas, kFrom, kTo, nTeams, nTrims) {
       const better = (a, b) => !b || a.s < b.s || (a.s === b.s && (a.k < b.k || (a.k === b.k && (a.lead > b.lead || (a.lead === b.lead && a.ties < b.ties)))));
       const best = Array.from({ length: nTrims }, (_, q) => { let bb = null; for (const m of metas) { const c = m.best[q]; if (c && better(c, bb)) bb = c; } return bb; });
       const trimOdds = Array.from({ length: nTrims }, (_, q) => metas.reduce((a, m) => (m.trimOdds && m.trimOdds[q] ? [a[0] + m.trimOdds[q][0], a[1] + m.trimOdds[q][1]] : a), [0, 0]));
-      return { nodes: buf.slice(0, 4 * used), root: top[0], LB, leaves, fin, best, trimOdds, paths: metas.reduce((a, m) => a + m.paths, 0) };
+      // Each week's chance of every place adds up across parts, like its odds; a part built before places were recorded has none.
+      const trimPlaces = Array.from({ length: nTrims }, (_, q) => (metas.every((m) => m.trimPlaces && m.trimPlaces[q])
+        ? metas.reduce((a, m) => a.map((v, i) => v + m.trimPlaces[q][i]), new Array(nTeams).fill(0)) : null));
+      return { nodes: buf.slice(0, 4 * used), root: top[0], LB, leaves, fin, best, trimOdds, trimPlaces, paths: metas.reduce((a, m) => a + m.paths, 0) };
     },
   };
 }
@@ -258,6 +262,12 @@ export async function mergeParts(count, loadPart, kFrom, kTo, nTeams, nTrims) {
   const m = makeMerger(metas, kFrom, kTo, nTeams, nTrims);
   for (let c = 0; c < count; c++) m.add(c, await loadPart(c, true));
   return m.finish();
+}
+
+/** A week's chance of every place (first to last), from the counts a scan recorded; null when none were. */
+export function placesOf(part, q) {
+  const pd = part.trimPlaces && part.trimPlaces[q], n = part.trimOdds && part.trimOdds[q] && part.trimOdds[q][1];
+  return pd && n ? pd.map((v) => +(v / n).toFixed(6)) : null;
 }
 
 /** A team's whole map from one merged part: odds, default paths and simplest paths. */
@@ -277,7 +287,8 @@ export function finishFromPart(input, ti, part) {
   return {
     nodes: part.nodes, root: part.root, nodeCount: part.nodes.length / 4, odds, ...(part.leaves ? { leafBase: part.LB, leaves: part.leaves } : {}),
     trims: part.best.map((b, q) => (b ? { defaultPath: digitsOf(b.x), best: { start: b.s, size: b.k, lead: b.lead >= NO_LEAD ? null : +b.lead.toFixed(2) }, simplest: simple[q],
-      odds: part.trimOdds && part.trimOdds[q] && part.trimOdds[q][1] ? +(part.trimOdds[q][0] / part.trimOdds[q][1]).toFixed(6) : null } : null)),
+      odds: part.trimOdds && part.trimOdds[q] && part.trimOdds[q][1] ? +(part.trimOdds[q][0] / part.trimOdds[q][1]).toFixed(6) : null,
+      places: placesOf(part, q) } : null)),
   };
 }
 
@@ -326,7 +337,8 @@ export function assembleSummary(input, results, extra = {}) {
     paths: pathCount(input), games: input.games, future: input.future,
     trims: input.trims.map((tr, k) => ({ thru: tr.thru, fixed: tr.fixed, pf: tr.pf,
       defaultPath: results.map((r) => r.trims[k].defaultPath), best: results.map((r) => r.trims[k].best), simplest: results.map((r) => r.trims[k].simplest || null),
-      odds: results.map((r) => (r.trims[k] && r.trims[k].odds != null ? r.trims[k].odds : null)) })),
+      odds: results.map((r) => (r.trims[k] && r.trims[k].odds != null ? r.trims[k].odds : null)),
+      places: results.every((r) => r.trims[k] && Array.isArray(r.trims[k].places)) ? results.map((r) => r.trims[k].places) : null })),
     seedingRule: input.seedingRule, divisions: input.divisions || null, played: input.played || [],
     maps: input.teams.map((t, i) => ({ teamId: t.id, root: results[i].root, nodes: results[i].nodeCount, ...(results[i].leaves ? { leafBase: results[i].leafBase, leaves: results[i].leaves } : {}) })),
     ...extra,
