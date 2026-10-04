@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import ToolControls from "../shared/ToolControls.jsx";
 import TeamSelect from "../shared/TeamSelect.jsx";
 import ScrollBox from "../shared/ScrollBox.jsx";
+import { noteBrake, pollDelay } from "../shared/brake.js";
 import { Ctx, Blocks, Feed, KV, Heartbeat, Dot, Time, useNow } from "./blocks.jsx";
 import { setZone, readZone, localMidnight, clockText, num, toMs } from "./format.js";
 
@@ -24,9 +25,14 @@ const HELP = [
   [1, "Overview", "The whole site at a glance. The word at the top says whether anything needs you, and the trace under it is the minute schedule's heartbeat. Every panel starts closed with a one-line summary; tap it, or its chip in the row above, to open it. Needs attention lists anything amber or red, with a button that opens the panel explaining it."],
   [2, "A tab for every page", "Each page of the site has its own tab: first the panels about that page alone, then its settings, the datasets it reads and what they are built from, the requests it makes, who visited, and its part of the log."],
   [3, "Activity", "The site's log. Visits and sign-ins name the team chosen on that browser, and nothing else about a visitor. Each hour's status reports fold into one line; tap it to open them. Filter by page, kind, team, severity and time, or search. Each season keeps its own log."],
-  [4, "Live", "Everything refreshes itself every 15 seconds while this page is open and in view. After 4 hours without a tap it pauses; tap the amber bar to carry on."],
-  [5, "Times and sizes", "A time shows how long ago it was; tap it for the exact moment in your time zone, and tap again to go back. Hover a size for its exact bytes."],
-  [6, "Looking changes nothing", "Nothing here changes the site or starts a refresh. To act on something you see here, use Site Configuration."],
+  [4, "Data Layer", "Every dataset the site keeps, raw and derived: how fresh it is against its interval, its parts and size, its last fetch and failure, and what it is built from; the coordinators' work today; each ESPN host; and whether an update left anything to re-pull. Tap a dataset for its detail."],
+  [5, "Live", "Everything refreshes itself every 15 seconds while this page is open and in view, less often while the site saves its daily allowance. After 4 hours without a tap it pauses; tap the amber bar to carry on."],
+  [6, "Times and sizes", "A time shows how long ago it was; tap it for the exact moment in your time zone, and tap again to go back. Hover a size for its exact bytes."],
+  [7, "Looking changes nothing", "Nothing here changes the site or starts a refresh. To act on something you see here, use Site Configuration."],
+  [8, "The Site API tab", "Everything about the API: who is asking how often, the pace, the rate window, the snapshot, and what it all costs. It only reads; the controls are in Site Configuration."],
+  [9, "High activity", "Any address asking far more than the pace allows. Addresses are never shown, only an alias such as IPv4:3, and your own is marked You."],
+  [10, "Likely member", "Locked until you give the Admin Password. It is a likelihood from page visits by the same address, not proof, and it locks again when you leave the page."],
+  [11, "Jobs", "Which of the Site API page’s jobs are in use: requests by the name each example sends. A program with no name, or a name of its own, counts as Unknown, with its name shown if it sent one."],
 ];
 
 const KINDS = [["", "everything"], ["visit", "visits"], ["sign-in", "sign-ins"], ["admin", "admin"], ["operation", "operations"], ["change", "changes of state"], ["status", "hourly status"]];
@@ -55,6 +61,9 @@ export default function SiteBackend() {
   const [fresh, setFresh] = useState(() => new Set());
   const [pendingJump, setPendingJump] = useState(null);
   const [beatFresh, setBeatFresh] = useState(0);
+  // High activity's likely members: fetched through the Admin Password popup, held in memory only, gone when the page is left.
+  const [members, setMembers] = useState(null);
+  const [asking, setAsking] = useState(false);
   const seenRef = useRef(null);
   const lastInteract = useRef(Date.now());
   const timer = useRef(null);
@@ -111,9 +120,11 @@ export default function SiteBackend() {
       : mode === "older" ? { before: f.oldestId || "", beforeAt: f.oldestAt || "" } : {};
     try {
       const r = await fetch(query(t, extra), { credentials: "same-origin", signal: c.signal, cache: "no-store" });
+      noteBrake(r);
       if (r.status === 401) { setProblem("signedout"); setStatus("error"); return; }
       if (r.status === 403) { const j = await r.json().catch(() => ({})); setProblem(j.locked ? "locked" : "hidden"); setStatus("error"); return; }
       const j = await r.json();
+      if (j && j.paused) { setStatus("error"); setProblem("resting"); return; }
       if (!j || !j.ok) { setStatus("error"); setProblem(j && j.empty ? null : "server"); if (j && j.empty && t === "activity") setFeed({ items: [], newestId: null, newestHour: null, oldestId: null, oldestAt: null, more: false, loaded: true }); return; }
       setProblem(null);
       setStatus(pausedRef.current ? "paused" : "live");
@@ -157,7 +168,7 @@ export default function SiteBackend() {
       if (Date.now() - lastInteract.current > IDLE_MS) { pausedRef.current = true; setStatus("paused"); return; }
       await load(tabRef.current, "poll");
       schedule();
-    }, POLL_MS);
+    }, pollDelay(POLL_MS, { backstage: true }));   // slower while the site saves its daily allowance (C5)
   }, [load]);
 
   useEffect(() => {
@@ -273,8 +284,9 @@ export default function SiteBackend() {
     const el = document.querySelector(`.tab[data-k="${CSS.escape(tab)}"]`);
     if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [tab, tabCount]);
-  const ctx = useMemo(() => ({ teams: (d || any || {}).teams || {}, pages: (d || any || {}).pages || [], go, jump, markSeen, detail, cachedDetail }),
-    [d, any, go, jump, markSeen, detail, cachedDetail]);
+  const askMembers = useCallback(() => setAsking(true), []);
+  const ctx = useMemo(() => ({ teams: (d || any || {}).teams || {}, pages: (d || any || {}).pages || [], go, jump, markSeen, detail, cachedDetail, members, askMembers }),
+    [d, any, go, jump, markSeen, detail, cachedDetail, members, askMembers]);
   const openSet = open[tab] || new Set();
 
   return (
@@ -309,8 +321,78 @@ export default function SiteBackend() {
             : tab === "activity" ? <Activity d={d} act={act} setAct={setAct} feed={feed} fresh={fresh} older={() => load("activity", "older")} />
               : <TabBody d={d} tab={tab} openSet={openSet} setPanelOpen={setPanelOpen} jump={jump} allPanels={allPanels} beatFresh={beatFresh} />}
         </main>
+        <div className="toolfoot">
+          <a className="gh" href="https://github.com/shortcutsbin-netizen" target="_blank" rel="noopener noreferrer">GitHub - shortcutsbin-netizen</a>
+        </div>
       </div>
+      {asking ? <MembersPopup aliases={lockedAliases(data)} onClose={() => setAsking(false)} onShown={(m) => { setMembers((old) => ({ ...(old || {}), ...m })); setAsking(false); }} /> : null}
     </Ctx.Provider>
+  );
+}
+
+/** Every locked likely member on the page's tabs: the aliases the popup asks about. */
+function lockedAliases(data) {
+  const out = new Set();
+  const walk = (x) => {
+    if (!x || typeof x !== "object") return;
+    if (Array.isArray(x)) { x.forEach(walk); return; }
+    if (x.member === "locked" && typeof x.alias === "string") out.add(x.alias);
+    if (typeof x.lock === "string") out.add(x.lock);
+    for (const v of Object.values(x)) if (v && typeof v === "object") walk(v);
+  };
+  walk(data);
+  return [...out];
+}
+
+const EYE = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>;
+
+/**
+ * The Admin Password popup that shows likely members. The password is typed, never pasted, sent only in the
+ * x-admin-password header to an admin route that changes nothing, and never kept: the members it returns live in
+ * this page's memory until the page is left.
+ */
+function MembersPopup({ aliases, onClose, onShown }) {
+  const [pw, setPw] = useState("");
+  const [show, setShow] = useState(false);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const input = useRef(null);
+  const opener = useRef(typeof document !== "undefined" ? document.activeElement : null);
+  useEffect(() => {
+    if (input.current) input.current.focus({ preventScroll: true });
+    const key = (e) => { if (e.key === "Escape") close(); };
+    document.addEventListener("keydown", key);
+    return () => document.removeEventListener("keydown", key);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const close = () => { onClose(); if (opener.current && opener.current.focus) opener.current.focus({ preventScroll: true }); };
+  const submit = async () => {
+    if (!pw) { setErr("Type the Admin Password first."); return; }
+    setBusy(true); setErr("");
+    try {
+      const r = await fetch("/api/admin/site-api-members", { method: "POST", credentials: "same-origin", cache: "no-store",
+        headers: { "content-type": "application/json", "x-admin-password": pw }, body: JSON.stringify({ aliases }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) { setBusy(false); setErr(r.status === 429 ? "Too many attempts. Try again in a few minutes." : "That password isn’t right."); if (input.current) input.current.select(); return; }
+      setPw("");
+      onShown(Object.fromEntries(aliases.map((a) => [a, (j.members || {})[a] || { teams: [] }])));
+    } catch { setBusy(false); setErr("The site could not be reached. Try again."); }
+  };
+  return (
+    <div className="pwscrim" onClick={(e) => { if (e.target === e.currentTarget) close(); }}>
+      <div className="pwbox" role="dialog" aria-modal="true" aria-label="Show likely members">
+        <h2>Show likely members</h2>
+        <p>Which team is likely behind each address stays locked until whoever administers this site gives the Admin Password. It shows for this visit only: leaving the page locks it again.</p>
+        <label htmlFor="sbpw">Admin Password</label>
+        <div className="pwr">
+          <input id="sbpw" ref={input} type={show ? "text" : "password"} autoComplete="current-password" spellCheck={false} value={pw}
+            onChange={(e) => setPw(e.target.value)} onPaste={(e) => e.preventDefault()} onDrop={(e) => e.preventDefault()}
+            onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+          <button type="button" className="eye" aria-label="Show or hide password" onClick={() => setShow((v) => !v)}>{EYE}</button>
+        </div>
+        {err ? <div className="err" role="alert">{err}</div> : null}
+        <div className="bt"><button type="button" className="btn" onClick={close}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={submit}>{busy ? "Checking" : "Show"}</button></div>
+      </div>
+    </div>
   );
 }
 
@@ -329,6 +411,7 @@ function Problem({ kind }) {
     signedout: "Your session has ended. Reload the page to sign in again.",
     network: "The site could not be reached. This page keeps trying every 15 seconds.",
     server: "The site answered with an error. This page keeps trying every 15 seconds.",
+    resting: "The site is saving what is left of a free daily limit for the work that must never stop (live scoring, the timeline, data refreshes), so Site Backend rests until the day's use falls back or the limits reset at 00:00 UTC. This page asks again every 5 minutes.",
   }[kind] || "Something went wrong.";
   return <div className="errbar">{text}{["locked", "signedout", "hidden"].includes(kind) ? <> <button className="linkbtn" type="button" onClick={() => window.location.reload()}>Reload</button></> : null}</div>;
 }
