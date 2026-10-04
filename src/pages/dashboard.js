@@ -115,6 +115,7 @@ export function dashboardPage({
   const body = `
     ${credentialAlert}
     ${repullAlert}
+    <div id="sitenotice" hidden></div>
     <div class="panel tight reveal">
       <div class="tickhead">
         <span class="dot" id="fdot"></span>
