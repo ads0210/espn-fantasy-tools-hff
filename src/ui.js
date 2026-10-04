@@ -22,6 +22,7 @@
  */
 
 import { VSCROLL_JS } from './vscroll.js';
+import { LIMIT_JS } from './pages/limitnotice.js';
 
 export const THEME_COOKIE = 'eft_theme';
 export const TEAM_COOKIE = 'eft_team';
@@ -267,12 +268,20 @@ export const BASE_CSS = `
 .scrollreal { overflow-x: auto; overflow-y: hidden;
   scrollbar-width: none; -ms-overflow-style: none; }
 .scrollreal::-webkit-scrollbar { display: none; width: 0; height: 0; }
+/* A pane that scrolls both ways (a preview table, a block of code): the drawn horizontal bar above it and the
+   drawn vertical bar at its right edge, the platform's own bars hidden. The pane's own class sets its height. */
+.xywrap { position: relative; min-width: 0; }
+.xyreal { overflow: auto; scrollbar-width: none; -ms-overflow-style: none; }
+.xyreal::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
+/* Every table header and value on the site is centred: player names and sentences included. The one exception is
+   a standings table's team column (col-team, below). A table's own rules may style its cells, never align them elsewhere (test/tables.mjs). */
+th, td { text-align: center; }
 table.datatable { border-collapse: collapse; font-size: 12.5px;
   width: max-content; min-width: 100%; }
 table.datatable th, table.datatable td { padding: 11px 14px; text-align: center;
   vertical-align: middle; white-space: nowrap; }
-table.datatable thead th { font-size: 10px; font-weight: 900; letter-spacing: .1em;
+table.datatable thead th { position: relative; font-size: 10px; font-weight: 900; letter-spacing: .1em;
   text-transform: uppercase; border-bottom: 1px solid var(--line-2); cursor: pointer;
   user-select: none; background: var(--panel-2); }
 /* The gradient lives on an inner span, never on the th: the th declares its own
@@ -285,7 +294,8 @@ table.datatable thead th .lbl {
 table.datatable thead th:hover .lbl {
   background: linear-gradient(94deg, var(--accent) 0%, var(--accent-2) 100%);
   -webkit-background-clip: text; background-clip: text; }
-table.datatable thead th .arrow { display: inline-block; margin-left: 5px;
+/* The sort arrow hangs after the label without taking room, so the label itself sits in the middle of its column. */
+table.datatable thead th .arrow { display: inline-block; position: absolute; margin-left: 5px;
   font-size: 8px; color: var(--accent); }
 table.datatable thead th[aria-sort="none"] .arrow { visibility: hidden; }
 table.datatable tbody tr { border-bottom: 1px solid var(--line); }
@@ -299,7 +309,10 @@ td.c-key { font-weight: 900; font-size: 13.5px; font-variant-numeric: tabular-nu
 td.c-pos { color: var(--accent); font-weight: 800; font-variant-numeric: tabular-nums; }
 td.c-neg { color: var(--flag); font-weight: 800; font-variant-numeric: tabular-nums; }
 td.c-gold { color: var(--gold); font-weight: 900; }
-th.col-team, td.col-team { text-align: left; }
+/* The one exception to "every table centred": a standings table's team column (the logo and the name, class
+   col-team) is set from the left, header and values alike, which reads cleaner down a column of names. The Playoffs
+   cut line is not a cell value, so the rule does not apply to it either. test/layout.mjs holds both. */
+table.datatable th.col-team, table.datatable td.col-team, th.col-team, td.col-team { text-align: left; }
 .stname { display: flex; align-items: center; gap: 9px; text-align: left; }
 .stname .lgo, .stname img { width: 26px; height: 26px; flex: none; object-fit: contain; }
 .stnamewrap { min-width: 0; }
@@ -1015,6 +1028,7 @@ function instructionsDialog(steps) {
 
 export const SHARED_JS = `
 ${VSCROLL_JS}
+${LIMIT_JS}
 (function () {
   var SUN = ${JSON.stringify(SUN)}, MOON = ${JSON.stringify(MOON)};
   var root = document.documentElement;
