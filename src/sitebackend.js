@@ -8,6 +8,8 @@
  * panels were written to show, no credential can appear in what is sent.
  */
 
+import { hotList, kindWord } from './sbapi.js';
+import { normaliseSiteApi, keyRing } from './apikey.js';
 import { isSetupFinished } from './config.js';
 import { getDataset } from './datasets.js';
 import { visibilityOf } from './tools.js';
@@ -19,7 +21,7 @@ import {
   eventsSince, PAGES, pageOf, DAY_MS, upstream,
 } from './sbcore.js';
 import {
-  OVERVIEW, reasons, verdictOf, gameWindow, strip, pageState, timelineWeeks, feedRows, usage, ftSev, fmtB, tickState, CRON_MISS_WARN,
+  OVERVIEW, DATA_LAYER, dataStrip, reasons, verdictOf, gameWindow, strip, pageState, timelineWeeks, feedRows, usage, ftSev, fmtB, tickState, CRON_MISS_WARN,
 } from './sbover.js';
 import { pagePanels } from './sbpages.js';
 import { pageForRoute } from './readers.js';
@@ -70,6 +72,8 @@ async function context(src) {
     logoState, logosFailing, window, errorsHour, errors24, timelineWeeks: weeks,
     timelinePct: cur ? (cur.bytes || 0) / BYTE_BUDGET : 0,
   };
+  // Site API's tab turns amber while a Heavy source is in High activity (a Watch one does not).
+  try { const hot = await hotList(src); ctx.apiHot = hot.some((h) => h.level === 'heavy') ? 'warn' : null; } catch { ctx.apiHot = null; }
   ctx.pageStates = Object.fromEntries(PAGES.map((p) => [p.key, pageState(p, ctx)]));
   ctx.reasons = await reasons(src, ctx);
   ctx.verdict = verdictOf(ctx.reasons);
@@ -218,10 +222,26 @@ function secretsOf(cfg, env) {
   return [...new Set(out)].sort((a, b) => b.length - a.length);
 }
 
-export function redact(payload, cfg, env) {
+/**
+ * Values worked out rather than stored: every Site API key the league has had (current, the one in its grace, and
+ * older ones), and the viewer's own source fingerprint (used only to mark You). None may ever reach a payload.
+ */
+async function extraSecrets(cfg, facts) {
+  const out = [];
+  try {
+    const sa = normaliseSiteApi(cfg && cfg.siteApi);
+    const ring = cfg && cfg.sessionSecret && sa.gen ? await keyRing(cfg.sessionSecret, sa) : null;
+    if (ring) { out.push(ring.current); for (const o of ring.old) out.push(o.key); }
+  } catch { /* keys unknown: nothing to add */ }
+  if (facts && facts.you) out.push(facts.you);
+  return out;
+}
+
+export function redact(payload, cfg, env, extra = []) {
   let text = JSON.stringify(payload);
   const found = [];
-  for (const s of secretsOf(cfg, env)) {
+  const list = [...new Set([...secretsOf(cfg, env), ...extra.filter((v) => typeof v === 'string' && v.length >= 6)])].sort((a, b) => b.length - a.length);
+  for (const s of list) {
     if (text.includes(s)) { found.push(s.length); text = text.split(s).join('[hidden]'); }
     const esc = JSON.stringify(s).slice(1, -1);
     if (esc !== s && text.includes(esc)) { found.push(s.length); text = text.split(esc).join('[hidden]'); }
@@ -252,6 +272,7 @@ export async function assembleTab(deps, params = {}) {
     tabs: [
       { key: 'overview', name: 'Overview', s: ctx.verdict.s },
       { key: 'activity', name: 'Activity', s: null },
+      { key: 'data', name: 'Data Layer', s: worst(ctx.rows.map((r) => r.sev)) },
       ...PAGES.map((p) => ({ key: p.key, name: p.name, s: ctx.pageStates[p.key] })),
     ],
     pages: PAGES.map((p) => [p.key, p.name]),
@@ -262,12 +283,14 @@ export async function assembleTab(deps, params = {}) {
     payload = { ...base, strip: await strip(src, ctx), panels: await runPanels(src, ctx, OVERVIEW, open) };
   } else if (tab === 'activity') {
     payload = { ...base, strip: activityStrip(src), panels: [], feed: activityFeed(src, params) };
+  } else if (tab === 'data') {
+    payload = { ...base, strip: dataStrip(src, ctx), panels: await runPanels(src, ctx, DATA_LAYER, open) };
   } else {
     const page = pageOf(tab);
     if (!page) return { ...base, ok: false, error: 'unknown tab' };
     payload = { ...base, page: { key: page.key, name: page.name, path: page.path }, strip: pageStrip(src, ctx, page), panels: await runPanels(src, ctx, pagePanels(page), open) };
   }
-  return redact(payload, ctx.cfg, deps.env);
+  return redact(payload, ctx.cfg, deps.env, await extraSecrets(ctx.cfg, deps.facts));
 }
 
 // ---------------------------------------------------------------- a dataset's detail
@@ -300,7 +323,7 @@ export async function datasetDetail(deps, key) {
     derived: [st.derived, ...(st.derivedAll || [])].filter(Boolean).map((x) => ({ target: x.target, bytes: x.bytes || 0, error: x.error || null })),
   } : null;
   const readers = PAGES.filter((p) => upstream(p.datasets).has(key)).map((p) => p.key);
-  return redact({ ok: true, key, row, parts, report, counters, readers }, cfg, deps.env);
+  return redact({ ok: true, key, row, parts, report, counters, readers }, cfg, deps.env, await extraSecrets(cfg, deps.facts));
 }
 
 // ---------------------------------------------------------------- storage census
@@ -429,7 +452,24 @@ export async function hourlyReports(deps, hour) {
     days.push({ day: u.day, ...Object.fromEntries(keep.map((k) => [k, u[k] || 0])) });
     meta.days = days.slice(-40);
   }
-  return { lines, meta };
+
+  // Site API: the hour's answers and refusals, and any source newly in High activity (by alias only).
+  const events = [];
+  try {
+    const api = d.api || {};
+    const sum = (g) => Object.values(g || {}).reduce((x, y) => x + y, 0);
+    const answered = sum(api.answered), tooSoon = sum(api.tooSoon);
+    const badKey = ['key_missing', 'key_invalid', 'key_replaced'].reduce((x, k) => x + ((api.bad || {})[k] || 0), 0);
+    const hot = await hotList(src);
+    if (answered || tooSoon || badKey || hot.length) {
+      L('site-api', hot.some((h) => h.level === 'heavy') ? 'bad' : hot.length ? 'warn' : 'ok',
+        `${answered} answers, ${tooSoon} too_soon, ${badKey} bad-key refusals${hot.length ? `; ${hot.length} ${hot.length === 1 ? 'source' : 'sources'} in High activity` : ''}`);
+    }
+    const seen = new Set(deps.meta('hotSeen', []) || []);
+    for (const h of hot) if (!seen.has(h.id)) events.push({ sev: h.level === 'heavy' ? 'bad' : 'warn', text: `${h.alias} entered High activity (${kindWord(h.kind)})` });
+    meta.hotSeen = hot.map((h) => h.id);
+  } catch { /* the report goes without its Site API line */ }
+  return { lines, meta, events };
 }
 
 export { utcMidnight };
