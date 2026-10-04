@@ -1,24 +1,31 @@
 /* ============================================================================
    Trade Analyzer — evaluation engine.
 
-   The DATA blob above is real: teams, owners, rosters, trade blocks, waiver
-   ranks, ESPN playoff odds and all three live pending proposals, read from the
-   league on 2026-09-12.
+   A pure module: the trade digest in, a per-row, per-side vector of
+   contributions at weight 1.00 out (the client does SUM(w_i * points_i)), as
+   trade-algorithm-plan.md sets out. Sequential attribution over the canonical
+   row order, the monotone playoff-odds fit over ESPN's own cross-section,
+   forced-drop selection, the verdict bands and guards and the add/remove/swap
+   balancing neighbourhood are the plan's; the 28 row formulas below are the
+   real ones (C1), each written beside the row it serves.
 
-   The evaluator below is a STAND-IN. It is deterministic, it respects the
-   output contract in trade-algorithm-plan.md (a per-row, per-side vector of
-   contributions at weight 1.00, with the client doing SUM(w_i * points_i)), and
-   the structural behaviours are real — sequential attribution, the monotone
-   playoff-odds fit over ESPN's own cross-section, forced-drop selection, the
-   verdict bands and guards, the add/remove/swap balancing neighbourhood. The
-   per-row formulas are illustrative placeholders, not the specified ones.
-   What this sample is for is the shape of the surface, not the numbers on it.
+   One value point is one projected fantasy point per remaining week. Every
+   row answers in that unit, so a weight means the same thing on every row.
+
+   What the rows read, all from the digest: ESPN's updated projection for each
+   player (a rate a game, and the games ESPN expects), every week he has
+   played, last season, his team's bye and depth chart, the market's view, the
+   league's free agents, each team's record and points, ESPN's playoff odds and
+   the games still to play. A row whose data has not been pulled answers
+   "not enough data yet" rather than guessing.
    ========================================================================= */
 
 
 import { TRADE_ROWS, TRADE_GROUPS } from "../../src/traderows.js";
 import { ENGINE_VERSION, MIN_GAP, MIN_SCALE, BALANCE_HELP_BAND, BALANCE_SUGGESTIONS, OFFER_SOON_HOURS,
-  BENCH_DISCOUNT, LOPSIDED_RATIO, ODDS_VP, TITLE_VP, PLACE_VP, INJ_RATE, SIGMA_POS, PLAY_PROB, REPLACEMENT, BANDS } from "./constants.js";
+  BENCH_DISCOUNT, LOPSIDED_RATIO, ODDS_VP, TITLE_VP, PLACE_VP, INJ_RATE, SIGMA_POS, REPLACEMENT, BANDS,
+  FLOOR_FRAC, FORM_HALFLIFE, FORM_MIN_GAMES, PRIOR_DECAY_WEEK, OMEGA, PLACEMENT_CURVE, TEAM_WEEK_SD, STREAM_FACTOR,
+  TD_NORM, DESIGNATION_GAMES, ROLE_RISK } from "./constants.js";
 
 /**
  * Builds an evaluator bound to one digest.
@@ -47,14 +54,16 @@ const BENCH_SLOT_NAMES = new Set(["BE", "IR", "Bench"]);
 const SLOTS = (DATA.league.slots || [])
   .filter((s) => !BENCH_SLOT_NAMES.has(s.name))
   .map((s) => [s.name, FLEX_ELIGIBLE[s.name] || [s.name]])
-  .sort((a, b) => (a[0] === "FLEX" ? 1 : 0) - (b[0] === "FLEX" ? 1 : 0));
+  .sort((a, b) => a[1].length - b[1].length);
 
 const ROSTER_CAP = DATA.league.rosterCap || 16;
-/* Position limits are not in any payload this tool reads. Rather than pin one
-   league's numbers, the ceiling is taken from what the league is already
-   carrying plus headroom: high enough never to block a trade ESPN would
-   accept, low enough to catch a deal that stacks a position absurdly. */
+/* Position limits are the league's own where it sets any. Where it sets none,
+   the ceiling is what the league is already carrying plus headroom: high
+   enough never to block a trade ESPN would accept, low enough to catch a deal
+   that stacks a position absurdly. A gate, never a penalty. */
 const POS_LIMIT = (() => {
+  const stated = DATA.league.positionLimits || {};
+  if (Object.keys(stated).length) return stated;
   const max = {};
   for (const t of DATA.teams) {
     const c = {};
@@ -65,18 +74,50 @@ const POS_LIMIT = (() => {
   return max;
 })();
 
-/* Season-scale projection of what is freely available on waivers at each
-   position. A slot a trade leaves empty is filled from here, not left at zero:
-   trading away your only kicker costs the difference against a streamer, not
-   that kicker's whole projection. Kickers and defences sit close to the
-   rostered ones, which is the same fact R18 prices. */
+/* The horizon: every scoring period from this one to the league's last. */
+const WEEK = DATA.league.sp;
+const FINAL = Math.max(DATA.league.finalSP, WEEK);
+const REG = Math.min(DATA.league.regular || FINAL, FINAL);
+const WEEKS = []; for (let w = WEEK; w <= FINAL; w++) WEEKS.push(w);
+const WEEKS_LEFT = WEEKS.length;
+const REG_LEFT = WEEKS.filter((w) => w <= REG).length;
+const ROUND_LEN = Math.max(1, DATA.league.roundLength || 1);
+/* A week's weight: 1 in the regular season, more in each playoff round. */
+const omega = (w) => {
+  if (w <= REG) return OMEGA.regular;
+  const round = Math.ceil((w - REG) / ROUND_LEN);
+  return OMEGA.rounds[Math.min(round, OMEGA.rounds.length) - 1];
+};
 
-const WEEKS_LEFT = DATA.league.finalSP - DATA.league.sp + 1;
+/* What is freely available at each position, as a rate a game, best first:
+   the league's own free agents where the digest carries them, otherwise a
+   season-scale constant. A slot a trade leaves empty is filled from here, not
+   left at zero: trading away your only kicker costs the difference against a
+   streamer, not that kicker's whole projection. */
+const FA = (() => {
+  const out = {};
+  for (const pos of Object.keys(REPLACEMENT)) {
+    const list = (DATA.freeAgents && DATA.freeAgents[pos]) || [];
+    out[pos] = list.length ? list.slice() : [REPLACEMENT[pos] / 17];
+  }
+  return out;
+})();
+const faBest = (pos) => (FA[pos] ? FA[pos][0] : 0);
+/* Replacement is per team (R16): waiver order decides who reaches the best free
+   agent, so a team late in the order refills from further down the list. */
+const faFor = (team, pos) => {
+  const list = FA[pos] || [0];
+  const size = Math.max(2, DATA.league.size);
+  const k = Math.round(((Math.max(1, team.wr || 1) - 1) / (size - 1)) * 4);
+  return list[Math.min(list.length - 1, k)];
+};
+const slotFloor = (elig, fn) => Math.max.apply(null, elig.map(fn).concat([0]));
 
 /* --- the 28 rows, in canonical attribution order (§7) --------------------
    The order is part of the specification: reordering silently changes what
    every default weight means. */
 const ROWS = TRADE_ROWS;
+const FORM_ROWS = new Set(["R3", "R5", "R6", "R7", "R10"]);
 const GROUPS = TRADE_GROUPS;
 
 
@@ -132,24 +173,174 @@ function countdown(ms) {
 /* =========================================================================
    LINEUP AND ROSTER MECHANICS
    ========================================================================= */
-function ros(p) { return p.pr * (WEEKS_LEFT / 17); }
+/* --- the projection spine (plan §2.2) --------------------------------------
+   ESPN's updated projection is a rate a game; the rest of the season is that
+   rate over the games his team still plays inside the horizon. Where ESPN
+   gives no updated projection, the season projection less what he has already
+   scored, floored so a hot start does not project to nothing. */
+function gamesLeft(p) {
+  if (!p || p.tm === "FA") return 0;
+  return p.bye != null && p.bye >= WEEK && p.bye <= FINAL ? WEEKS_LEFT - 1 : WEEKS_LEFT;
+}
+function rate(p) {
+  if (!p) return 0;
+  if (p.rt != null) return p.rt;
+  const g = gamesLeft(p); if (!g) return 0;
+  const perGame = (p.pr || 0) / 17;
+  return Math.max((p.pr || 0) - (p.ac || 0), perGame * g * FLOOR_FRAC) / g;
+}
+function ros(p) { return rate(p) * gamesLeft(p); }
+const weekRate = (w) => (p) => (p.bye === w || p.tm === "FA" ? 0 : rate(p));
 
-/* Exact for this slot structure: FLEX is the only overlapping slot and it is
-   resolved last against whatever the dedicated slots did not take. */
-function optimalLineup(roster) {
-  const pool = roster.slice().sort((a, b) => ros(b) - ros(a));
-  const used = new Set(); const starters = []; const unfilled = [];
+/* Exact for a slot structure whose shared slots (FLEX, a superflex) are
+   resolved after the dedicated ones against whatever those did not take. */
+/* Values are points a week: each player's rate by default (a week with nobody
+   on a bye), or one named week's rates. */
+function optimalLineup(roster, val, floorFn) {
+  const v = val || rate;
+  const fl = floorFn || faBest;
+  const pool = roster.slice().sort((a, b) => v(b) - v(a));
+  const used = new Set(); const starters = []; const unfilled = []; const slotVals = [];
   let total = 0;
   for (const [name, elig] of SLOTS) {
     const pick = pool.find((p) => !used.has(p.id) && elig.indexOf(p.pos) >= 0);
-    if (pick) { used.add(pick.id); starters.push(pick); total += ros(pick); }
+    const floor = slotFloor(elig, fl);
+    if (pick && v(pick) >= floor) { used.add(pick.id); starters.push(pick); total += v(pick); slotVals.push(v(pick)); }
     else {
-      unfilled.push(name);
-      total += (REPLACEMENT[name === "FLEX" ? "RB" : name] || 90) * (WEEKS_LEFT / 17);
+      // Nobody for the slot, or nobody better than a free agent (a bye week, say): filled from the waiver wire.
+      if (!pick) unfilled.push(name);
+      total += floor; slotVals.push(floor);
     }
   }
   const bench = roster.filter((p) => !used.has(p.id));
-  return { starters, bench, total, legal: unfilled.length === 0, unfilled, ids: used };
+  return { starters, bench, total, legal: unfilled.length === 0, unfilled, ids: used, slotVals };
+}
+
+/* A roster's season, week by week: the best lineup each week with players on a
+   bye out of it. Cached, because the balancing pass asks about the same roster
+   a hundred times. */
+const WEEKLY = new Map();
+function weekly(roster) {
+  const key = roster.map((p) => p.id).sort().join(",");
+  const hit = WEEKLY.get(key); if (hit) return hit;
+  const byWeek = []; const starts = {}; let total = 0; let playoff = 0;
+  for (const w of WEEKS) {
+    const l = optimalLineup(roster, weekRate(w));
+    byWeek.push(l.total); total += l.total;
+    if (w > REG) playoff += (omega(w) - 1) * l.total;
+    for (const p of l.starters) starts[p.id] = (starts[p.id] || 0) + 1;
+  }
+  const out = { byWeek, total, playoff, starts };
+  if (WEEKLY.size > 400) WEEKLY.clear();
+  WEEKLY.set(key, out);
+  return out;
+}
+/* How much of a player's value a roster actually uses: a starter counts whole,
+   a bench player at the bench discount, in proportion to the weeks he starts. */
+function useOf(p, roster) {
+  const g = gamesLeft(p); if (!g) return BENCH_DISCOUNT;
+  const share = Math.min(1, (weekly(roster).starts[p.id] || 0) / g);
+  return BENCH_DISCOUNT + (1 - BENCH_DISCOUNT) * share;
+}
+
+/* --- what a player has done, from his weeks ---------------------------------- */
+const playedPts = (p) => (p.wk || []).filter((r) => r[2]).map((r) => r[1]);
+const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
+/* Recent form (R3): a half-life-weighted average of his games against the rate
+   he is projected at, shrunk toward nothing while the sample is small. */
+function formOf(p) {
+  const g = playedPts(p); if (g.length < FORM_MIN_GAMES) return null;
+  let num = 0; let den = 0;
+  g.forEach((x, i) => { const w = Math.pow(0.5, (g.length - 1 - i) / FORM_HALFLIFE); num += w * x; den += w; });
+  return (num / den - rate(p)) * (g.length / (g.length + 3));
+}
+/* Week-to-week spread, split into the part below his own average (R5) and the
+   part above it (R6). This season's games count whole, last season's half, and
+   the position's usual spread stands in until there are games to go on. */
+function spreadOf(p) {
+  const now = playedPts(p); const last = p.lw || [];
+  const xs = now.map((x) => [x, 1]).concat(last.map((x) => [x, 0.5]));
+  const sp = (SIGMA_POS[p.pos] || 6); const prior = (sp * sp) / 2; const k = 4;
+  let wsum = 0; let m = 0;
+  for (const [x, w] of xs) { m += x * w; wsum += w; }
+  m = wsum ? m / wsum : 0;
+  let dn = 0; let up = 0;
+  for (const [x, w] of xs) { const d = x - m; if (d < 0) dn += w * d * d; else up += w * d * d; }
+  // Scaled to today's rate, so a player whose role has grown carries a spread to match.
+  const scale = m > 1 && xs.length >= 3 ? Math.max(0.5, Math.min(2, rate(p) / m)) : 1;
+  return {
+    down: Math.sqrt((dn + k * prior) / (wsum + k)) * scale,
+    up: Math.sqrt((up + k * prior) / (wsum + k)) * scale,
+    n: now.length,
+  };
+}
+/* A point of week-to-week spread is priced at half a point of production. */
+const SPREAD_PRICE = 0.5;
+const variance = (p) => { const s = spreadOf(p); return s.down * s.down + s.up * s.up; };
+/* Opportunity quality (R7): points that came from touchdowns beyond the
+   position's usual share are luck that tends not to hold, and half of it is
+   taken back; a workload trending up or down moves the rate a quarter as far. */
+function qualityOf(p) {
+  const norm = TD_NORM[p.pos]; const gp = p.gp || 0;
+  if (norm == null || gp < FORM_MIN_GAMES || !p.td || !(p.ac > 0)) return null;
+  const tdPts = 4 * p.td[0] + 6 * p.td[1];
+  const luck = (tdPts / p.ac - norm) * (p.ac / gp);
+  const opp = (p.wk || []).filter((r) => r[2]).map((r) => r[3]);
+  const base = mean(opp); const recent = mean(opp.slice(-2));
+  const trend = base >= 1 ? Math.max(-0.5, Math.min(0.5, (recent - base) / base)) * rate(p) * 0.25 : 0;
+  return -0.5 * luck + trend;
+}
+/* Games a player is expected to miss inside the horizon (R9): what his
+   designation costs, or what ESPN's own projection already allows for,
+   whichever is more, plus the position's base rate. */
+function missOf(p) {
+  const g = gamesLeft(p); if (!g) return 0;
+  const tag = DESIGNATION_GAMES[p.inj] || 0;
+  const espn = p.eg != null && p.gp != null ? Math.max(0, g - Math.max(0, p.eg - p.gp)) : 0;
+  return Math.min(g, Math.max(tag, espn) + (INJ_RATE[p.pos] || 0.05) * g);
+}
+/* Durability (R10): games missed last season and this one against the
+   position's base rate, a quarter believed: most of a bad year does not repeat. */
+function durabilityOf(p) {
+  const weeks = p.wk || [];
+  const thisMiss = weeks.filter((r) => !r[2]).length;
+  const hasLast = p.lyg != null && p.lyg > 0;
+  const span = weeks.length + (hasLast ? 17 : 0);
+  if (span < FORM_MIN_GAMES) return null;
+  const missed = thisMiss + (hasLast ? Math.max(0, 17 - p.lyg) : 0);
+  const excess = Math.max(-0.1, Math.min(0.4, missed / span - (INJ_RATE[p.pos] || 0.05)));
+  return excess * gamesLeft(p) * rate(p) * 0.25;
+}
+/* Role security (R12): the share of his rate at risk, by where his team's
+   depth chart lists him. */
+function roleRiskOf(p) {
+  if (p.pos === "D/ST") return 0;
+  const dc = p.dc;
+  if (!dc) return p.pos === "K" ? 0 : ROLE_RISK.unlisted;
+  if (dc.d <= 1) return dc.s === "wr3" ? ROLE_RISK.third : ROLE_RISK.starter;
+  return dc.d === 2 ? ROLE_RISK.second : ROLE_RISK.deep;
+}
+/* Market value (R25): how the wider game rates him, from 0 to 1: rostered,
+   started, and where he was drafted. */
+function marketOf(p) {
+  const own = (p.ow || 0) / 100; const st = (p.st != null ? p.st : p.ow || 0) / 100;
+  const draft = p.adp != null && p.adp > 0 ? 1 - Math.min(p.adp, 170) / 170 : own;
+  return 0.5 * own + 0.3 * st + 0.2 * draft;
+}
+
+/* The normal curve, for the title and placement models. */
+function phi(z) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(z));
+  const d = 0.3989423 * Math.exp(-z * z / 2);
+  const q = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  return z > 0 ? 1 - q : q;
+}
+const pdf = (z) => 0.3989423 * Math.exp(-z * z / 2);
+function probit(p) {
+  // Bisection is plenty: this is read a handful of times per trade.
+  let lo = -6; let hi = 6;
+  for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; if (phi(m) < p) lo = m; else hi = m; }
+  return (lo + hi) / 2;
 }
 
 function posCounts(roster) {
@@ -166,7 +357,7 @@ function chooseDrops(roster, n) {
   if (n <= 0) return [];
   const drops = []; let cur = roster.slice();
   for (let k = 0; k < n; k++) {
-    const cands = cur.slice().sort((a, b) => ros(a) - ros(b));
+    const cands = cur.filter((p) => p.sl !== "IR").sort((a, b) => ros(a) - ros(b));
     let chosen = null;
     for (const c of cands) {
       const trial = cur.filter((p) => p.id !== c.id);
@@ -178,21 +369,28 @@ function chooseDrops(roster, n) {
   return drops;
 }
 
+/* A player arriving in a trade lands on the bench, whatever slot he left. */
 function applyTrade(roster, outIds, incoming) {
   const kept = roster.filter((p) => outIds.indexOf(p.id) < 0);
-  return kept.concat(incoming);
+  return kept.concat(incoming.map((p) => (p.sl === "IR" ? { ...p, sl: "BE" } : p)));
 }
+/* The cap counts everyone but the players held in an injured-reserve slot. */
+const capCount = (roster) => roster.filter((p) => p.sl !== "IR").length;
 
 /* =========================================================================
    §11 — PLAYOFF ODDS. ESPN publishes the level; we fit the curve across the
    league's own ten (strength, playoffPct) pairs and read the slope.
    ========================================================================= */
+const strengthOf = (roster) => weekly(roster).total / WEEKS_LEFT;
 const ODDS = (function fitOdds() {
   const pts = DATA.teams.map((t) => ({
-    id: t.id, S: optimalLineup(t.roster).total / WEEKS_LEFT, P: t.pp == null ? 0 : t.pp,
+    id: t.id, S: strengthOf(t.roster), P: t.eliminated ? 0 : (t.pp == null ? 0 : t.pp),
   }));
   const sum = pts.reduce((s, p) => s + p.P, 0);
   const tol = 0.15 * DATA.league.playoffTeams;
+  /* §11.5: expected qualifiers equals the sum of the individual chances. Outside
+     the tolerance ESPN's figures are not being read as probabilities, and the
+     odds rows fall back to the analytic estimate alone. */
   const coherent = Math.abs(sum - DATA.league.playoffTeams) <= tol;
 
   /* Grid search over a logistic with k > 0, which makes the fit monotone by
@@ -210,17 +408,98 @@ const ODDS = (function fitOdds() {
       if (sse < best.sse) best = { k: k, S0: S0, sse: sse };
     }
   }
-  const residual = Math.sqrt(best.sse / pts.length);
-  const spread = Math.sqrt(pts.reduce((s, p) => s + Math.pow(p.P - sum / pts.length, 2), 0) / pts.length);
-  const blend = Math.max(0, Math.min(0.9, spread * 3.4));
+  const residual = Math.sqrt(best.sse / Math.max(1, pts.length));
+  const spread = Math.sqrt(pts.reduce((s, p) => s + Math.pow(p.P - sum / Math.max(1, pts.length), 2), 0) / Math.max(1, pts.length));
+  /* §11.3: how far to trust the fit follows how well ESPN's odds separate the
+     teams. Early on they cluster and the analytic estimate carries the row. */
+  const blend = coherent ? Math.max(0, Math.min(0.9, spread * 3.4)) : 0;
+  /* The analytic estimate: a team's average over the weeks left moves by about
+     one team-week's spread over the root of those weeks, widened for the gaps
+     already on the board. */
+  const tau = (TEAM_WEEK_SD / Math.sqrt(Math.max(1, REG_LEFT))) * 1.6;
+  const of = (id) => pts.find((p) => p.id === id) || { S: 0, P: 0 };
+  const fitP = (S) => 1 / (1 + Math.exp(-best.k * (S - best.S0)));
   return {
     k: best.k, S0: best.S0, sum: sum, coherent: coherent, residual: residual,
-    blend: blend, source: coherent ? "espn" : "modelled",
-    S: (id) => pts.find((p) => p.id === id).S,
-    P: (id) => pts.find((p) => p.id === id).P,
-    slope: (S) => { const p = 1 / (1 + Math.exp(-best.k * (S - best.S0))); return best.k * p * (1 - p); },
+    blend: blend, source: coherent ? "espn" : "modelled", tau: tau,
+    S: (id) => of(id).S,
+    P: (id) => of(id).P,
+    /* dP/dS at a team's position: the fitted slope and the analytic one, blended. Never negative. */
+    slope: (S, P) => {
+      const f = fitP(S); const fitted = best.k * f * (1 - f);
+      const q = Math.max(0.02, Math.min(0.98, P));
+      const analytic = pdf(probit(q)) / tau;
+      /* Ten points can fit a near-step, whose slope would turn one point a week into a
+         season: the fitted slope is never read as more than twice the analytic one. */
+      return blend * Math.min(fitted, 2 * analytic) + (1 - blend) * analytic;
+    },
+    /* The curve's bend at a team's position: positive below the middle, where spread helps, negative above it. */
+    curve: (S) => { const f = fitP(S); return best.k * best.k * f * (1 - f) * (1 - 2 * f); },
+    pts: pts,
   };
 })();
+
+/* Each player's rest-of-season projection, the figure R1 nets: shown beside his name on every roster. */
+for (const t of DATA.teams) for (const p of t.roster) p.rosPts = Math.round(ros(p) * 10) / 10;
+
+/* The league's average starter at each lineup slot, as a rate a game: what a
+   "hole" is measured against (R13). */
+const SLOT_AVG = (() => {
+  const sums = SLOTS.map(() => 0);
+  for (const t of DATA.teams) optimalLineup(t.roster).slotVals.forEach((v, i) => { sums[i] += v; });
+  return sums.map((v) => v / Math.max(1, DATA.teams.length));
+})();
+function holesOf(roster) {
+  return optimalLineup(roster).slotVals.reduce((s, v, i) => s + Math.max(0, SLOT_AVG[i] - v), 0);
+}
+/* Bench value above what the waiver wire offers (R14, R15). */
+const aboveWire = (p) => Math.max(0, rate(p) - faBest(p.pos)) * gamesLeft(p);
+function benchValue(roster) {
+  return optimalLineup(roster).bench.reduce((s, p) => s + aboveWire(p), 0);
+}
+/* The value of each final finish, on the league's own size. */
+function placeValue(rank) {
+  const n = Math.max(2, DATA.league.size);
+  const x = Math.max(0, Math.min(PLACEMENT_CURVE.length - 1, ((rank - 1) * (PLACEMENT_CURVE.length - 1)) / (n - 1)));
+  const i = Math.floor(x); const f = x - i;
+  return PLACEMENT_CURVE[i] + (PLACEMENT_CURVE[Math.min(PLACEMENT_CURVE.length - 1, i + 1)] - PLACEMENT_CURVE[i]) * f;
+}
+/* Expected final place in the regular-season order (R21). Where the league
+   seeds on points, each team's points so far plus its strength over the weeks
+   left; otherwise its wins so far plus its chance in each game left. Every
+   pair is compared on the normal curve. `shift` is a change in strength, by
+   team id, so both sides of a trade move at once. */
+const POINTS_SEEDED = /POINTS_SCORED/.test(String(DATA.league.seedingRule || ""));
+function expectedRank(teamId, shift) {
+  const sh = shift || {};
+  const S = (id) => ODDS.S(id) + (sh[id] || 0);
+  const score = (t) => {
+    if (POINTS_SEEDED) return (t.pf || 0) + S(t.id) * REG_LEFT;
+    let wins = (t.w || 0) + (t.t || 0) / 2;
+    for (const g of DATA.league.games) {
+      if (g[1] !== t.id && g[2] !== t.id) continue;
+      const opp = g[1] === t.id ? g[2] : g[1];
+      wins += phi((S(t.id) - S(opp)) / (TEAM_WEEK_SD * Math.SQRT2));
+    }
+    return wins;
+  };
+  const sd = POINTS_SEEDED ? TEAM_WEEK_SD * Math.sqrt(Math.max(1, REG_LEFT)) : Math.sqrt(Math.max(1, REG_LEFT)) / 2;
+  const me = DATA.teams.find((t) => t.id === teamId); if (!me) return DATA.league.size;
+  const mine = score(me);
+  let rank = 1;
+  for (const t of DATA.teams) if (t.id !== teamId) rank += phi((score(t) - mine) / (sd * Math.SQRT2));
+  return rank;
+}
+/* The chance of winning the title from inside the bracket (R20): each round is
+   a total over the round's weeks against a typical bracket team. */
+const ROUNDS = Math.max(1, Math.ceil(Math.log2(Math.max(2, DATA.league.playoffTeams))));
+function bracketRun(teamId, S) {
+  let wsum = 0; let opp = 0;
+  for (const p of ODDS.pts) if (p.id !== teamId) { const w = Math.max(0.02, p.P); wsum += w; opp += w * p.S; }
+  const field = wsum ? opp / wsum : S;
+  const one = phi(((S - field) * ROUND_LEN) / (TEAM_WEEK_SD * Math.sqrt(2 * ROUND_LEN)));
+  return Math.pow(one, ROUNDS);
+}
 
 /* =========================================================================
    GATES (§4.6). Fifteen checks; the ones that can fire here are implemented.
@@ -249,11 +528,11 @@ function runGates(trade) {
   const inA = trade.bOut.map(playerById); const inB = trade.aOut.map(playerById);
   const afterA = applyTrade(A.roster, trade.aOut, inA);
   const afterB = applyTrade(B.roster, trade.bOut, inB);
-  const dropsA = chooseDrops(afterA, Math.max(0, afterA.length - ROSTER_CAP));
-  const dropsB = chooseDrops(afterB, Math.max(0, afterB.length - ROSTER_CAP));
+  const dropsA = chooseDrops(afterA, Math.max(0, capCount(afterA) - ROSTER_CAP));
+  const dropsB = chooseDrops(afterB, Math.max(0, capCount(afterB) - ROSTER_CAP));
   const finalA = afterA.filter((p) => dropsA.indexOf(p) < 0);
   const finalB = afterB.filter((p) => dropsB.indexOf(p) < 0);
-  add("G4", finalA.length <= ROSTER_CAP && finalB.length <= ROSTER_CAP, "Both rosters must fit the 16-man cap");
+  add("G4", capCount(finalA) <= ROSTER_CAP && capCount(finalB) <= ROSTER_CAP, "Both rosters must fit the " + ROSTER_CAP + "-man cap");
   /* Non-blocking on purpose. ESPN accepted the live 3-for-3 in this league
      even though it leaves one side with no kicker, so a blocking gate here
      would mark a real, standing offer as impossible. It is surfaced as a
@@ -261,7 +540,7 @@ function runGates(trade) {
   add("G5", optimalLineup(finalA).legal && optimalLineup(finalB).legal,
     "A starting slot would be left unfilled", false);
   add("G6", overLimits(finalA).length === 0 && overLimits(finalB).length === 0, "Position limits must be respected");
-  add("G7", dropsA.length + dropsB.length === 0 || (finalA.length <= ROSTER_CAP && finalB.length <= ROSTER_CAP),
+  add("G7", dropsA.length + dropsB.length === 0 || (capCount(finalA) <= ROSTER_CAP && capCount(finalB) <= ROSTER_CAP),
     "A legal drop set must exist");
   add("G13", !trade.expires || nowMs() < trade.expires, "The offer must not have expired");
   add("G14", true, "No asset is committed to an already-accepted trade");
@@ -300,94 +579,162 @@ function analyzeTrade(trade) {
     const lb = optimalLineup(before); const la = optimalLineup(final);
     const rosIn = incoming.reduce((s, p) => s + ros(p), 0);
     const rosOut = outs.reduce((s, p) => s + ros(p), 0);
-    return { team, before, outs, incoming, after, final, drops, lb, la, rosIn, rosOut, other };
+    const wb = weekly(before); const wa = weekly(final);
+    /* The change in what the side puts on the field each week: the strength the odds rows move on. */
+    const dS = (wa.total - wb.total) / WEEKS_LEFT;
+    return { team, before, outs, incoming, after, final, drops, lb, la, rosIn, rosOut, other, wb, wa, dS };
   };
   const ctxA = sideCtx(A, trade.aOut, pre.inA, pre.afterA, pre.finalA, pre.dropsA, B);
   const ctxB = sideCtx(B, trade.bOut, pre.inB, pre.afterB, pre.finalB, pre.dropsB, A);
+  ctxA.otherCtx = ctxB; ctxB.otherCtx = ctxA;
+  const shift = { [A.id]: ctxA.dS, [B.id]: ctxB.dS };
+
+  /* A per-player measure, netted across the deal: what comes in, used the way
+     the roster after the trade would use it, less what goes out, used the way
+     the roster before it did. In points a remaining week. */
+  const net = (c, fn) => {
+    let v = 0; let seen = 0;
+    for (const p of c.incoming) { const x = fn(p); if (x != null) { seen++; v += x * useOf(p, c.final); } }
+    for (const p of c.outs) { const x = fn(p); if (x != null) { seen++; v -= x * useOf(p, c.before); } }
+    return seen ? v : null;
+  };
+  const perWeek = (p) => gamesLeft(p) / WEEKS_LEFT;
+  const none = { v: 0, raw: null };
+  const num = (n, d) => sgn(n) + Math.abs(n).toFixed(d == null ? 1 : d);
+  const p1 = (x) => (Math.round(x * 1000 + 1e-6) / 10).toFixed(1) + "%";
 
   const rowFns = {
     /* Sequential attribution over the canonical order: each row's points are
        the change that effect caused at its own step, so the rows sum to the
        total by construction. */
+
+    /* R1. Net rest-of-season points moving each way, slots ignored. */
     R1: (c) => ({ v: (c.rosIn - c.rosOut) / WEEKS_LEFT,
-      raw: sgn(c.rosIn - c.rosOut) + Math.abs(c.rosIn - c.rosOut).toFixed(0) + " proj pts" }),
+      raw: num(c.rosIn - c.rosOut, 0) + " proj pts" }),
+    /* R2. What the best legal lineup actually gains, beyond R1: three startable
+       players into two open slots gain less than their projections add up to. */
     R2: (c, memo) => {
-      const total = (c.la.total - c.lb.total) / WEEKS_LEFT;
-      const v = total - memo.R1;
-      return { v, raw: (c.la.starters.length ? sgn(total) + Math.abs(total).toFixed(1) + " pts/wk lineup" : "") };
+      const total = c.la.total - c.lb.total;
+      return { v: total - memo.R1, raw: num(total) + " pts/wk lineup" };
     },
-    R3: null, R5: null, R6: null, R7: null, R10: null, R24: null,
-    R4: (c) => { const d = (c.incoming.reduce((s, p) => s + p.ow, 0) - c.outs.reduce((s, p) => s + p.ow, 0)) / 100;
-      return { v: d * 1.6, raw: sgn(d) + Math.abs(d * 100).toFixed(0) + " pts rostered" }; },
-    R8: (c, memo) => ({ v: memo.R1 * 0.09, raw: "seeding on total points" }),
-    R9: (c) => {
-      const exp = (arr) => arr.reduce((s, p) => s + ros(p) * (INJ_RATE[p.pos] || 0.08)
-        * (2 - (PLAY_PROB[p.inj] == null ? 1 : PLAY_PROB[p.inj])), 0);
-      const v = -(exp(c.incoming) - exp(c.outs)) / WEEKS_LEFT;
-      return { v, raw: "expected availability cost" };
+    /* R3. Recent form against the projected rate. */
+    R3: (c) => { const v = net(c, (p) => { const f = formOf(p); return f == null ? null : f * perWeek(p); });
+      return v == null ? none : { v, raw: num(v) + " pts/wk on form" }; },
+    /* R4. Last season's rate against this season's projected one, fading to nothing by week 6. */
+    R4: (c) => {
+      const decay = Math.max(0, Math.min(1, 1 - (WEEK - 1) / (PRIOR_DECAY_WEEK - 1)));
+      if (!decay) return { v: 0, raw: "faded out by week " + PRIOR_DECAY_WEEK };
+      const v = net(c, (p) => (p.lyg != null && p.lyg >= 6 && p.ly != null ? (p.ly / p.lyg - rate(p)) * perWeek(p) : null));
+      return v == null ? none : { v: v * decay, raw: "last season at " + Math.round(decay * 100) + "%" };
     },
-    R11: (c) => { const bye = (p) => ((p.tm.charCodeAt(0) * 7 + p.tm.length) % 10) + 5;
-      const starters = new Set(c.lb.starters.map((p) => bye(p)));
-      const clash = c.incoming.filter((p) => starters.has(bye(p))).length;
-      return { v: -clash * 0.42, raw: clash ? clash + " bye clash" + (clash > 1 ? "es" : "") : "no new bye clash" }; },
-    R12: (c) => { const lo = (a) => (a.length ? Math.min.apply(null, a.map((p) => p.ow)) : 0);
-      const d = (lo(c.incoming) - lo(c.outs)) / 100; return { v: d * 1.1, raw: "weakest role in the package" }; },
-    R13: (c) => {
-      let upIn = 0; let upOut = 0;
-      const starterAt = (pos) => { const s = c.lb.starters.filter((p) => p.pos === pos);
-        return s.length ? ros(s[s.length - 1]) : 0; };
-      for (const p of c.incoming) upIn += Math.max(0, ros(p) - starterAt(p.pos));
-      for (const p of c.outs) upOut += Math.max(0, ros(p) - starterAt(p.pos));
-      const v = ((upIn - upOut) / WEEKS_LEFT) * 0.35;
-      return { v, raw: "against this side's weakest slot" };
+    /* R5. Week-to-week reliability: the spread below a player's own average counts against. */
+    R5: (c) => { const v = net(c, (p) => (DATA.inputs.form ? -spreadOf(p).down * SPREAD_PRICE * perWeek(p) : null));
+      return v == null ? none : { v, raw: v >= 0 ? "steadier weeks" : "shakier weeks" }; },
+    /* R6. Top-end weeks: the spread above a player's own average counts for. */
+    R6: (c) => { const v = net(c, (p) => (DATA.inputs.form ? spreadOf(p).up * SPREAD_PRICE * perWeek(p) : null));
+      return v == null ? none : { v, raw: v >= 0 ? "more upside" : "less upside" }; },
+    /* R7. Volume that repeats against touchdown luck that tends not to. */
+    R7: (c) => { const v = net(c, (p) => { const q = qualityOf(p); return q == null ? null : q * perWeek(p); });
+      return v == null ? none : { v, raw: "workload against touchdown luck" }; },
+    /* R8. The lineup's change over the regular-season weeks left, where points scored decide seeding. */
+    R8: (c) => {
+      const share = REG_LEFT / WEEKS_LEFT;
+      const v = c.dS * share * (POINTS_SEEDED ? 1 : 0.25);
+      return { v, raw: POINTS_SEEDED ? num(c.dS * REG_LEFT, 0) + " pts toward seeding" : "points break ties only" };
     },
-    R14: (c) => { const bv = (r) => optimalLineup(r).bench.reduce((s, p) => s + ros(p), 0) * BENCH_DISCOUNT;
-      const v = (bv(c.final) - bv(c.before)) / WEEKS_LEFT;
-      return { v, raw: "bench at 30% of a starter" }; },
-    R15: (c) => { const lost = c.drops.reduce((s, p) => s + ros(p), 0) * BENCH_DISCOUNT;
+
+    /* R9. Points lost to the games each player is expected to miss. */
+    R9: (c) => { const v = -net(c, (p) => (missOf(p) * rate(p)) / WEEKS_LEFT);
+      const g = c.incoming.reduce((s, p) => s + missOf(p), 0) - c.outs.reduce((s, p) => s + missOf(p), 0);
+      return { v, raw: num(g) + " games expected missed" }; },
+    /* R10. Games missed last season and this one, against the position's base rate. */
+    R10: (c) => { const v = net(c, (p) => { const d = durabilityOf(p); return d == null ? null : -d / WEEKS_LEFT; });
+      return v == null ? none : { v, raw: "games missed, last season and this" }; },
+    /* R11. The season solved week by week with players on a bye out of the lineup, beyond the bye-free week R2 solved. */
+    R11: (c, memo) => { const v = c.dS - (memo.R1 + memo.R2);
+      return { v, raw: Math.abs(v) < 0.05 ? "no new bye clash" : (v < 0 ? "bye weeks cost " : "bye weeks eased ") + Math.abs(v * WEEKS_LEFT).toFixed(0) + " pts" }; },
+    /* R12. The share of each player's rate at risk by where his depth chart lists him. */
+    R12: (c) => { if (!DATA.inputs.depth) return none;
+      const v = -net(c, (p) => roleRiskOf(p) * rate(p) * perWeek(p));
+      return { v, raw: "depth-chart standing" }; },
+
+    /* R13. Slots sitting below the league's average starter, before and after: filling a hole is worth more than its points. */
+    R13: (c) => { const d = holesOf(c.final) - holesOf(c.before);
+      return { v: -d * 0.5, raw: Math.abs(d) < 0.05 ? "no hole opened or filled" : d < 0 ? "fills a weak slot" : "opens a weak slot" }; },
+    /* R14. Bench quality above the waiver wire, at the bench discount, as if no cut were forced. */
+    R14: (c) => { const v = ((benchValue(c.final.concat(c.drops)) - benchValue(c.before)) * BENCH_DISCOUNT) / WEEKS_LEFT;
+      return { v, raw: "bench at " + Math.round(BENCH_DISCOUNT * 100) + "% of a starter" }; },
+    /* R15. What the forced cuts were worth. */
+    R15: (c) => { const lost = c.drops.reduce((s, p) => s + aboveWire(p), 0) * BENCH_DISCOUNT;
       return { v: -lost / WEEKS_LEFT, raw: c.drops.length ? c.drops.length + " forced cut" + (c.drops.length > 1 ? "s" : "") : "no cuts forced" }; },
-    R16: (c) => { const floor = (c.team.wr / DATA.league.size) * 1.25;
-      const v = (c.incoming.length - c.outs.length) * floor;
+    /* R16. Replacement is per team: an empty slot refills from this team's place in
+       the waiver order, and a bench player is worth more where the wire offers less. */
+    R16: (c) => {
+      const gap = (pos) => faBest(pos) - faFor(c.team, pos);
+      const slotGap = (l) => l.unfilled.reduce((s, name) => { const sl = SLOTS.find((x) => x[0] === name);
+        return s + (sl ? slotFloor(sl[1], (pos) => faFor(c.team, pos)) - slotFloor(sl[1], faBest) : 0); }, 0);
+      const benchGap = (r) => optimalLineup(r).bench.reduce((s, p) => s + gap(p.pos) * perWeek(p), 0) * BENCH_DISCOUNT;
+      const v = (slotGap(c.la) - slotGap(c.lb)) + (benchGap(c.final) - benchGap(c.before));
       return { v, raw: "waiver rank " + c.team.wr + " of " + DATA.league.size }; },
-    R17: (c) => { const fx = (a) => a.filter((p) => ["RB", "WR", "TE"].indexOf(p.pos) >= 0).length;
-      return { v: (fx(c.incoming) - fx(c.outs)) * 0.45, raw: "FLEX-eligible bodies" }; },
-    R18: (c) => { const st = (a) => a.filter((p) => p.pos === "K" || p.pos === "D/ST")
-      .reduce((s, p) => s + ros(p), 0);
-      const v = -((st(c.incoming) - st(c.outs)) / WEEKS_LEFT) * 0.86;
-      return { v, raw: "K and D/ST are streamable" }; },
+    /* R17. Bench players a shared slot can take, and positions pushed to their limit. */
+    R17: (c) => {
+      const shared = SLOTS.filter((x) => x[1].length > 1).reduce((set, x) => { x[1].forEach((q) => set.add(q)); return set; }, new Set());
+      const fx = (r) => Math.min(3, optimalLineup(r).bench.filter((p) => shared.has(p.pos) && rate(p) > faFor(c.team, p.pos)).length);
+      const capped = (r) => { const n = posCounts(r); return Object.keys(POS_LIMIT).filter((k) => (n[k] || 0) >= POS_LIMIT[k]).length; };
+      const v = (fx(c.final) - fx(c.before)) * 0.4 - (capped(c.final) - capped(c.before)) * 0.3;
+      return { v, raw: "bench cover and position limits" }; },
+    /* R18. A kicker or defence is replaceable week to week, so most of a swing in those slots is taken back. */
+    R18: (c) => {
+      const kd = (l) => SLOTS.reduce((s, x, i) => s + (x[0] === "K" || x[0] === "D/ST" ? l.slotVals[i] : 0), 0);
+      const swing = kd(c.la) - kd(c.lb);
+      return { v: -swing * STREAM_FACTOR, raw: Math.abs(swing) < 0.05 ? "no kicker or defence swing" : "K and D/ST are streamable" }; },
+
+    /* R19. ESPN gives the level; the change is read off the curve at this team's position (§11). */
     R19: (c, memo) => {
       const S = ODDS.S(c.team.id); const P = ODDS.P(c.team.id);
-      const dS = memo.R1 + memo.R2;
-      const after = Math.max(0, Math.min(1, P + ODDS.slope(S) * dS));
-      memo._p = { before: P, after };
-      const p1 = (x) => (Math.round(x * 1000 + 1e-6) / 10).toFixed(1) + "%";
+      const dead = Boolean(c.team.eliminated);
+      const after = dead ? 0 : Math.max(0, Math.min(1, P + ODDS.slope(S, P) * c.dS));
+      memo._p = { before: P, after, S };
       return { v: (after - P) * ODDS_VP, raw: p1(P) + " \u2192 " + p1(after) };
     },
-    R20: (c, memo) => { const p = memo._p || { before: 0, after: 0 };
-      const rd = (q) => q * 0.5; const t = (q) => q * rd(q) * rd(q);
-      return { v: (t(p.after) - t(p.before)) * TITLE_VP, raw: "two two-week rounds" }; },
-    R21: (c, memo) => { const p = memo._p || { before: 0, after: 0 };
-      return { v: (p.after - p.before) * PLACE_VP * 0.5, raw: "consolation ladder included" }; },
-    R22: (c, memo) => { const av = (a) => a.reduce((s, p) => s + ros(p)
-      * (PLAY_PROB[p.inj] == null ? 1 : PLAY_PROB[p.inj]), 0);
-      const raw = ((av(c.incoming) - av(c.outs)) / 17) * 3.2 / WEEKS_LEFT * 4;
-      return { v: raw - memo.R1 * 0.42, raw: "periods 14\u201317, weighted" }; },
-    R23: (c, memo) => { const sig = (r) => Math.sqrt(optimalLineup(r).starters
-      .reduce((s, p) => s + Math.pow(SIGMA_POS[p.pos] || 6, 2), 0));
-      const dv = sig(c.final) - sig(c.before);
-      const steep = ODDS.slope(ODDS.S(c.team.id)) / (ODDS.k / 4);
-      return { v: dv * 0.30 * (steep - 0.5), raw: "fitted slope " + steep.toFixed(2) }; },
-    R25: (c) => { const d = (c.incoming.reduce((s, p) => s + p.ow, 0)
-      - c.outs.reduce((s, p) => s + p.ow, 0)) / 100;
-      return { v: d * 2.2, raw: sgn(d) + Math.abs(d * 100).toFixed(0) + " market share" }; },
-    R26: (c) => ({ v: (c.outs.length - c.incoming.length) * 0.55,
-      raw: c.outs.length > c.incoming.length ? "consolidating" : c.outs.length < c.incoming.length ? "spreading" : "even shape" }),
+    /* R20. Reaching the bracket, then winning each round on a total over the round's weeks. */
+    R20: (c, memo) => { const p = memo._p;
+      const before = p.before * bracketRun(c.team.id, p.S); const after = p.after * bracketRun(c.team.id, p.S + c.dS);
+      return { v: (after - before) * TITLE_VP, raw: p1(before) + " \u2192 " + p1(after) + " title" }; },
+    /* R21. Expected final place, both sides' strength moved at once, on the placement curve. */
+    R21: (c) => { const before = expectedRank(c.team.id, null); const after = expectedRank(c.team.id, shift);
+      return { v: (placeValue(after) - placeValue(before)) * PLACE_VP, raw: "place " + before.toFixed(1) + " \u2192 " + after.toFixed(1) }; },
+    /* R22. The playoff weeks' extra weight on the lineup's change in those weeks, as far as the bracket is in reach. */
+    R22: (c, memo) => { if (WEEKS.every((w) => w <= REG)) return { v: 0, raw: "no playoff weeks left" };
+      const reach = c.team.eliminated ? 0.25 : Math.max(0.25, memo._p.after);
+      const v = ((c.wa.playoff - c.wb.playoff) / WEEKS_LEFT) * reach;
+      return { v, raw: "weeks " + (REG + 1) + "\u2013" + FINAL + ", weighted" }; },
+    /* R23. Spread helps a team below the middle of the curve and hurts one above it:
+       half the curve's bend times the change in the lineup's variance. */
+    R23: (c, memo) => { if (!DATA.inputs.form || c.team.eliminated) return none;
+      const lv = (l) => l.starters.reduce((s, p) => s + variance(p), 0) / Math.max(1, REG_LEFT);
+      const v = 0.5 * ODDS.curve(memo._p.S) * (lv(c.la) - lv(c.lb)) * ODDS.blend * ODDS_VP;
+      return { v, raw: ODDS.curve(memo._p.S) >= 0 ? "spread helps here" : "spread hurts here" }; },
+    /* R24. Games still to play against the other side, whose lineup this trade changes. */
+    R24: (c) => { const n = DATA.league.games.filter((g) => (g[1] === c.team.id && g[2] === c.other.id) || (g[2] === c.team.id && g[1] === c.other.id)).length;
+      const v = -n * c.otherCtx.dS * 0.10 * (POINTS_SEEDED ? 0.3 : 1);
+      return { v, raw: n ? n + " game" + (n > 1 ? "s" : "") + " left against them" : "no games left against them" }; },
+
+    /* R25. How the wider game rates what moves: rostered, started, drafted. */
+    R25: (c) => { const d = c.incoming.reduce((s, p) => s + marketOf(p), 0) - c.outs.reduce((s, p) => s + marketOf(p), 0);
+      return { v: d * 2.2, raw: num(d * 100, 0) + " market share" }; },
+    /* R26. Consolidation: the side that ends up with the best single player in the deal. */
+    R26: (c) => { const top = (a) => (a.length ? Math.max.apply(null, a.map(rate)) : 0);
+      const d = Math.max(-2, Math.min(2, (top(c.incoming) - top(c.outs)) * 0.25));
+      return { v: d, raw: d > 0.05 ? "gets the best player in the deal" : d < -0.05 ? "gives up the best player in the deal" : "even shape" }; },
     R27: null, R28: null,
   };
 
   const memoA = {}; const memoB = {};
   const rows = ROWS.map((spec) => {
-    const inert = spec.needs != null && week < spec.needs;
+    /* Visible and inert (§16): too early in the season, or the data the row reads has not been pulled. */
+    const lacks = (FORM_ROWS.has(spec.id) && !DATA.inputs.form) || (spec.id === "R12" && !DATA.inputs.depth);
+    const inert = (spec.needs != null && week < spec.needs) || lacks;
     const off = Boolean(spec.off);
     const fn = rowFns[spec.id];
     let a = { v: 0, raw: null }; let b = { v: 0, raw: null };
@@ -432,6 +779,8 @@ function analyzeTrade(trade) {
         + "but somebody has to remember to do it." });
   }
   if (ODDS.source === "modelled") flags.push({ side: "both", id: "F18", label: "Playoff odds are modelled", note: "ESPN's published odds failed the coherence check, so the odds rows were computed internally and deserve less trust." });
+  if (!DATA.inputs.form || !DATA.inputs.depth) flags.push({ side: "both", id: "F13", label: "Waiting on data",
+    note: "Some rows read each player's weeks so far or his team's depth chart, and that data has not been pulled yet. They are listed and inert rather than guessed." });
   if (week < 3) flags.push({ side: "both", id: "F13", label: "Early season", note: "Six rows have nothing to compute from until roughly week 3. They are listed and inert rather than hidden." });
   if (trade.overlaps && trade.overlaps.length) {
     flags.push({ side: "both", id: "F21", label: "Also in another offer",
@@ -576,7 +925,7 @@ function crossReference(list) {
     ROWS, GROUPS, BANDS, ROSTER_CAP, SLOTS, WEEKS_LEFT,
     teamById, playerById, ownerOf, posClass, vp, sgn, numCls,
     countdown, fmtWhen, setZone,
-    optimalLineup, applyTrade, overLimits, chooseDrops,
+    optimalLineup, applyTrade, overLimits, chooseDrops, capCount,
     analyzeTrade, totalsFor, verdictFor, recommend, crossReference,
     appliedWeight, baseWeight,
     adminDiffers: ADMIN_DIFFERS,
@@ -603,6 +952,7 @@ function adaptDigest(d) {
   const teams = (d.teams || []).map((t) => ({
     id: t.id, n: t.name, ab: t.abbrev, ow: t.owners || [], logo: t.logo,
     wr: t.waiverRank || 1, pp: t.playoffPct, roster: t.roster || [],
+    eliminated: Boolean(t.eliminated), w: t.w, l: t.l, t: t.t, pf: t.pf, top: t.top, clinch: t.clinch || null,
   }));
   const sp = d.scoringPeriodId || 1;
   const finalSP = d.finalScoringPeriod || 17;
@@ -614,7 +964,14 @@ function adaptDigest(d) {
       deadline: d.tradeDeadline || null,
       rosterCap: d.rosterCap,
       slots: d.slots || [],
+      regular: d.regularSeasonPeriods || null,
+      roundLength: d.playoffRoundLength || 1,
+      seedingRule: d.seedingRule || null,
+      positionLimits: d.positionLimits || {},
+      games: d.remainingGames || [],
     },
+    freeAgents: d.freeAgents || {},
+    inputs: { form: Boolean(d.inputs && d.inputs.form), depth: Boolean(d.inputs && d.inputs.depth) },
     teams,
     pending: (d.pending || []).map((t) => ({
       ...t, source: 'pending', overlaps: [], staleGates: false,
