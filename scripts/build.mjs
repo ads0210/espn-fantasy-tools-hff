@@ -18,6 +18,8 @@ import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { generateSetupCode } from './generate-setup-code.mjs';
 import { LIMIT_JS } from '../src/pages/limitnotice.js';
+import { ERROR_JS } from '../src/pages/errorreport.js';
+import { APP_HEAD } from '../src/appicon.js';
 
 const TOOLS = [
   {
@@ -83,6 +85,7 @@ function shellHtml(tool) {
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+${APP_HEAD}
 <title>${tool.title}</title>
 <link rel="stylesheet" href="./styles.css">
 <style>html,body{margin:0;background:#0A0D0B;}</style>
@@ -97,6 +100,7 @@ var r=document.cookie.match(/(?:^|; )eft_motion=([^;]*)/);
 if(r&&decodeURIComponent(r[1])==='reduce')document.documentElement.classList.add('stillness');}catch(e){}
 </script>
 <script>${LIMIT_JS.split('</script').join('<\\/script')}</script>
+<script>${ERROR_JS.split('</script').join('<\\/script')}</script>
 </head>
 <body>
 <div id="root"></div>
