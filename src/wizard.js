@@ -250,7 +250,7 @@ export function wizardPage({ theme, reduceMotion, codeRequired, step = 1, league
     .seg.done { background:var(--accent-glow); border-color:var(--accent-deep); }
     .seg.done .segn { color:var(--accent); }
     .seg.on { background:var(--accent); border-color:var(--accent); }
-    .seg.on .segn, .seg.on .segl { color:#04170A; }
+    .seg.on .segn, .seg.on .segl { color:var(--on-accent); }
     @media (max-width:430px) { .segl { display:none; } .seg { padding:9px 5px; } }
 
     .runline { display:flex; justify-content:space-between; align-items:baseline;
