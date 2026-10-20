@@ -108,8 +108,8 @@ function fantasyItem(m, i) {
   return { key: 'f' + i,
     html: '<div class="tk" data-k="f' + i + '">' + side(m.away, 'a') +
       '<span class="tkvs">VS</span>' + side(m.home, 'h') + stateCell(state) + '</div>',
-    vals: { a: played ? m.away.points.toFixed(1) : '',
-            h: played ? m.home.points.toFixed(1) : '',
+    vals: { a: played ? pts2(m.away.points) : '',
+            h: played ? pts2(m.home.points) : '',
             s: state, live: running, win: fin } };
 }
 
@@ -156,9 +156,12 @@ function marquee(runEl, stripEl, emptyEl, items) {
   var stripWidth = stripEl.clientWidth || copyWidth;
 
   var copies = Math.max(3, Math.ceil((stripWidth * 2) / copyWidth) + 2);
+  var perCopy = runEl.children.length;
   var out = '';
   for (var i = 0; i < copies; i++) out += structure;
   runEl.innerHTML = out;
+  /* Week 6 (A7): the loop's extra copies are for the eye only; a screen reader reads the strip once. */
+  for (var k = perCopy; k < runEl.children.length; k++) runEl.children[k].setAttribute('aria-hidden', 'true');
 
   runEl.style.setProperty('--shift', (-copyWidth) + 'px');
   runEl.style.setProperty('--dur', Math.max(8, copyWidth / 42).toFixed(2) + 's');
@@ -215,7 +218,7 @@ function renderCountdown() {
 
 /* Team names are always shown in full.
    Substituting an abbreviation past sixteen characters meant the same team
-   read as "Down for THE WIN!" in one place and "DFW" in another, which is a
+   read as "Gridiron Ghosts" in one place and "GG" in another, which is a
    worse outcome than a long name wrapping. The card lets the name wrap
    instead. */
 function short(name) {
@@ -235,12 +238,28 @@ function seasonStats(sl, started) {
   return '<div class="cardstats">' +
     (sl.record ? '<span class="stat"><b>' + esc(sl.record) + '</b><span>Record</span></span>' : '') +
     (sl.rank ? '<span class="stat"><b>' + sl.rank + '</b><span>Rank</span></span>' : '') +
-    (sl.pointsFor != null ? '<span class="stat"><b>' + sl.pointsFor.toFixed(0) + '</b><span>PF</span></span>' : '') +
+    (sl.pointsFor != null ? '<span class="stat"><b>' + pts2(sl.pointsFor) + '</b><span>PF</span></span>' : '') +
     '</div>';
+}
+
+/* Week 6 (N6): the card's banner, a ribbon across its top edge with a one-line reason; one at a time. */
+function setBanner(panel, bn) {
+  var old = panel.querySelector('.mbanner');
+  if (old) old.remove();
+  if (!bn) { panel.classList.remove('hasbanner'); panel.removeAttribute('data-tone'); return; }
+  var d = document.createElement('div');
+  d.className = 'mbanner t-' + bn.tone;
+  d.setAttribute('data-banner', bn.key);
+  d.innerHTML = '<div class="mbline"><span class="mbglyph">' + bn.svg + '</span><span class="mblabel">' + esc(bn.label) +
+    '</span></div><p class="mbreason">' + esc(bn.reason) + '</p>';
+  panel.insertBefore(d, panel.firstChild);
+  panel.classList.add('hasbanner');
+  panel.setAttribute('data-tone', bn.tone);
 }
 
 function renderCard(t, identified) {
   var panel = document.getElementById('cardPanel');
+  setBanner(panel, null);
   if (!t) { panel.hidden = true; KICKOFF = null; return; }
   if (identified === false) {
     panel.hidden = false;
@@ -271,23 +290,23 @@ function renderCard(t, identified) {
       /* A projection on a finished game is a guess about something that has
          already happened, so it comes off once the result is in. */
       var projMe = (!done && m.myProjected != null)
-        ? '<span class="sproj">' + m.myProjected.toFixed(1) + '</span>' : '';
+        ? '<span class="sproj">' + pts2(m.myProjected) + '</span>' : '';
       var projOpp = (!done && m.oppProjected != null)
-        ? '<span class="sproj">' + m.oppProjected.toFixed(1) + '</span>' : '';
+        ? '<span class="sproj">' + pts2(m.oppProjected) + '</span>' : '';
       var centre = done
         ? '<div class="vsmargin ' + (tied ? 'tied' : iWon ? 'won' : 'lost') + '">' +
             (tied ? 'Tied'
-              : (iWon ? 'Won by ' : 'Lost by ') + Math.abs(diff).toFixed(1)) +
+              : (iWon ? 'Won by ' : 'Lost by ') + pts2(Math.abs(diff))) +
           '</div>'
         : winGauge(m);
       mid = '<div class="vsgrid' + (done ? ' isdone' : '') + '">' +
         '<div class="vslabel' + (done ? ' isfinal' : '') + '">' +
           (done ? 'Final' : 'Live') + '</div>' +
         '<div class="vsscore mine' + (done && iWon ? ' won' : '') + '">' +
-          '<b class="smine">' + m.myPoints.toFixed(1) + '</b>' + projMe + '</div>' +
+          '<b class="smine">' + pts2(m.myPoints) + '</b>' + projMe + '</div>' +
         centre +
         '<div class="vsscore theirs' + (done && !iWon && !tied ? ' won' : '') + '">' +
-          '<b class="stheirs">' + m.oppPoints.toFixed(1) + '</b>' + projOpp + '</div>' +
+          '<b class="stheirs">' + pts2(m.oppPoints) + '</b>' + projOpp + '</div>' +
       '</div>';
     } else if (t.kickoff && Date.parse(t.kickoff) > Date.now()) {
       mid = '<div class="countdown" id="cdown">--</div><div class="vslabel">Until kickoff</div>';
@@ -323,6 +342,7 @@ function renderCard(t, identified) {
   }
 
   document.getElementById('cardBody').innerHTML = vs;
+  setBanner(panel, (t.matchup && t.matchup.banner) || null);
 
   KICKOFF = (t.matchup && !t.matchup.started && !t.matchup.inPlay) ? t.kickoff : null;
   if (cdTimer) clearInterval(cdTimer);
@@ -544,11 +564,11 @@ function renderStandings(st) {
         (r.owner ? '<em>' + esc(r.owner) + '</em>' : '') + '</div></div></td>' +
       '<td class="c-key">' + r.wins + '-' + r.losses + '-' + (r.ties || 0) + '</td>' +
       '<td class="c-key">' + (d.winPct * 100).toFixed(1) + '%</td>' +
-      '<td class="c-num">' + r.pointsFor.toFixed(1) + '</td>' +
-      '<td class="c-num">' + r.pointsAgainst.toFixed(1) + '</td>' +
+      '<td class="c-num">' + pts2(r.pointsFor) + '</td>' +
+      '<td class="c-num">' + pts2(r.pointsAgainst) + '</td>' +
       '<td class="' + (diff >= 0 ? 'c-pos' : 'c-neg') + '">' +
-        (diff >= 0 ? '+' : '\u2212') + Math.abs(diff).toFixed(1) + '</td>' +
-      '<td class="c-num">' + d.ppg.toFixed(1) + '</td>' +
+        (diff >= 0 ? '+' : '\u2212') + pts2(Math.abs(diff)) + '</td>' +
+      '<td class="c-num">' + pts2(d.ppg) + '</td>' +
       '<td class="' + (!r.streak ? 'c-muted' : (r.streak.charAt(0) === 'W' ? 'c-pos' : 'c-neg')) + '">' +
         esc(r.streak || '\u2014') + '</td>' +
       '<td class="c-num">' + stOdds(r) + '</td>' +
@@ -624,7 +644,8 @@ function txPlayer(p, sign) {
   return '<span class="txp' + (sign ? ' ' + sign : '') + '">' +
     (sign === 'add' ? '<span class="txsign">+</span>'
       : sign === 'drop' ? '<span class="txsign">&minus;</span>' : '') +
-    esc(p.name) + (p.pos ? '<em>' + esc(p.pos) + '</em>' : '') + '</span>';
+    // Week 6 (A6): a defence's name already says D/ST, so its tag is not repeated.
+    esc(p.name) + (p.pos && !(p.pos === 'D/ST' && String(p.name || '').slice(-4) === 'D/ST') ? '<em>' + esc(p.pos) + '</em>' : '') + '</span>';
 }
 
 function txTeam(t) {
@@ -840,6 +861,48 @@ if (INITIAL) { LAST_STATUS = INITIAL; paint(INITIAL); } else loadStatus();
 if (BOARD) { paintBoard(BOARD); lastBoardAt = Date.now(); } else loadBoard();
 ${idleAwarePoller('loadStatus', 15000)}
 
+/* Week 6 (F2, PD21): the data banner's times in the reader's zone, and Dismiss with the Admin Password. */
+(function () {
+  var bar = document.getElementById('databanner');
+  if (!bar) return;
+  function stampText(iso) {
+    return (typeof window.fmtDateTime === 'function' && window.fmtDateTime(iso)) || new Date(iso).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+  }
+
+  function paint() {
+    var ts = bar.querySelectorAll('time.dbtime');
+    for (var i = 0; i < ts.length; i++) ts[i].textContent = stampText(ts[i].getAttribute('datetime'));
+  }
+  paint();
+  window.addEventListener('tzchange', paint);
+  var pop = document.getElementById('dbpop'), btn = document.getElementById('dbDismiss');
+  if (!pop || !btn) return;
+  var pw = document.getElementById('dbPw'), err = document.getElementById('dbErr'), go = document.getElementById('dbGo');
+  function say(t) { err.textContent = t; err.hidden = !t; }
+  function open() { pop.hidden = false; say(''); pw.value = ''; pw.focus({ preventScroll: true }); }
+  function close() { pop.hidden = true; btn.focus({ preventScroll: true }); }
+  btn.addEventListener('click', open);
+  document.getElementById('dbCancel').addEventListener('click', close);
+  pop.addEventListener('click', function (e) { if (e.target === pop) close(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !pop.hidden) close(); });
+  pw.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+  go.addEventListener('click', submit);
+  function submit() {
+    if (!pw.value) { say('Type the Admin Password first.'); return; }
+    go.disabled = true;
+    fetch('/api/admin/data-banner-dismiss', { method: 'POST', credentials: 'same-origin',
+      headers: { 'content-type': 'application/json', 'x-admin-password': pw.value }, body: '{}' })
+      .then(function (r) {
+        go.disabled = false;
+        if (r.ok) { pop.hidden = true; bar.remove(); return; }
+        if (r.status === 403) { say('That password isn’t right. Nothing was changed.'); pw.select(); return; }
+        if (r.status === 429) { say('Too many attempts. Try again in a few minutes.'); return; }
+        say('That didn’t go through. Nothing was changed; try again in a minute.');
+      })
+      .catch(function () { go.disabled = false; say('That didn’t go through. Nothing was changed; try again in a minute.'); });
+  }
+})();
+
 /* The update notice, shown once per browser per version.
  *
  * There is no per-member identity on this site — one shared League Password —
@@ -890,5 +953,38 @@ ${idleAwarePoller('loadStatus', 15000)}
   if (seen === null || seen === undefined) { remember(); return; }
   if (seen === VERSION) return;
   open();
+})();
+
+/* Week 6 (P9): the note from the Site Admin, once per browser per note. Unlike the update notice, a first visit sees
+   it too: a note is news for everyone. It waits while the update notice is open, then shows. Dismissal is wired
+   before anything decides whether to open. */
+(function () {
+  var pop = document.getElementById('notepop');
+  if (!pop) return;
+  var ID = pop.getAttribute('data-note') || '';
+  var KEY = 'eft_seen_note';
+  var back = null;
+  function close() {
+    pop.hidden = true;
+    try { window.localStorage.setItem(KEY, ID); } catch (e) {}
+    if (back && back.focus) back.focus({ preventScroll: true });
+  }
+  var done = document.getElementById('noteDone');
+  if (done) done.addEventListener('click', close);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !pop.hidden) close(); });
+  pop.addEventListener('click', function (e) { if (e.target === pop) close(); });
+  var seen = null;
+  try { seen = window.localStorage.getItem(KEY); } catch (e) { return; }
+  if (seen === ID) return;
+  function show() {
+    var up = document.getElementById('updatepop');
+    if (up && !up.hidden) { setTimeout(show, 400); return; }
+    back = document.activeElement;
+    pop.hidden = false;
+    var pane = pop.querySelector('.vscroll'); if (pane) pane.scrollTop = 0;
+    window.dispatchEvent(new Event('resize'));
+    if (done) done.focus({ preventScroll: true });
+  }
+  setTimeout(show, 0);
 })();`;
 }
