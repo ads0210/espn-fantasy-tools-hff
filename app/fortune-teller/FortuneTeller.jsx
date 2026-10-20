@@ -1,13 +1,16 @@
 import ScrollBox from "../shared/ScrollBox.jsx";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { PALETTES, BASE_CSS, BACKDROP, TEAM_COOKIE, THEME_COOKIE } from "../../src/ui.js";
+import { PALETTES, BASE_CSS, BACKDROP, TEAM_COOKIE, THEME_COOKIE, pts2 } from "../../src/ui.js";
 import TeamSelect from "../shared/TeamSelect.jsx";
 import Instructions from "../shared/Instructions.jsx";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
 import { CHROME_CSS, FT_CSS } from "./css.js";
 import { DIGITS, ordinal, blockOf, classify, placeLabel, standings, brackets, pct } from "./engine.js";
-import { espnPoints, seedOrder } from "./history.js";
+import { espnPoints, seedOrder, leagueEspnSeries, leagueSimSeries } from "./history.js";
+import { LeagueOddsRow, teamInfo } from "./LeagueOdds.jsx";
+import { LINEHOVER_CSS } from "../shared/linehover.js";
+import { teamColourCss } from "../shared/teamcolours.js";
 import { isFinal, finalOrder, finalOdds, flattenStandings, definiteBlock } from "./final.js";
 import { makeCounter } from "./counting.js";
 import { encodeShare, decodeShare, datasetTag } from "./sharelink.js";
@@ -26,7 +29,8 @@ const DUR = 320, EASE = "cubic-bezier(.65,0,.35,1)";
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 function readCookie(name) { try { const m = new RegExp("(?:^|; )" + name + "=([^;]*)").exec(document.cookie); return m ? decodeURIComponent(m[1]) : ""; } catch (e) { return ""; } }
 function writeCookie(name, value) { try { document.cookie = name + "=" + encodeURIComponent(value) + "; path=/; max-age=31536000; samesite=lax"; } catch (e) { /* this visit only */ } }
-const fmtPts = (v) => v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Week 6 (PD38): the shared two-decimal formatter.
+const fmtPts = (v) => pts2(v);
 const stillness = () => document.documentElement.classList.contains("stillness") || (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 const oddsCls = (v) => (v >= 0.5 ? "in" : v >= 0.05 ? "cut" : "out");
 const recStr = (r) => `${r.w}-${r.l}${r.t ? "-" + r.t : ""}`;
@@ -193,10 +197,10 @@ function Chrome({ leagueName, children }) {
   const [showSettings, setShowSettings] = useState(false);
   const [showInstr, setShowInstr] = useState(false);
   const gearRef = useRef(null);
-  useEffect(() => { document.documentElement.dataset.theme = theme; writeCookie(THEME_COOKIE, theme); }, [theme]);
+  // The theme is put on the page by the shared settings control (week 6, F4).
   return (
     <React.Fragment>
-      <style dangerouslySetInnerHTML={{ __html: `${PALETTES}\n${BASE_CSS}\n${CHROME_CSS}\n${FT_CSS}` }} />
+      <style dangerouslySetInnerHTML={{ __html: `${PALETTES}\n${BASE_CSS}\n${CHROME_CSS}\n${FT_CSS}\n${teamColourCss()}\n${LINEHOVER_CSS}` }} />
       <div dangerouslySetInnerHTML={{ __html: BACKDROP }} />
       <div className="wrap">
         <div className="toolhead">
@@ -306,7 +310,7 @@ function Preview({ data }) {
           <div className="stats">
             <div className="stat"><span>Current place</span><b>{ordinal(byRank.indexOf(ti) + 1)}</b></div>
             <div className="stat"><span>Record</span><b>{recStr(me)}</b></div>
-            <div className="stat"><span>Points for</span><b>{me.pf.toFixed(1)}</b></div>
+            <div className="stat"><span>Points for</span><b>{pts2(me.pf)}</b></div>
           </div>
         </div>
         <div className="panel finpanel chartonly ftin" style={{ "--d": "80ms" }}>
@@ -315,11 +319,22 @@ function Preview({ data }) {
         </div>
       </div>
 
+      {/* Week 6 (N1): every team's ESPN odds; the simulated chart joins it once the map exists. */}
+      <LeagueOddsRow espn={leagueEspnSeries(data.espnHistory, teams.map((t) => t.id), { current: { week: pv.weeksPlayed || 0, byId: Object.fromEntries(teams.map((t) => [t.id, t.playoffPct])) } })}
+        teams={teamInfo(teams)} me={me.id} />
+
       <div className="sechead"><span className="t">The map</span><span className="rule" /><span className="count">every way the season can go</span></div>
       <NotReady p={data.pipeline} />
 
       <div className="sechead"><span className="t">Standings</span><span className="rule" /><span className="count">as they stand</span></div>
-      <div className="panel ftin">
+      <div className="panel stpanel ftin">
+        {/* Week 6 (N1, PD2): the same two modes as the live page; the second opens with the map. */}
+        <div className="panelhead"><span className="t">Standings</span><span className="count">live</span>
+          <span className="stmodes" role="radiogroup" aria-label="Standings shown">
+            <button type="button" role="radio" className="stmode on" aria-checked="true">Live</button>
+            <button type="button" role="radio" className="stmode" aria-checked="false" disabled>With selected outcomes</button>
+            <em className="stmodehint">Opens with the map</em>
+          </span></div>
         <ScrollBox>
           <table className="datatable ftst">
             <thead><tr><th className="c-rank"><span className="lbl">Place</span></th><th className="col-team"><span className="lbl">Team</span></th><th className="c-key"><span className="lbl">Record</span></th><th className="c-num"><span className="lbl">PF</span></th><th className="c-num"><span className="lbl">Playoff%</span></th></tr></thead>
@@ -330,7 +345,7 @@ function Preview({ data }) {
                     <td className="c-rank">{seed <= 3 ? <span className={"medal " + ["g", "s", "b"][seed - 1]} title={ordinal(seed)}>{seed}</span> : seed}</td>
                     <td className="col-team"><div className="stname"><TeamLogo src={t.logo} alt="" className="tklogo" /><div className="stnamewrap"><b>{t.name}</b></div></div></td>
                     <td className="c-key">{recStr(t)}</td>
-                    <td className="c-num">{t.pf.toFixed(1)}</td>
+                    <td className="c-num">{pts2(t.pf)}</td>
                     <td className="c-num">{espnCell(t.playoffPct)}</td>
                   </tr>
                   {seed === places && seed < n ? <tr className="porow" aria-hidden="true"><td colSpan={5}><span><i />Playoffs</span></td></tr> : null}
@@ -420,7 +435,7 @@ function FinalView({ data, onReplay }) {
           <div className="finalres"><b className={"fplace " + (made ? "in" : "out")}>{ordinal(place + 1)}</b><span>of {n}</span>{flag(made)}</div>
           <div className="stats">
             <div className="stat"><span>Record</span><b>{recStr(me)}</b></div>
-            <div className="stat"><span>Points for</span><b>{me.fpf.toFixed(1)}</b></div>
+            <div className="stat"><span>Points for</span><b>{pts2(me.fpf)}</b></div>
             <div className="stat"><span>{made ? "Playoff seed" : "Finished"}</span><b>{made ? place + 1 : ordinal(place + 1)}</b></div>
           </div>
         </div>
@@ -429,6 +444,12 @@ function FinalView({ data, onReplay }) {
           <OddsByWeek points={pts} k={`fin:${ti}`} nowLabel="Final" note={pts.length < 3 ? "ESPN's odds are kept after every week, so earlier seasons show more of the line." : null} />
         </div>
       </div>
+
+      {/* Week 6 (N1): both league charts over the whole regular season. */}
+      <LeagueOddsRow final nowLabel="Final" me={me.id}
+        espn={leagueEspnSeries(data.espnHistory, teams.map((t) => t.id))}
+        sim={tree ? leagueSimSeries(data.teams, data.trims, (tr) => finalOdds(data, tr)) : null}
+        teams={teamInfo((data.standingsNow && data.standingsNow.teams) || (data.preview && data.preview.teams) || teams)} />
 
       <div className="sechead"><span className="t">Final standings</span><span className="rule" /><span className="count">the regular season</span></div>
       <div className="panel ftin">
@@ -442,7 +463,7 @@ function FinalView({ data, onReplay }) {
                     <td className="c-rank">{seed <= 3 ? <span className={"medal " + ["g", "s", "b"][seed - 1]} title={ordinal(seed)}>{seed}</span> : seed}</td>
                     <td className="col-team"><div className="stname"><TeamLogo src={t.logo} alt="" className="tklogo" /><div className="stnamewrap"><b>{t.name}</b></div></div></td>
                     <td className="c-key">{recStr(t)}</td>
-                    <td className="c-num">{t.fpf.toFixed(1)}</td>
+                    <td className="c-num">{pts2(t.fpf)}</td>
                     <td className="c-num">{flag(inn)}</td>
                   </tr>
                   {seed === places && seed < n ? <tr className="porow" aria-hidden="true"><td colSpan={5}><span><i />Playoffs</span></td></tr> : null}
@@ -593,6 +614,13 @@ function Live({ data, loadMap, boot, live, replay }) {
   const simNow = decided
     ? (() => { const o = new Array(data.teams.length).fill(0); st.blocks.flatMap((b) => b.members).forEach((m, k) => { if (k < places) o[m] = 1; }); return o; })()
     : (trim && Array.isArray(trim.odds) ? trim.odds : null);
+  // Week 6 (N1, PD2): the Standings panel's mode follows the map's selections until switched by hand.
+  const liveRows = data.standingsNow && Array.isArray(data.standingsNow.teams) && data.standingsNow.teams.length
+    ? data.standingsNow.teams.slice().sort((a, b) => (a.rank || 99) - (b.rank || 99)) : null;
+  const picksKey = (() => { let k = ""; for (let j = trim.fixed; j < G; j++) k += pins[j] < 0 ? "." : pins[j]; return k; })();
+  const [stMode, setStMode] = useState(() => (picks || !liveRows ? "path" : "live"));
+  useEffect(() => { setStMode(picks || !liveRows ? "path" : "live"); }, [picksKey]);
+  const stShown = !liveRows ? "path" : stMode;
   const myBlock = { start: myRow.block.start, size: myRow.block.size };
   const myCls = classify(myBlock, places);
   let fin = base.total.slice(2), paths = base.total[0], odds = base.total[1] / paths;
@@ -852,7 +880,7 @@ function Live({ data, loadMap, boot, live, replay }) {
           {mine ? <span className="tag mine">Your game</span> : null}
           {biggest && biggest.j === j && f.relevant ? <span className="tag big">Biggest game on this path{biggest.root ? <React.Fragment> · root for <strong>{biggest.root}</strong></React.Fragment> : null}</span> : null}
           {!settled
-            ? <span className="tag proj">Projected winner <strong>{g.projA >= g.projB ? g.aName : g.bName}</strong> {Math.max(g.projA, g.projB).toFixed(1)}–{Math.min(g.projA, g.projB).toFixed(1)}</span>
+            ? <span className="tag proj">Projected winner <strong>{g.projA >= g.projB ? g.aName : g.bName}</strong> {pts2(Math.max(g.projA, g.projB))}–{pts2(Math.min(g.projA, g.projB))}</span>
             : <span className="tag final">{fut.hp === fut.ap ? "Final · tied " : <React.Fragment>Final · <strong>{fut.hp > fut.ap ? g.aName : g.bName}</strong> won </React.Fragment>}{fmtPts(Math.max(fut.hp, fut.ap))}–{fmtPts(Math.min(fut.hp, fut.ap))}</span>}
           {changed ? <span className="tag wif">What-if</span> : null}
           {!settled && pins[j] >= 0 ? <span className="tag pin">Set by you</span> : null}
@@ -925,6 +953,12 @@ function Live({ data, loadMap, boot, live, replay }) {
         </div>
       </div>
 
+      {/* Week 6 (N1): every team's ESPN odds before the map's window, and the exact simulated odds inside it. */}
+      <LeagueOddsRow me={data.teams[ti].id} nowLabel={decided ? "Final" : "Now"}
+        espn={leagueEspnSeries(data.espnHistory, data.teams.map((t) => t.id), { current: data.standingsNow ? { week: data.standingsNow.weeksPlayed || 0, byId: Object.fromEntries(data.standingsNow.teams.map((t) => [t.id, t.playoffPct])) } : null })}
+        sim={leagueSimSeries(data.teams, data.trims.slice(0, trimIdx + 1), (tr) => finalOdds(data, tr))}
+        teams={teamInfo((data.standingsNow && data.standingsNow.teams) || data.teams)} />
+
       <div className="sechead ftin" style={{ "--d": "200ms" }}><span className="t">The map</span><span className="rule" /><span className="count">weeks {weeks[0]}–{weeks[weeks.length - 1]} · {cur.total[0] === 1 ? "1 path" : `${cur.total[0].toLocaleString()} paths`}</span></div>
       <div className="ctlbar ftin" style={{ "--d": "240ms" }}>
         {trim.fixed < data.games.length ? (
@@ -983,9 +1017,37 @@ function Live({ data, loadMap, boot, live, replay }) {
         </div>
 
         <aside className="panel stpanel ftin" style={{ "--d": "300ms" }}>
-          <div className="panelhead"><span className="t">Final standings</span><span className="count">on this path</span>
+          {/* Week 6 (N1, PD2): one Standings panel with two modes. It follows the map (an outcome picked shows the
+              final standings that result; nothing picked shows them live) until switched by hand. */}
+          <div className="panelhead"><span className="t">Standings</span><span className="count">{stShown === "live" ? "live" : "with the outcomes you picked"}</span>
+            <span className="stmodes" role="radiogroup" aria-label="Standings shown">
+              <button type="button" role="radio" className={"stmode" + (stShown === "live" ? " on" : "")} aria-checked={stShown === "live"} disabled={!liveRows} onClick={() => setStMode("live")}>Live</button>
+              <button type="button" role="radio" className={"stmode" + (stShown === "path" ? " on" : "")} aria-checked={stShown === "path"} onClick={() => setStMode("path")}>With selected outcomes</button>
+            </span>
             <button className="sttoggle" type="button" aria-expanded={String(stOpen)} aria-label={stOpen ? "Hide standings" : "Show standings"} onClick={() => setStOpen(!stOpen)}><i /></button></div>
-          <div className="stbody" hidden={!stOpen}>
+          <div className="stbody" hidden={!stOpen || stShown !== "live"}>
+            {liveRows ? (
+            <ScrollBox>
+            <table className="datatable ftst">
+              <thead><tr><th className="c-rank"><span className="lbl">Place</span></th><th className="col-team"><span className="lbl">Team</span></th><th className="c-key"><span className="lbl">Record</span></th><th className="c-num"><span className="lbl">PF</span></th><th className="c-num"><span className="lbl">Playoff%</span></th><th className="c-num"><span className="lbl">Sim%</span></th></tr></thead>
+              <tbody>
+                {liveRows.map((t, k) => { const seed = k + 1, i = data.teams.findIndex((x) => x.id === t.id); return (
+                  <React.Fragment key={t.id}>
+                    <tr className={(t.id === data.teams[ti].id ? "me" : "") + (seed <= places ? " po" : "")}>
+                      <td className="c-rank">{seed <= 3 ? <span className={"medal " + ["g", "s", "b"][seed - 1]} title={ordinal(seed)}>{seed}</span> : seed}</td>
+                      <td className="col-team"><div className="stname"><TeamLogo src={t.logo || (data.teams[i] && data.teams[i].logo)} alt="" className="tklogo" /><div className="stnamewrap"><b>{t.name}</b></div></div></td>
+                      <td className="c-key">{`${t.w}-${t.l}${t.t ? `-${t.t}` : ""}`}</td>
+                      <td className="c-num">{pts2(t.pf)}</td>
+                      <td className="c-num">{simCell(t.playoffPct)}</td>
+                      <td className="c-num">{simCell(i >= 0 && simNow ? simNow[i] : null)}</td>
+                    </tr>
+                    {seed === places && seed < n ? <tr className="porow" aria-hidden="true"><td colSpan={6}><span><i />Playoffs</span></td></tr> : null}
+                  </React.Fragment>); })}
+              </tbody>
+            </table>
+            </ScrollBox>) : null}
+          </div>
+          <div className="stbody" hidden={!stOpen || stShown !== "path"}>
             {tiesOnPath.length ? (
               <div className="tiecall">
                 <div className="tctop"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 4v12M16 4v12M4 10h12" /></svg><b>{tiesOnPath.length === 1 ? "1 tie" : tiesOnPath.length + " ties"} on record</b></div>
