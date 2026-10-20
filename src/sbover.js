@@ -306,6 +306,7 @@ export const OVERVIEW = [
           ['Sign-ins', C.n(c("AND text = 'Signed in'").n, `${c("AND text = 'Sign-in failed'").n} failed`)],
           ['Admin actions', C.n(c("AND kind = 'admin'").n)],
           ['Exports and shares', C.n(c("AND kind = 'operation'").n)],
+          ['Browser errors', C.n(c("AND kind = 'error'").n)],
         ]),
         ...(changes.length ? [B.sub('Changes of state'), { t: 'feed', compact: true, items: feedRows(changes, []) }] : []),
         { t: 'seen' },
@@ -611,6 +612,43 @@ export const DATA_LAYER = [
     },
     body: async (src, ctx) => [{ t: 'datasets', rows: ctx.rows, param: await paramRows(src) }],
   }),
+  P('dl-check', 'Hourly check', {
+    sub: 'Every dataset ESPN serves, asked once an hour (one a minute), and each host\'s answers over the last 24 hours', live: true,
+    sum: async (src, ctx) => {
+      const raw = ctx.rows.filter((r) => !r.derivedFrom), down = raw.filter((r) => r.streak >= 3);
+      const rec = (await src.dataCheck()) || {};
+      const shown = down.filter((r) => { const e = (rec.datasets || {})[r.key]; return e && (!rec.dismissedAt || e.raisedAt > rec.dismissedAt); });
+      if (!down.length) return ['ok', `${raw.length} datasets, all answering`];
+      return [shown.length ? 'bad' : 'warn', `${down.length} not answering${shown.length ? ', on the home page' : ', banner dismissed'}`];
+    },
+    body: async (src, ctx) => {
+      const rec = (await src.dataCheck()) || {};
+      const raw = ctx.rows.filter((r) => !r.derivedFrom), since = src.now - 86400000;
+      const down = raw.filter((r) => r.streak >= 3);
+      const shown = down.filter((r) => { const e = (rec.datasets || {})[r.key]; return e && (!rec.dismissedAt || e.raisedAt > rec.dismissedAt); });
+      const hosts = {};
+      for (const r of raw) {
+        const h = hosts[r.host || 'unknown'] || (hosts[r.host || 'unknown'] = { host: r.host || 'unknown', n: 0, asked: 0, ok: 0, bad: 0, signin: 0, lastBad: null, down: 0 });
+        h.n += 1; if (r.streak >= 3) h.down += 1;
+        for (const c of r.checks || []) {
+          if (c.at < since) continue;
+          h.asked += 1;
+          if (c.ok === true) h.ok += 1; else if (c.ok === false) { h.bad += 1; if (!h.lastBad || c.at > h.lastBad) h.lastBad = c.at; } else h.signin += 1;
+        }
+      }
+      const list = Object.values(hosts).sort((a, b) => b.n - a.n || a.host.localeCompare(b.host));
+      return [B.kv([
+        ['Home page banner', shown.length ? C.pill('bad', 'showing', `${shown.length} dataset${shown.length === 1 ? '' : 's'}`) : down.length ? C.pill('warn', 'dismissed', rec.dismissedAt ? null : null) : C.txt('not showing')],
+        ['Dismissed for everyone', rec.dismissedAt ? C.time(rec.dismissedAt) : C.txt('never')],
+        ['Not answering, three checks in a row', down.length ? C.txt(down.map((r) => r.key).join(', '), null, 'bad') : C.txt('none')],
+        ['Checks in the last 24 hours', C.n(list.reduce((a, h) => a + h.asked, 0))],
+      ]),
+      B.sub('Each host, last 24 hours'),
+      B.table([['Host'], ['Datasets', 'n'], ['Checks', 'n'], ['Answered', 'n'], ['Failed', 'n'], ['Sign-in refused', 'n'], ['Last failure', 'n']],
+        list.map((h) => B.row([C.code(h.host), C.n(h.n), C.n(h.asked), C.n(h.ok), h.bad ? C.txt(String(h.bad), null, 'warn') : C.n(0), C.n(h.signin), h.lastBad ? C.time(h.lastBad) : C.txt('—')], h.down ? 'bad' : h.bad ? 'warn' : null))),
+      B.note('A dataset that fails three checks in a row raises "Some league data can\'t be reached" on the home page, for every member; whoever administers the site can dismiss it there with the Admin Password, and it stays dismissed until a check fails three times in a row again. A refused ESPN sign-in is left to the sign-in banner. Each dataset\'s last 24 checks are its Reachable marks in Every dataset.')];
+    },
+  }),
   P('dl-coord', 'Coordinators', {
     sub: 'Each dataset\'s coordinator today: refreshes asked for, joined and fetched, failures and time', live: true,
     sum: async (src) => {
@@ -673,6 +711,9 @@ async function cronBody(src, ctx) {
     [C.dot('ok', 'Fortune Teller check'), 'every 15 minutes', C.time(lastFt), C.txt(lastFt ? (ctx.ticks[lastFt].ft.state || 'checked') : 'not run in the last hour'), C.time(m15 + 900000), lastFt ? C.dur(ctx.ticks[lastFt].ft.ms || 0) : '—'],
     [C.dot(nd.ran ? 'run' : 'idle', 'Fortune Teller build nudge'), 'every minute while a build runs', C.time(ctx.lastTick), C.txt(nd.result || '—'), C.time(minute + 60000), nd.ms != null ? C.dur(nd.ms) : '—'],
     [C.dot('ok', 'Site log tick'), 'every minute', C.time(ctx.lastTick), C.txt('recorded'), C.time(minute + 60000), '—'],
+    (() => { const ks = Object.keys(ctx.ticks).map(Number).sort((a, b) => b - a); const k = ks.find((x) => ctx.ticks[x] && ctx.ticks[x].check && ctx.ticks[x].check.key);
+      const c = k ? ctx.ticks[k].check : null;
+      return [C.dot(c && c.ok === false ? 'warn' : 'ok', 'Data check'), 'one dataset a minute, each hourly', C.time(k || null), C.txt(c ? `${c.key}: ${c.rested ? 'rested (brake)' : c.ok === true ? 'answered' : c.ok === false ? `${c.kind}, ${c.streak} in a row` : c.kind}` : 'not run in the last hour', null, c && c.ok === false ? 'warn' : null), C.time(minute + 60000), c && c.ms != null ? C.dur(c.ms) : '—']; })(),
   ];
   const cells = [];
   for (let i = 59; i >= 0; i--) { const m = minute - i * 60000; const st = tickState(ctx, m, now); cells.push({ at: new Date(m).toISOString(), s: st === 'pending' ? 'none' : st }); }
