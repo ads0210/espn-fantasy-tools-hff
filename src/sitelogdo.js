@@ -26,6 +26,7 @@ import { meteredEnv } from './sitelog.js';
 import { BYTE_BUDGET } from './scoretimeline.js';
 import { levelFrom, BRAKE_OF, BRAKE_WORDS, LIMIT_WORDS } from './budget.js';
 import { likelyTeams } from './sources.js';
+import { visitWindow, VISIT_HOURLY_DAYS, NO_TEAM } from '../app/site-backend/visits.js';
 const LEVEL_RANK = { quiet: 0, normal: 1, busy: 2, verybusy: 3, resting: 4 };
 
 export const LOG_BUDGET = LOG_BUDGET_REF;
@@ -200,13 +201,83 @@ export class SiteLogDO {
       CREATE INDEX IF NOT EXISTS events_page ON events(page, id);
       CREATE TABLE IF NOT EXISTS hours (hour INTEGER PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, hour INTEGER NOT NULL, sub TEXT, sev TEXT, text TEXT);
-      CREATE INDEX IF NOT EXISTS reports_hour ON reports(hour);`);
+      CREATE INDEX IF NOT EXISTS reports_hour ON reports(hour);
+      CREATE TABLE IF NOT EXISTS visits (b INTEGER NOT NULL, d INTEGER NOT NULL, page TEXT NOT NULL, team INTEGER NOT NULL,
+        n INTEGER NOT NULL, PRIMARY KEY (b, d, page, team)) WITHOUT ROWID;`);
     const m = this.sql.exec("SELECT v FROM meta WHERE k = 'meter'").toArray()[0];
     try { this.meter = m ? JSON.parse(m.v) : null; } catch { this.meter = null; }
     if (!this.sql.exec("SELECT v FROM meta WHERE k = 'schema'").toArray()[0]) {
       this.sql.exec("INSERT INTO meta (k, v) VALUES ('schema', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", String(SCHEMA));
     }
     this.ready = true;
+    this.backfillVisits();
+  }
+
+  // ---------------------------------------------------------------- visits over time (week 6, N7)
+
+  /**
+   * Once per store: the rollup starts from the visits already in the last 8 days of events (read by the time index,
+   * never the whole table), and says from when it counts. Skipped, starting from now, while the reads rest.
+   */
+  backfillVisits() {
+    if (this.getMeta('visitsSince', null) != null) return;
+    const now = Date.now(), from = now - VISIT_HOURLY_DAYS * 86400000;
+    let since = now;
+    if (this.readTier() === 0) {
+      this.transaction(() => {
+        this.run(`INSERT INTO visits (b, d, page, team, n)
+          SELECT (at / 3600000) * 3600000, 0, page, COALESCE(team, 0), SUM(n) FROM events
+          WHERE at >= ? AND kind = 'visit' AND page IS NOT NULL GROUP BY 1, 3, 4
+          ON CONFLICT (b, d, page, team) DO UPDATE SET n = n + excluded.n`, from);
+        const r = this.one("SELECT MIN(b) AS b FROM visits WHERE d = 0");
+        since = r && r.b != null ? r.b : now;
+      });
+    }
+    this.setMeta('visitsSince', since);
+  }
+
+  /** One visit into its hour's row. Counted even past the day's cap on stored events: a count is one small row. */
+  countVisit(at, page, team) {
+    this.run(`INSERT INTO visits (b, d, page, team, n) VALUES (?, 0, ?, ?, 1)
+      ON CONFLICT (b, d, page, team) DO UPDATE SET n = n + 1`, hourOf(at), String(page).slice(0, 40), team == null ? NO_TEAM : team);
+    this.visitMemo = null;
+  }
+
+  /** Hours older than 8 days become one row per UTC day (a few days per tick at most, oldest first). */
+  condenseVisits(now = Date.now()) {
+    const cutoff = Math.floor(now / 86400000) * 86400000 - VISIT_HOURLY_DAYS * 86400000;
+    for (let k = 0; k < 3; k++) {
+      const r = this.one('SELECT MIN(b) AS b FROM visits WHERE d = 0');
+      if (!r || r.b == null || r.b >= cutoff) return;
+      const d0 = Math.floor(r.b / 86400000) * 86400000, d1 = d0 + 86400000;
+      this.run(`INSERT INTO visits (b, d, page, team, n)
+        SELECT ?, 1, page, team, SUM(n) FROM visits WHERE d = 0 AND b >= ? AND b < ? GROUP BY page, team
+        ON CONFLICT (b, d, page, team) DO UPDATE SET n = n + excluded.n`, d0, d0, d1);
+      this.run('DELETE FROM visits WHERE d = 0 AND b >= ? AND b < ?', d0, d1);
+      this.visitMemo = null;
+    }
+  }
+
+  /**
+   * The rows a range's chart needs, as [bucket, page, team, n]. Rests from the second read tier like the other
+   * panels built from the log; answered from memory for a minute (hourly ranges) or five (daily), so a page polling
+   * every 15 seconds reads the rollup a few times an hour at most.
+   */
+  visitSeries(range, now = Date.now()) {
+    const tier = this.readTier();
+    if (tier >= 2) throw this.restError(tier);
+    const memo = (this.visitMemo = this.visitMemo || {});
+    const hit = memo[range];
+    if (hit && now - hit.at < (hit.out.hourly ? 60000 : 300000)) return hit.out;
+    const first = range === 'season' ? (this.one('SELECT MIN(b) AS b FROM visits') || {}).b : null;
+    const w = visitWindow(range, now, first == null ? null : first);
+    const rows = w.hourly
+      ? this.run('SELECT b AS t, page, team, n FROM visits WHERE d = 0 AND b >= ?', w.from)
+      : this.run(`SELECT CASE WHEN d = 0 THEN (b / 86400000) * 86400000 ELSE b END AS t, page, team, SUM(n) AS n
+          FROM visits WHERE b >= ? GROUP BY 1, 2, 3`, w.from);
+    const out = { ...w, since: this.getMeta('visitsSince', null), rows: rows.map((r) => [r.t, r.page, r.team, r.n]) };
+    memo[w.range] = { at: now, out };
+    return out;
   }
 
   getMeta(k, fallback = null) {
@@ -337,6 +408,7 @@ export class SiteLogDO {
   insertEvent(e) {
     const at = Number(e.at) || Date.now();
     const team = e.team == null ? null : Number(e.team);
+    if (e.kind === 'visit' && e.page) this.countVisit(at, e.page, team);
     if (e.kind === 'sign-in' && e.text === 'Session lapsed') {
       // Asked of the table by its time index, which reads only this hour's entries: never the whole window.
       if (this.one("SELECT 1 AS x FROM events WHERE at >= ? AND kind = 'sign-in' AND text = 'Session lapsed' AND team IS ? LIMIT 1", hourOf(at), team)) return;
@@ -627,6 +699,7 @@ export class SiteLogDO {
       this.noteLogos(t.jobs && t.jobs.logos);
       this.noteTimeline(t.jobs && t.jobs.timeline);
       this.noteVersion(body.version);
+      if (minute % 3600000 === 0 || this.visitsCondensed == null) { this.condenseVisits(at); this.visitsCondensed = minute; }
       const lastReport = this.getMeta('lastReportHour', null);
       if (lastReport == null) this.setMeta('lastReportHour', hour);
       else if (hour > lastReport) { reportHour = hour - 3600000; this.setMeta('lastReportHour', hour); }
@@ -736,7 +809,8 @@ export class SiteLogDO {
       return { ok: true, counted: false };
     }
     this.transaction(() => {
-      this.insertEvent({ at: now, kind: body.limit ? 'change' : 'operation', sev: body.limit ? 'bad' : 'info', text: body.text, page: body.page, team: body.team });
+      // A browser's error report (P3) is a warning of its own kind, so the Activity tab can show only those.
+      this.insertEvent({ at: now, kind: body.limit ? 'change' : body.error ? 'error' : 'operation', sev: body.limit ? 'bad' : body.error ? 'warn' : 'info', text: body.text, page: body.page, team: body.team });
       // The cutoff's record (C6): when pages first saw Cloudflare's limit page and when they were answered again,
       // for the home page's note the next day. The earliest sighting in the last day is kept.
       if (body.limit) {
@@ -776,6 +850,7 @@ export class SiteLogDO {
         return this.recent();
       },
       pace: () => this.paceUsage(),
+      visits: (range) => this.visitSeries(range),
     };
   }
 
