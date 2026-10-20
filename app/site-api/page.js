@@ -1,3 +1,4 @@
+import { dateText } from "../../src/ui.js";
 /**
  * Site API page: every section as the design sample drew it.
  *
@@ -179,9 +180,9 @@ function fmtAt(ms, o) {
   catch (e) { return new Date(ms).toISOString(); }
 }
 function timeOf(ms) { return fmtAt(ms, { hour: 'numeric', minute: '2-digit' }); }
-function dateOf(ms) { return fmtAt(ms, { month: 'short', day: 'numeric', year: 'numeric' }); }
+function dateOf(ms) { return dateText(ms, zone(), { year: true }); }   // week 6 (A8): the site's one date style
 function dayOf(ms) { return fmtAt(ms, { weekday: 'short', month: 'short', day: 'numeric' }); }
-function stamp(ms) { return fmtAt(ms, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }); }
+function stamp(ms) { return dateText(ms, zone()) + ' \u00b7 ' + timeOf(ms); }   // week 6 (A8)
 function iso(ms) { return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z'); }
 function ago(ms) {
   var s = Math.max(0, Math.round((Date.now() - ms) / 1000));
