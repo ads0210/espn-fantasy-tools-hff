@@ -10,6 +10,11 @@ It pulls your league's live and historical data from ESPN, keeps it cached on
 Cloudflare's edge, and puts a set of tools behind a single password you share
 with your league. Nobody without that password sees anything at all.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-overview-dark.svg">
+  <img alt="Setup in eleven steps: your GitHub fork, your Cloudflare account, the deploy, then the wizard on your new site" src="docs/images/setup-overview-light.svg">
+</picture>
+
 It runs entirely on Cloudflare's free tier. Setup is a fork, two storage
 containers, and a short wizard on the site itself — there is no code to write
 and nothing to configure in the Cloudflare dashboard beyond creating those two
@@ -38,6 +43,11 @@ Budget about twenty minutes.
 
 ### 1. Fork the repository
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-step-1-dark.svg">
+  <img alt="Step 1 of 11: Fork" src="docs/images/setup-step-1-light.svg">
+</picture>
+
 Sign in to GitHub, open the **espn-fantasy-tools** repository, click **Fork**,
 and create the fork under your own account.
 
@@ -45,6 +55,11 @@ A fork is your own copy. You can change it freely, and you can pull in later
 improvements to the original without losing your settings.
 
 ### 2. Enable Actions on your fork
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-step-2-dark.svg">
+  <img alt="Step 2 of 11: Actions" src="docs/images/setup-step-2-light.svg">
+</picture>
 
 In your fork, open the **Actions** tab and click the button confirming you
 understand the workflows. Then, navigate to the "Sync with upstream" action
@@ -57,11 +72,21 @@ click **Sync fork**, then **Update branch**.
 
 ### 3. Create your Cloudflare account
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-step-3-dark.svg">
+  <img alt="Step 3 of 11: Account" src="docs/images/setup-step-3-light.svg">
+</picture>
+
 Go to Cloudflare and sign up. **Choose "Sign in with GitHub" and use the same
 GitHub account you just forked with** — it turns connecting the two in step 9
 into a single click instead of a permissions detour.
 
 ### 4. Turn on R2 storage
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-step-4-dark.svg">
+  <img alt="Step 4 of 11: R2" src="docs/images/setup-step-4-light.svg">
+</picture>
 
 In the Cloudflare dashboard go to **Storage & databases → R2 Object Storage**,
 add a card, and activate R2.
@@ -72,6 +97,11 @@ anti-abuse requirement, not a bill.
 
 ### 5. Set a spending alert
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-step-5-dark.svg">
+  <img alt="Step 5 of 11: Alert" src="docs/images/setup-step-5-light.svg">
+</picture>
+
 Still in Cloudflare, go to **Manage account → Billing → Billable Usage** and
 click **Create Budget Alert**. Set it to alert you when spending exceeds **$1**.
 
@@ -80,6 +110,11 @@ can switch things off long before it matters. Two minutes now for a permanent
 safety net.
 
 ### 6. Create the KV namespace
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-step-6-dark.svg">
+  <img alt="Step 6 of 11: KV" src="docs/images/setup-step-6-light.svg">
+</picture>
 
 Go to **Storage & databases → Workers KV** and click **Create Instance**. Name
 it:
@@ -96,6 +131,11 @@ as text), and your ESPN cookies. It is small, and it is private to your account.
 
 ### 7. Create the R2 bucket
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-step-7-dark.svg">
+  <img alt="Step 7 of 11: Bucket" src="docs/images/setup-step-7-light.svg">
+</picture>
+
 Go to **Storage & databases → R2 Object Storage** and click **Create bucket**.
 
 - **Name:** `espn-fantasy-tools-data`
@@ -105,6 +145,11 @@ Go to **Storage & databases → R2 Object Storage** and click **Create bucket**.
 Create it. This holds the ESPN data the site caches.
 
 ### 8. Point the code at your storage
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-step-8-dark.svg">
+  <img alt="Step 8 of 11: Point" src="docs/images/setup-step-8-light.svg">
+</picture>
 
 Back in GitHub, in **your fork**, open `wrangler.jsonc` and click the pencil
 icon at the top right to edit it. Two values change:
@@ -120,6 +165,11 @@ The name you choose becomes your web address:
 Click **Commit changes** to save.
 
 ### 9. Deploy
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-step-9-dark.svg">
+  <img alt="Step 9 of 11: Deploy" src="docs/images/setup-step-9-light.svg">
+</picture>
 
 In Cloudflare go to **Compute → Workers & Pages → Create application**, then:
 
@@ -137,6 +187,11 @@ The first build takes a couple of minutes.
 
 ### 10. Turn on your public address
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-step-10-dark.svg">
+  <img alt="Step 10 of 11: Address" src="docs/images/setup-step-10-light.svg">
+</picture>
+
 Once the build finishes, open your project and go to **Domains**. Enable the
 **Production URL**, disable the **Preview URL**, then copy the production
 address and open it in a new tab.
@@ -145,6 +200,11 @@ Disabling the preview URL matters: it is a second address pointing at the same
 site, and you only want one door.
 
 ### 11. Get your setup code and finish in the browser
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-step-11-dark.svg">
+  <img alt="Step 11 of 11: Wizard" src="docs/images/setup-step-11-light.svg">
+</picture>
 
 The site opens asking for a one-time setup code. That code is printed in your
 build log, and nowhere else.
@@ -164,6 +224,11 @@ you find a box like this:
 ==========================================================
 ```
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/wizard-dark.webp">
+  <img alt="The site asking for its one-time setup code" src="docs/images/wizard-light.webp" width="640">
+</picture>
+
 Enter that code on the site. The wizard takes it from there: two passwords,
 your ESPN league, which tools your league sees, and your league history.
 
@@ -178,6 +243,11 @@ address later can reconfigure your site.
 can use the site. The **Admin Password** is yours alone and unlocks Site
 Configuration. Write both down. Neither can be recovered, only replaced.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/wizard-2-dark.webp">
+  <img alt="The wizard's passwords step" src="docs/images/wizard-2-light.webp" width="640">
+</picture>
+
 **Your League ID.** Open your league on ESPN and look in the address bar for
 `leagueId=` followed by a number. That number, digits only.
 
@@ -191,6 +261,11 @@ like `%2B` that must stay exactly as they are, and `SWID` must keep its curly
 braces. The wizard tests both against ESPN before saving, so you will know
 straight away if something did not paste cleanly.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/wizard-3-dark.webp">
+  <img alt="The wizard's league step: League ID, league type and the two cookies" src="docs/images/wizard-3-light.webp" width="640">
+</picture>
+
 **Your tools.** Each tool can be visible to the league, admin-only (listed on the
 dashboard, but opened only with the Admin Password), or hidden. Every tool starts
 visible except Site Backend and Site API, which start admin-only.
@@ -202,6 +277,11 @@ runs. Once you start it, it runs to the end on its own: it paces itself, retries
 around any hiccup, and skips past anything it cannot fetch rather than stopping.
 You can skip it and run it later from Site Configuration.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/wizard-5-dark.webp">
+  <img alt="The wizard's last step: loading your league" src="docs/images/wizard-5-light.webp" width="640">
+</picture>
+
 ---
 
 ## After setup
@@ -211,6 +291,11 @@ dashboard and gated by your Admin Password. Change either password, replace your
 ESPN cookies if league data stops loading, set each tool to visible, admin-only
 or hidden, arrange the order of the dashboard's tiles, and re-run or resume the
 history pull.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/site-configuration-dark.webp">
+  <img alt="Site Configuration, with its panels" src="docs/images/site-configuration-light.webp">
+</picture>
 
 Site Backend shows how the site itself is running: its health, its data, its
 traffic and its logs. It starts admin-only, so it opens with the Admin Password.
@@ -231,6 +316,11 @@ tab ends admin access completely. That is deliberate.
 ---
 
 ## If something goes wrong
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-troubleshoot-dark.svg">
+  <img alt="Each problem and its fix" src="docs/images/setup-troubleshoot-light.svg">
+</picture>
 
 **The site says it cannot reach your league.** Your `espn_s2` cookie has most
 likely expired — ESPN rotates them. Sign in to ESPN again, copy both values
@@ -273,6 +363,11 @@ setup again. Your cached data in R2 is untouched.
 ---
 
 ## What it costs to run
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/setup-cost-dark.svg">
+  <img alt="What the free tier covers against what a league uses" src="docs/images/setup-cost-light.svg">
+</picture>
 
 Nothing, on a normal league. For scale: Cloudflare's free tier allows 100,000
 Worker requests a day, and a ten-person league refreshing all Sunday does not
