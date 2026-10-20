@@ -62,15 +62,15 @@ export function historySeasons(cfg) {
 }
 
 const FANTASY_HOST = 'https://lm-api-reads.fantasy.espn.com';
-// site.api.espn.com is behind Akamai bot protection that 403s all Cloudflare
-// Worker traffic. site.web.api.espn.com serves the identical /apis/site/v2/
-// namespace unprotected — verified live. espn.js keeps a bidirectional
-// fallback so a future flip of which edge is protected self-heals.
-const SITE_HOST = 'https://site.web.api.espn.com';
-const CORE_HOST = 'https://sports.core.api.espn.com';
-const CDN_HOST = 'https://cdn.espn.com';
-const NOW_HOST = 'https://now.core.api.espn.com';
-const WEB_HOST = 'https://site.web.api.espn.com';
+// Which of ESPN's two site edges answers Cloudflare Workers has flipped more
+// than once. Until October 2026 site.api.espn.com refused Workers and
+// site.web.api.espn.com answered; since then it is the other way round
+// (measured through /api/_dev/probe). The registry points at the edge that
+// answers so a request costs one subrequest, not two: the 32-part per-team
+// datasets broke the ~50-subrequest limit while every part paid for a refusal
+// first. espn.js keeps the bidirectional fallback so a future flip self-heals.
+const SITE_HOST = 'https://site.api.espn.com';
+const WEB_HOST = 'https://site.api.espn.com'; // common/v3 answers on the same edge
 
 /**
  * Fetch budgets for payloads that a flat 15 seconds does not cover.
@@ -93,7 +93,6 @@ const TIMEOUT = {
 const leagueBase = (cfg) =>
   `${FANTASY_HOST}/apis/v3/games/ffl/seasons/${cfg.season}/segments/0/leagues/${cfg.leagueId}`;
 
-const coreBase = () => `${CORE_HOST}/v2/sports/football/leagues/nfl`;
 const siteBase = () => `${SITE_HOST}/apis/site/v2/sports/football/nfl`;
 
 // X-Fantasy-Filter is REQUIRED on the bulk player endpoints, not optional.
@@ -343,24 +342,6 @@ export const DATASETS = [
     parts: (cfg) => [{ part: 'main', url: `${leagueBase(cfg)}?view=mStatus` }],
   },
   {
-    key: 'league_nav',
-    label: 'League nav metadata',
-    group: 'fantasy',
-    ttl: TTL.DAY,
-    auth: true,
-    tier: 'probe',
-    parts: (cfg) => [{ part: 'main', url: `${leagueBase(cfg)}?view=mNav` }],
-  },
-  {
-    key: 'player_watchlist',
-    label: 'Player watch-list / waiver-locked state',
-    group: 'fantasy',
-    ttl: TTL.MIN_5,
-    auth: true,
-    tier: 'probe',
-    parts: (cfg) => [{ part: 'main', url: `${leagueBase(cfg)}?view=player_wl` }],
-  },
-  {
     key: 'league_players',
     timeoutMs: TIMEOUT.LARGE,
     label: 'League-scoped player pool (with onTeamId)',
@@ -372,26 +353,6 @@ export const DATASETS = [
       {
         part: 'main',
         url: `${leagueBase(cfg)}?scoringPeriodId=0&view=kona_player_info`,
-        headers: { 'X-Fantasy-Filter': playerFilter(3000) },
-      },
-    ],
-    expect: 'players',
-  },
-  {
-    key: 'player_pool',
-    timeoutMs: TIMEOUT.HUGE,
-    label: 'Bulk player pool (league defaults, ADP/ranks)',
-    group: 'fantasy',
-    ttl: TTL.MIN_1,
-    auth: false,
-    tier: 'core',
-    large: true,
-    parts: (cfg) => [
-      {
-        part: 'main',
-        url:
-          `${FANTASY_HOST}/apis/v3/games/ffl/seasons/${cfg.season}` +
-          `/segments/1/leaguedefaults/3?scoringPeriodId=0&view=kona_player_info`,
         headers: { 'X-Fantasy-Filter': playerFilter(3000) },
       },
     ],
@@ -658,25 +619,16 @@ export const DATASETS = [
   },
   {
     key: 'nfl_calendar',
-    label: 'Season game-date calendar',
-    group: 'nfl_core',
+    label: 'Season calendar (phases and week dates)',
+    group: 'nfl_site',
     ttl: TTL.DAY,
     auth: false,
     tier: 'aux',
-    // The site API's bare /calendar resource 404s; the Core API's calendar/ondays
-    // is the working equivalent and returns the season's actual game dates.
-    parts: one(`${coreBase()}/calendar/ondays`),
-  },
-  {
-    key: 'nfl_weeks',
-    label: 'Regular-season week index',
-    group: 'nfl_core',
-    ttl: TTL.DAY,
-    auth: false,
-    tier: 'probe',
-    parts: (cfg) => [
-      { part: 'main', url: `${coreBase()}/seasons/${cfg.season}/types/2/weeks?limit=25` },
-    ],
+    // Week 6 (F1): the Core API's calendar refuses Workers. Any week's scoreboard carries the
+    // whole season's calendar in leagues[0].calendar (every phase, every week's dates); week 1
+    // keeps the payload the same size all season.
+    parts: (cfg) => [{ part: 'main', url: `${siteBase()}/scoreboard?seasontype=2&week=1&dates=${cfg.season}` }],
+    expect: 'leagues',
   },
   {
     key: 'nfl_standings',
@@ -726,181 +678,99 @@ export const DATASETS = [
   },
 
   // ==========================================================
-  // NFL Core API (public)
+  // NFL data once fetched from the Core API, now from the site edge (week 6, F1)
   // ==========================================================
   {
     key: 'nfl_weekly_events',
-    label: 'Weekly event index (regular season)',
-    group: 'nfl_core',
+    label: 'Every regular-season week\u2019s NFL games',
+    group: 'nfl_site',
     ttl: TTL.HOUR_6,
     auth: false,
     tier: 'core',
+    // Week 6 (F1): one scoreboard per week, each game with its teams, score, state, venue and odds
+    // (the Core API's version held only links to the games).
     parts: (cfg) =>
       Array.from({ length: REGULAR_SEASON_WEEKS }, (_, i) => ({
         part: String(i + 1),
-        url: `${coreBase()}/seasons/${cfg.season}/types/2/weeks/${i + 1}/events?limit=100`,
+        url: `${siteBase()}/scoreboard?seasontype=2&week=${i + 1}&dates=${cfg.season}`,
       })),
+    expect: 'events',
   },
   {
     key: 'nfl_team_season_stats',
     label: 'Team season aggregate stats (per team)',
-    group: 'nfl_core',
+    group: 'nfl_site',
     ttl: TTL.HOUR_6,
     auth: false,
     tier: 'aux',
     allowEmpty: true,
+    timeoutMs: TIMEOUT.LARGE,
+    // Week 6 (F1): the same 11 stat categories as the Core API's, from the site edge.
     parts: (cfg) =>
       NFL_TEAM_IDS.map((id) => ({
         part: String(id),
-        url: `${coreBase()}/seasons/${cfg.season}/types/2/teams/${id}/statistics`,
+        url: `${siteBase()}/teams/${id}/statistics?season=${cfg.season}&seasontype=2`,
       })),
-    notes:
-      'pointsAllowed/yardsAllowed are permanent placeholder zeros here — derive from box scores. ' +
-      'Returns 404 "No stats found" until the regular season is under way.',
-  },
-  {
-    key: 'nfl_athletes_index',
-    label: 'Athlete index (paginated)',
-    group: 'nfl_core',
-    ttl: TTL.DAY,
-    auth: false,
-    tier: 'aux',
-    parts: (cfg) =>
-      [1, 2, 3, 4].map((page) => ({
-        part: String(page),
-        url: `${coreBase()}/seasons/${cfg.season}/athletes?limit=1000&page=${page}`,
-      })),
+    expect: 'results',
   },
   {
     key: 'nfl_powerindex',
     label: 'ESPN Power Index (season)',
-    group: 'nfl_core',
+    group: 'nfl_site',
     ttl: TTL.HOUR_6,
     auth: false,
-    tier: 'probe',
+    tier: 'aux',
+    // Week 6 (F1): FPI for all 32 teams, predictive and efficiency ratings.
     parts: (cfg) => [
-      { part: 'main', url: `${coreBase()}/seasons/${cfg.season}/powerindex` },
+      { part: 'main', url: `${SITE_HOST}/apis/fitt/v3/sports/football/nfl/powerindex?season=${cfg.season}` },
     ],
+    expect: 'teams',
   },
   {
     key: 'nfl_leaders',
     label: 'Statistical leaders',
-    group: 'nfl_core',
+    group: 'nfl_site',
     ttl: TTL.HOUR_6,
     auth: false,
     tier: 'aux',
     allowEmpty: true,
+    timeoutMs: TIMEOUT.LARGE,
+    // Week 6 (F1): 16 categories, the top 10 in each. The answer is ~2.4 MB of athlete detail,
+    // so nfl_leaders_digest keeps only what a page would show.
     parts: (cfg) => [
-      { part: 'main', url: `${coreBase()}/seasons/${cfg.season}/types/2/leaders` },
+      { part: 'main', url: `${SITE_HOST}/apis/site/v3/sports/football/nfl/leaders?season=${cfg.season}&seasontype=2` },
     ],
+    expect: 'leaders',
   },
   {
-    key: 'nfl_venues',
-    label: 'Stadiums',
-    group: 'nfl_core',
-    ttl: TTL.DAY,
+    key: 'nfl_leaders_digest',
+    label: 'Statistical leaders, reduced (top 10 per category)',
+    group: 'derived',
+    ttl: TTL.HOUR_6,
     auth: false,
-    tier: 'probe',
-    parts: one(`${coreBase()}/venues?limit=200`),
-  },
-  {
-    key: 'nfl_franchises',
-    label: 'Franchise history index',
-    group: 'nfl_core',
-    ttl: TTL.DAY,
-    auth: false,
-    tier: 'probe',
-    parts: one(`${coreBase()}/franchises?limit=50`),
-  },
-  {
-    key: 'nfl_coaches',
-    label: 'Coaching staff',
-    group: 'nfl_core',
-    ttl: TTL.DAY,
-    auth: false,
-    tier: 'probe',
-    parts: (cfg) => [
-      { part: 'main', url: `${coreBase()}/seasons/${cfg.season}/coaches?limit=100` },
-    ],
-  },
-  {
-    key: 'nfl_draft',
-    label: 'NFL draft (not fantasy)',
-    group: 'nfl_core',
-    ttl: TTL.DAY,
-    auth: false,
-    tier: 'probe',
-    parts: (cfg) => [
-      { part: 'main', url: `${coreBase()}/seasons/${cfg.season}/draft` },
-    ],
-  },
-  {
-    key: 'nfl_futures',
-    label: 'Futures odds',
-    group: 'nfl_core',
-    ttl: TTL.DAY,
-    auth: false,
-    tier: 'probe',
-    parts: (cfg) => [
-      { part: 'main', url: `${coreBase()}/seasons/${cfg.season}/futures` },
-    ],
+    tier: 'aux',
+    derivedFrom: 'nfl_leaders',
+    parts: () => [{ part: 'main', url: null }],
+    notes: 'Built from nfl_leaders, about 50x smaller. Never fetched directly from ESPN.',
   },
   {
     key: 'nfl_qbr_weekly',
-    label: 'Weekly QBR (totals split)',
-    group: 'nfl_core',
+    label: 'Weekly QBR (every regular-season week)',
+    group: 'nfl_site',
     ttl: TTL.HOUR_6,
     auth: false,
-    tier: 'probe',
+    tier: 'aux',
+    allowEmpty: true,
+    // Week 6 (F1): every week, not the four the Core API version hard-coded. A week not yet
+    // played answers with an empty list, which is expected.
     parts: (cfg) =>
-      [1, 2, 3, 4].map((w) => ({
-        part: String(w),
-        url: `${coreBase()}/seasons/${cfg.season}/types/2/weeks/${w}/qbr/0`,
+      Array.from({ length: REGULAR_SEASON_WEEKS }, (_, i) => ({
+        part: String(i + 1),
+        url: `${SITE_HOST}/apis/fitt/v3/sports/football/nfl/qbr?qbrType=weeks&week=${i + 1}&season=${cfg.season}&seasontype=2`,
       })),
+    expect: 'pagination',
   },
 
-  // ==========================================================
-  // CDN + real-time news
-  // ==========================================================
-  {
-    key: 'cdn_scoreboard',
-    label: 'CDN-optimized live scoreboard',
-    group: 'realtime',
-    ttl: TTL.LIVE,
-    auth: false,
-    tier: 'aux',
-    parts: one(`${CDN_HOST}/core/nfl/scoreboard?xhr=1`),
-  },
-  {
-    key: 'espn_news_nfl',
-    label: 'Real-time NFL news feed',
-    group: 'realtime',
-    ttl: TTL.MIN_5,
-    auth: false,
-    tier: 'aux',
-    parts: one(`${NOW_HOST}/v1/sports/news?leagues=nfl&limit=50`),
-  },
-  {
-    key: 'espn_news_all',
-    timeoutMs: TIMEOUT.LARGE,
-    label: 'Real-time general sports news feed',
-    group: 'realtime',
-    ttl: TTL.MIN_5,
-    auth: false,
-    tier: 'probe',
-    parts: one(`${NOW_HOST}/v1/sports/news?sport=football&limit=50`),
-  },
-  {
-    key: 'nfl_athlete_stats_probe',
-    label: 'Web API athlete stats shape probe',
-    group: 'realtime',
-    ttl: TTL.DAY,
-    auth: false,
-    tier: 'probe',
-    parts: one(
-      `${WEB_HOST}/apis/common/v3/sports/football/nfl/statistics/byathlete?limit=50`
-    ),
-  },
 ];
 
 /**
@@ -937,7 +807,7 @@ export const PARAM_DATASETS = {
     ttl: TTL.MANUAL,
     auth: false,
     url: (cfg, week) =>
-      `${coreBase()}/seasons/${cfg.season}/types/2/weeks/${encodeURIComponent(week)}/events?limit=100`,
+      `${siteBase()}/scoreboard?seasontype=2&week=${encodeURIComponent(week)}&dates=${cfg.season}`,
   },
   /**
    * One completed scoring period of fantasy scoring.
