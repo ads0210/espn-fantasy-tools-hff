@@ -311,6 +311,13 @@ export async function assembleTab(deps, params = {}) {
       feed = { items: [], newestId: null, newestHour: null, oldestId: null, oldestAt: null, more: false, since: null, rest: restText(err.tier, err.pct) };
     }
     payload = { ...base, strip: activityStrip(src), panels: [], feed };
+    // Week 6 (N7): Visits over time, only while its panel is open. Read from the log's small rollup, never the events.
+    if (params.vrange && typeof deps.visits === 'function') {
+      try { payload.visits = deps.visits(String(params.vrange)); } catch (err) {
+        if (!(err && err.logPaused)) throw err;
+        payload.visits = { rest: restText(err.tier, err.pct) };
+      }
+    }
   } else if (tab === 'data') {
     payload = { ...base, strip: dataStrip(src, ctx), panels: await runPanels(src, ctx, DATA_LAYER, open) };
   } else {
