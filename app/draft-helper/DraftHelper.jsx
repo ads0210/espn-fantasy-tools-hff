@@ -5,7 +5,7 @@ import {
   ClipboardList, SlidersHorizontal, Trophy, LayoutGrid, Radio, Circle,
   Settings as SettingsIcon
 } from "lucide-react";
-import { PALETTES, BASE_CSS, BACKDROP } from "../../src/ui.js";
+import { PALETTES, BASE_CSS, BACKDROP, dateTimeText } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamSelect from "../shared/TeamSelect.jsx";
 import Instructions from "../shared/Instructions.jsx";
@@ -22,7 +22,7 @@ const PALETTE = {
   dark: {
     bgApp: "#070A08", bgPanel: "#111713", bgPanelAlt: "#161D18", bgInset: "#0A0F0B",
     border: "#1F2A21", borderStrong: "#2C3B2E",
-    textPrimary: "#E6F2E4", textSecondary: "#93A695", textFaint: "#5A6A5C",
+    textPrimary: "#E6F2E4", textSecondary: "#93A695", textFaint: "#7C8E7E",
     green: "#63FF4A", greenDeep: "#2BB81C", greenSoft: "rgba(99,255,74,0.16)",
     red: "#FF5C5C", redSoft: "rgba(255,92,92,0.13)",
     amber: "#FFB020", amberSoft: "rgba(255,176,32,0.13)",
@@ -31,7 +31,7 @@ const PALETTE = {
   light: {
     bgApp: "#EBF1E9", bgPanel: "#FFFFFF", bgPanelAlt: "#F4F8F3", bgInset: "#F3F8F2",
     border: "#D4E0D3", borderStrong: "#B4C6B3",
-    textPrimary: "#0D140C", textSecondary: "#48564A", textFaint: "#75846F",
+    textPrimary: "#0D140C", textSecondary: "#48564A", textFaint: "#5B6956",
     green: "#12762E", greenDeep: "#0A5220", greenSoft: "rgba(18,118,46,0.13)",
     red: "#BF2231", redSoft: "rgba(191,34,49,0.08)",
     amber: "#8A5406", amberSoft: "rgba(138,84,6,0.10)",
@@ -416,12 +416,8 @@ export default function DraftHelper() {
   const gearRef = useRef(null);
   const pal = PALETTE[theme];
 
-  // The shared stylesheet keys every colour off html[data-theme], so the tool's
-  // own toggle has to move the document attribute, not just local state.
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.cookie = "eft_theme=" + theme + "; path=/; max-age=31536000; samesite=lax";
-  }, [theme]);
+  // The shared stylesheet keys every colour off html[data-theme]; the shared settings control puts the theme
+  // on the page (week 6, F4).
 
 
   // live data — tiered polling per the planning doc (15s critical, 60s the rest)
@@ -499,10 +495,8 @@ export default function DraftHelper() {
   // shell exposes it globally so an iframed tool does not need its own copy.
   const siteZone = typeof window !== "undefined" && typeof window.siteTz === "function"
     ? window.siteTz() : undefined;
-  const scheduledLabel = draftStart ? draftStart.toLocaleString(undefined, {
-    timeZone: siteZone,
-    weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
-  }) : "";
+  // Week 6 (A8): the site's one date style.
+  const scheduledLabel = draftStart ? dateTimeText(draftStart, siteZone) : "";
 
   const draftedByOverall = useMemo(() => buildDraftedMap(picks, playersById), [picks, playersById]);
   const sortedPicks = useMemo(() => [...picks].sort((a, b) => a.overallPickNumber - b.overallPickNumber), [picks]);
@@ -755,6 +749,11 @@ export default function DraftHelper() {
         /* The scrollbar treatment is the shared one, in ui.js. */
         .boardscroll { padding:0 15px 15px; min-width:0; }
         .board { border-collapse:collapse; font-size:10px; width:100%; }
+        /* Week 6 (A10): columns share the width equally, so ten teams fit the 1180 px measure at 1280 px; past
+           what fits (more teams, a phone) the table keeps 84 px a column and scrolls inside its box. */
+        .board.fit { table-layout:fixed; min-width:calc(30px + var(--cols, 10) * 84px); }
+        .board.fit td { min-width:0; }
+        .board.fit th { overflow:hidden; text-overflow:ellipsis; }
         .board th { position:sticky; top:0; font-size:8.5px; font-weight:900; letter-spacing:.1em;
           text-transform:uppercase; color:var(--ink-3); padding:6px 4px; white-space:nowrap;
           border-bottom:1px solid var(--line); }
@@ -762,7 +761,7 @@ export default function DraftHelper() {
           vertical-align:middle; }
         .board td.mine { background:var(--accent-glow); border-color:var(--accent-deep); }
         .board td.onclock { border-color:var(--accent); }
-        .board .rnd { min-width:26px; width:26px; text-align:center; color:var(--ink-3);
+        .board .rnd { min-width:26px; width:30px; text-align:center; color:var(--ink-3);
           font-weight:900; font-variant-numeric:tabular-nums; border:0; }
         .bp { display:block; font-weight:800; font-size:10.5px; overflow:hidden;
           text-overflow:ellipsis; white-space:nowrap; }
@@ -1051,7 +1050,7 @@ export default function DraftHelper() {
             </div>
           ) : (
             <div className="boardscroll"><ScrollBox>
-              <table className="board">
+              <table className="board fit" style={{ "--cols": boardColumns.length }}>
                 <thead>
                   <tr>
                     <th className="rnd" />
