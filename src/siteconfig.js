@@ -16,6 +16,7 @@
 import { shell, passwordField, selectField, displayTitle, esc, backAction, HISTORY_RUNNER_JS } from './ui.js';
 import { TRADE_ROWS, TRADE_GROUPS } from './traderows.js';
 import { adminGateRail, adminGateSection, ADMIN_GATE_CSS } from './admingate.js';
+import { NOTE_JS, NOTE_CSS, NOTE_COLOURS, NOTE_LIMITS, notePages } from './notemarkup.js';
 
 export function siteConfigPage({ theme, reduceMotion, leagueName }) {
   // The shared gate (src/admingate.js): the same header, panel and note as an admin-only tool's.
@@ -106,6 +107,28 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
           </div>
         </div>
 
+        <div class="panel p-note">
+          <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-note"><span class="t">Note from the Site Admin</span><i class="cfgchev" aria-hidden="true"></i></button>
+          <div class="cfgbody" id="cb-note" hidden>
+          <p class="hint">A short note shown to every member once, over the home page. Publishing a new note shows it again to everyone.</p>
+          <div class="row"><span>Status</span><b id="noteState">Nothing shown</b></div>
+          <label class="nlab" for="noteSubj">Subject</label><input id="noteSubj" class="ninput" type="text" maxlength="${NOTE_LIMITS.subject}" autocomplete="off">
+          <label class="nlab" for="noteBody">Note</label>
+          <div class="ntools" role="toolbar" aria-label="Formatting">
+            <button type="button" class="ntool" data-k="bold" title="Bold" aria-label="Bold"><b>B</b></button><button type="button" class="ntool" data-k="italic" title="Italic" aria-label="Italic"><i>I</i></button>
+            <span class="nsep"></span>${Object.keys(NOTE_COLOURS).map((c) => `<button type="button" class="ntool sw-${c}" data-k="colour" data-a="${c}" title="${c[0].toUpperCase() + c.slice(1)}" aria-label="Colour: ${c}"><i class="nsw"></i></button>`).join('')}
+            <span class="nsep"></span><span class="nlink"><span>Link to</span>${Object.entries(notePages()).map(([k, p]) => `<button type="button" class="ntool lk" data-k="link" data-a="${esc(k)}">${esc(p.name)}</button>`).join('')}</span>
+          </div>
+          <textarea id="noteBody" class="ntext" rows="7" maxlength="${NOTE_LIMITS.body}" spellcheck="true"></textarea>
+          <p class="hint">Select words, then a button. Blank lines start a new paragraph.</p>
+          <p class="nlab" id="noteSigLab">Signature</p>
+          <div class="nsigs" id="noteSigs" role="radiogroup" aria-labelledby="noteSigLab"></div>
+          <p class="nlab">Preview</p><div class="npreview" id="notePrev"></div>
+          <div class="nbtns"><button type="button" class="primary" id="notePub">Publish note</button><button type="button" class="ghost" id="noteShow">Show it as members will</button><button type="button" class="ghost" id="noteDel" disabled>Remove note</button></div>
+          <div class="msg" id="msgNote"></div>
+          </div>
+        </div>
+
         <div class="panel p-api" id="cfgApi">
           <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-api"><span class="t">Site API</span><i class="cfgchev" aria-hidden="true"></i></button>
           <div class="cfgbody" id="cb-api" hidden>
@@ -121,8 +144,9 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
           <div class="bar"><i id="primeBar"></i></div>
           <p class="hint">Fetches every dataset once. Run this if a page is showing
              blanks, or after replacing your ESPN cookies.</p>
-          <button class="primary" id="primeRun">Refresh all league data</button>
+          <div class="pullbtns"><button class="ghost" id="primeResume" hidden>Resume</button><button class="primary" id="primeRun">Retry</button></div>
           <div class="msg" id="msgPrime"></div>
+          <ul class="faillist" id="primeFails" hidden></ul>
           </div>
         </div>
 
@@ -133,8 +157,7 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
           <div class="bar"><i id="histBar"></i></div>
           <p class="hint" id="histDetail">Only re-pull when you need to. This may take a
          few minutes: please do not close or refresh this tab.</p>
-          <button class="primary" id="histRun">Re-pull league history</button>
-          <button class="ghost" id="histResume" style="margin-top:11px" hidden>Resume an interrupted pull</button>
+          <div class="pullbtns"><button class="ghost" id="histResume" hidden>Resume</button><button class="primary" id="histRun">Retry</button></div>
           <div class="msg" id="msgHistory"></div>
           </div>
         </div>
@@ -176,7 +199,47 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
 
     </section>`;
 
-  const css = `
+  /* Week 6 (P9): the note panel (as sampled in S6) and the "as members will" dialog (the update notice's look). */
+  const noteCss = `
+    .p-note .nlab { display:block; font-size:10.5px; font-weight:900; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-2); margin:16px 0 6px; }
+    .p-note .ninput, .p-note .ntext { width:100%; font:inherit; font-size:14px; color:var(--ink); background:var(--inset); border:1px solid var(--line-2); padding:10px 11px; border-radius:0; box-sizing:border-box; }
+    .p-note .ntext { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:13px; line-height:1.55; resize:vertical; display:block; }
+    .p-note .ninput:focus, .p-note .ntext:focus { outline:2px solid var(--accent); outline-offset:-1px; }
+    .p-note .ntools { display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:6px; background:var(--panel-2); border:1px solid var(--line-2); border-bottom:0; }
+    .p-note .ntool { width:auto; min-width:30px; height:28px; margin:0; font:inherit; font-size:12.5px; letter-spacing:0; text-transform:none; color:var(--ink); background:var(--panel); border:1px solid var(--line-2); cursor:pointer; padding:0 8px; border-radius:0; box-shadow:none; }
+    .p-note .ntool:hover { border-color:var(--accent); } .p-note .ntool:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+    .p-note .ntool .nsw { display:block; width:14px; height:14px; margin:auto; }
+    .p-note .sw-green .nsw { background:var(--accent); } .p-note .sw-red .nsw { background:var(--flag); } .p-note .sw-amber .nsw { background:var(--signal); } .p-note .sw-blue .nsw { background:var(--sky); } .p-note .sw-gold .nsw { background:var(--gold); }
+    .p-note .nsep { width:1px; height:20px; background:var(--line-2); margin:0 4px; }
+    .p-note .nlink { display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px; }
+    .p-note .nlink > span { font-size:10.5px; font-weight:900; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-2); margin-right:2px; }
+    .p-note .ntool.lk { font-size:11.5px; }
+    .p-note .nsigs { display:flex; flex-direction:column; gap:6px; }
+    .p-note .nsig { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:6px 8px; border:1px solid var(--line); }
+    .p-note .nsig.on { border-color:var(--accent); }
+    .p-note .nsigpick { width:auto; margin:0; font:inherit; font-size:14px; font-weight:800; letter-spacing:0; text-transform:none; color:var(--ink); background:transparent; border:0; box-shadow:none; cursor:pointer; padding:2px 4px; text-align:left; flex:1 1 150px; min-width:0; }
+    .p-note .nsigpick::before { content:""; display:inline-block; width:10px; height:10px; border:2px solid var(--line-2); border-radius:50%; margin-right:8px; vertical-align:-1px; }
+    .p-note .nsig.on .nsigpick::before { background:var(--accent); border-color:var(--accent); }
+    .p-note .nsigacts { display:inline-flex; flex-wrap:wrap; gap:4px; margin-left:auto; }
+    .p-note .nsig .ninput { flex:1; min-width:140px; }
+    .p-note .ghost.sm { width:auto; margin:0; font-size:10.5px; padding:5px 8px; }
+    .p-note .nsigs > .ghost { align-self:flex-start; }
+    .p-note .npreview { border:1px dashed var(--line-2); padding:14px 16px; background:var(--panel-2); text-align:left; }
+    .p-note .npreview h3 { margin:0 0 8px; font-size:18px; font-weight:900; letter-spacing:-.01em; color:var(--ink); overflow-wrap:anywhere; }
+    .p-note .nbtns { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:14px; }
+    .p-note .nbtns button { width:auto; margin:0; }
+    .p-note .nbtns .primary { padding:12px 18px; }
+    .uplayer { position:fixed; inset:0; z-index:90; padding:20px; background:rgba(3,6,4,.66); }
+    .uplayer:not([hidden]) { display:flex; align-items:center; justify-content:center; }
+    .upbox { width:min(440px,100%); max-height:min(78vh,620px); overflow:hidden; background:var(--panel); color:var(--ink);
+      border:1px solid var(--line-2); border-radius:14px; box-shadow:0 24px 60px rgba(0,0,0,.55); text-align:left; }
+    .upbody { max-height:min(78vh,620px); padding:20px 20px 18px; }
+    .upbox .vbar { top:8px; bottom:8px; right:5px; }
+    .upbody h2 { margin:0 0 12px; font-size:20px; font-weight:900; color:var(--ink); overflow-wrap:anywhere; }
+    .noteeyebrow { margin:0 0 6px; font-size:10px; font-weight:900; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-3); }
+    ${NOTE_CSS}
+  `;
+  const css = noteCss + `
     /* The gate's own layout comes from src/admingate.js, shared with admin-only tools. */
     ${ADMIN_GATE_CSS}
 
@@ -209,6 +272,12 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
     .cfgbody > *:last-child { margin-bottom:0; }
     @keyframes cfgopen { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:none; } }
     html.stillness .cfgbody:not([hidden]) { animation:none; }
+    /* Week 6 (F3): Resume and Retry side by side; a finished pull's failures listed under its message. */
+    .pullbtns { display:flex; gap:10px; }
+    .pullbtns > button { flex:1 1 0; margin:0; }
+    .pullbtns > button[hidden] { display:none; }
+    .faillist { margin:8px 0 0; padding-left:18px; font-size:12px; line-height:1.6; color:var(--ink-2); }
+    .faillist code { font-size:11.5px; }
     .wactions { display:flex; flex-direction:column; gap:11px; }
     @media (min-width:900px) {
       .wactions { flex-direction:row; flex-wrap:wrap; }
@@ -329,7 +398,7 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
      payload that could carry a character the template literal cares about. */
   const weightSpec = TRADE_ROWS.map((r) => ({ id: r.id, g: r.g, n: r.n, s: r.s ? 1 : 0, w: r.w }));
 
-  const js = HISTORY_RUNNER_JS + `
+  const js = HISTORY_RUNNER_JS + NOTE_JS + `
 var adminPw = null;
 var WEIGHT_ROWS = ${JSON.stringify(weightSpec)};
 var WEIGHT_GROUPS = ${JSON.stringify(TRADE_GROUPS)};
@@ -384,6 +453,7 @@ function render(r) {
   renderTools(r.tools || []);
   renderOrder(r.order || { tiles: [], custom: false });
   renderSession(c.sessionHours);
+  noteRender(c.adminNote || null, c.noteSigs || ['- Site admin']);
   renderWeights((r.config || {}).tradeWeights || {});
   renderHistory(r.history || {});
   renderPrime(r.prime || {});
@@ -404,6 +474,17 @@ function renderPrime(p) {
   } else {
     set('primeState', 'Not loaded');
   }
+  // Week 6 (F3): Resume only while an unfinished job exists.
+  var res = document.getElementById('primeResume');
+  if (res) res.hidden = !(p.running && !p.complete);
+  primeFails(p.complete ? (p.failedKeys || []) : []);
+}
+/* The datasets a finished pull could not load, by name. */
+function primeFails(keys) {
+  var ul = document.getElementById('primeFails');
+  if (!ul) return;
+  ul.innerHTML = keys.map(function (k) { return '<li><code>' + String(k).replace(/[<>&]/g, '') + '</code></li>'; }).join('');
+  ul.hidden = !keys.length;
 }
 function set(id, v) { var el = document.getElementById(id); if (el) el.textContent = v; }
 
@@ -629,14 +710,16 @@ async function act(action, btn) {
 document.getElementById('histRun').addEventListener('click', function () { pull(true); });
 document.getElementById('histResume').addEventListener('click', function () { pull(false); });
 
-async function primePull() {
+async function primePull(restart) {
   var btn = document.getElementById('primeRun');
-  btn.disabled = true;
+  var resumeBtn = document.getElementById('primeResume');
+  btn.disabled = true; resumeBtn.disabled = true;
+  primeFails([]);
   note('msgPrime', 'Running', 'info');
   var bar = document.getElementById('primeBar');
 
   var out = await runHistoryPull({
-    restart: true,
+    restart: restart !== false,
     call: function (body) { return call('/api/admin/prime-batch', body); },
     onProgress: function (r) {
       renderPrime(r);
@@ -645,19 +728,21 @@ async function primePull() {
     onNote: function (t) { note('msgPrime', t, 'info'); }
   });
 
-  btn.disabled = false;
+  btn.disabled = false; resumeBtn.disabled = false;
   if (out.ok) {
     var f = (out.status && out.status.failureCount) || 0;
     if (out.status) renderPrime(out.status);
     note('msgPrime', f
-      ? ('Loaded, with ' + f + ' dataset' + (f === 1 ? '' : 's') + ' unavailable.')
+      ? ('Loaded, with ' + f + ' dataset' + (f === 1 ? '' : 's') + ' unavailable:')
       : 'All league data loaded.', f ? 'info' : 'ok');
   } else {
-    note('msgPrime', out.error || 'Stopped.', 'err');
+    note('msgPrime', out.error || 'Stopped. Resume to carry on, or Retry to start over.', 'err');
+    resumeBtn.hidden = false;
   }
 }
 
-document.getElementById('primeRun').addEventListener('click', primePull);
+document.getElementById('primeRun').addEventListener('click', function () { primePull(true); });
+document.getElementById('primeResume').addEventListener('click', function () { primePull(false); });
 
 async function pull(restart) {
   var run = document.getElementById('histRun');
@@ -704,7 +789,8 @@ var API = null;
 var API_IVS = [[30, 'Every 30 days'], [60, 'Every 60 days'], [90, 'Every 90 days'], [180, 'Every 180 days'], ['season', 'At Season End']];
 function apiDate(iso) {
   if (!iso) return '';
-  try { return new Intl.DateTimeFormat(undefined, { timeZone: window.siteTz(), month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(iso)); } catch (e) { return String(iso).slice(0, 10); }
+  // Week 6 (A8): the site's one date style, with the year (a key's dates can be next year's).
+  return window.fmtDate(iso, true) || String(iso).slice(0, 10);
 }
 function apiInDays(iso) {
   var d = Math.round((Date.parse(iso) - Date.now()) / 86400000);
@@ -828,6 +914,92 @@ document.getElementById('ftCheck').addEventListener('click', function () { ftAct
 document.getElementById('ftRebuild').addEventListener('click', function () { ftAct('rebuild', 'ftRebuild'); });
 ftLoad();
 
+/* Week 6 (P9): the note from the Site Admin. The body is the small markup the toolbar writes; the preview runs the
+   same rules the home page does (NOTE_JS), so what is shown here is what members see. */
+var NOTE_PAGES = ${JSON.stringify(notePages())};
+var NOTE = { note: null, sigs: ['- Site admin'], sig: 0, editing: -1 };
+function notePreview() {
+  var subj = document.getElementById('noteSubj').value.trim(), body = document.getElementById('noteBody').value;
+  var sig = NOTE.sigs[NOTE.sig] || '';
+  return '<h3>' + esc(subj || 'Subject') + '</h3><div class="notebody">' + (renderNote(body, NOTE_PAGES) || '<p class="hint">The note appears here as you type.</p>') + '</div>' + (sig ? '<p class="notesig">' + esc(sig) + '</p>' : '');
+}
+function notePaintPreview() { document.getElementById('notePrev').innerHTML = notePreview(); }
+function noteState() {
+  var n = NOTE.note;
+  document.getElementById('noteState').textContent = n ? 'Showing since ' + fmtDateTime(n.at) : 'Nothing shown';
+  document.getElementById('noteDel').disabled = !n;
+}
+function noteSigsPaint() {
+  var box = document.getElementById('noteSigs');
+  box.innerHTML = NOTE.sigs.map(function (s, i) {
+    if (NOTE.editing === i) return '<div class="nsig on"><input class="ninput" data-i="' + i + '" value="' + esc(s) + '" maxlength="${NOTE_LIMITS.sig}" aria-label="Rename signature"><button type="button" class="ghost sm" data-act="done" data-i="' + i + '">Done</button></div>';
+    return '<div class="nsig' + (i === NOTE.sig ? ' on' : '') + '"><button type="button" class="nsigpick" role="radio" aria-checked="' + (i === NOTE.sig) + '" data-i="' + i + '">' + esc(s) + '</button>'
+      + '<span class="nsigacts"><button type="button" class="ghost sm" data-act="up" data-i="' + i + '"' + (i ? '' : ' disabled') + '>Move up</button>'
+      + '<button type="button" class="ghost sm" data-act="ren" data-i="' + i + '">Rename</button>'
+      + '<button type="button" class="ghost sm" data-act="del" data-i="' + i + '"' + (NOTE.sigs.length > 1 ? '' : ' disabled') + '>Remove</button></span></div>';
+  }).join('') + (NOTE.sigs.length < ${NOTE_LIMITS.sigs} ? '<button type="button" class="ghost sm" data-act="add">Add a signature</button>' : '');
+  var ed = box.querySelector('input[data-i]'); if (ed) ed.focus({ preventScroll: true });
+  notePaintPreview();
+}
+function noteRender(n, sigs) {
+  NOTE.note = n; NOTE.sigs = sigs && sigs.length ? sigs.slice() : ['- Site admin'];
+  NOTE.sig = n && n.sig && NOTE.sigs.indexOf(n.sig) >= 0 ? NOTE.sigs.indexOf(n.sig) : 0;
+  document.getElementById('noteSubj').value = n ? n.subject : '';
+  document.getElementById('noteBody').value = n ? n.body : '';
+  noteState(); noteSigsPaint();
+}
+async function noteSaveSigs() {
+  var r = await call('/api/admin/note', { action: 'sigs', sigs: NOTE.sigs });
+  note('msgNote', r.ok ? 'Signatures saved.' : (r.error || 'Could not save.'), r.ok ? 'ok' : 'err');
+  if (r.ok) { NOTE.sigs = r.sigs; if (NOTE.sig >= NOTE.sigs.length) NOTE.sig = 0; noteSigsPaint(); }
+}
+document.getElementById('noteSubj').addEventListener('input', notePaintPreview);
+document.getElementById('noteBody').addEventListener('input', notePaintPreview);
+document.querySelectorAll('.p-note .ntool').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var ta = document.getElementById('noteBody');
+    var r = wrapSelection(ta.value, ta.selectionStart, ta.selectionEnd, b.dataset.k, b.dataset.a);
+    ta.value = r.value; ta.focus({ preventScroll: true }); ta.setSelectionRange(r.start, r.end); notePaintPreview();
+  });
+});
+document.getElementById('noteSigs').addEventListener('click', function (e) {
+  var t = e.target.closest('button'); if (!t) return;
+  var i = Number(t.dataset.i);
+  if (t.classList.contains('nsigpick')) { NOTE.sig = i; noteSigsPaint(); return; }
+  var a = t.dataset.act;
+  if (a === 'add') { NOTE.sigs.push('- New signature'); NOTE.editing = NOTE.sigs.length - 1; noteSigsPaint(); return; }
+  if (a === 'ren') { NOTE.editing = i; noteSigsPaint(); return; }
+  if (a === 'done') { var v = document.querySelector('#noteSigs input[data-i="' + i + '"]').value.trim(); if (v) NOTE.sigs[i] = v; NOTE.editing = -1; noteSaveSigs(); return; }
+  if (a === 'del') { NOTE.sigs.splice(i, 1); if (NOTE.sig >= NOTE.sigs.length || NOTE.sig === i) NOTE.sig = 0; else if (NOTE.sig > i) NOTE.sig--; noteSaveSigs(); return; }
+  if (a === 'up' && i) { var x = NOTE.sigs[i - 1]; NOTE.sigs[i - 1] = NOTE.sigs[i]; NOTE.sigs[i] = x; if (NOTE.sig === i) NOTE.sig = i - 1; else if (NOTE.sig === i - 1) NOTE.sig = i; noteSaveSigs(); }
+});
+document.getElementById('noteSigs').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter' && e.target.matches('input[data-i]')) { e.preventDefault(); var d = e.target.parentNode.querySelector('[data-act="done"]'); if (d) d.click(); }
+});
+document.getElementById('notePub').addEventListener('click', async function () {
+  var r = await call('/api/admin/note', { action: 'publish', subject: document.getElementById('noteSubj').value, body: document.getElementById('noteBody').value, sig: NOTE.sigs[NOTE.sig] || '' });
+  note('msgNote', r.ok ? 'Published. Every member sees it once, the next time they open the home page.' : (r.error || 'Could not publish.'), r.ok ? 'ok' : 'err');
+  if (r.ok) { NOTE.note = r.note; noteState(); }
+});
+document.getElementById('noteDel').addEventListener('click', async function () {
+  var r = await call('/api/admin/note', { action: 'remove' });
+  note('msgNote', r.ok ? 'Removed. The home page no longer shows it.' : (r.error || 'Could not remove it.'), r.ok ? 'ok' : 'err');
+  if (r.ok) { NOTE.note = null; noteState(); }
+});
+(function () {
+  var pop = document.getElementById('notePop'), back = null;
+  function shut() { pop.hidden = true; if (back && back.focus) back.focus({ preventScroll: true }); }
+  document.getElementById('noteShow').addEventListener('click', function () {
+    back = document.activeElement;
+    document.getElementById('notePopBody').innerHTML = '<p class="noteeyebrow">Note from the Site Admin</p>' + notePreview().replace('<h3>', '<h2 id="notePopTitle">').replace('</h3>', '</h2>');
+    pop.hidden = false; pop.querySelector('.vscroll').scrollTop = 0; window.dispatchEvent(new Event('resize'));
+    document.getElementById('notePopGot').focus({ preventScroll: true });
+  });
+  document.getElementById('notePopGot').addEventListener('click', shut);
+  pop.addEventListener('click', function (e) { if (e.target === pop) shut(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !pop.hidden) shut(); });
+})();
+
 async function call(url, body, pwOverride) {
   try {
     var res = await fetch(url, {
@@ -847,6 +1019,12 @@ async function call(url, body, pwOverride) {
     action: backAction(), title: 'Site Configuration', theme, reduceMotion, rail, body,
     settings: true, stack: true, centred: true, extraCss: css, extraJs: js,
     overlays: `
+  <div class="uplayer" id="notePop" hidden>
+    <div class="upbox vwrap" role="dialog" aria-modal="true" aria-labelledby="notePopTitle">
+      <div class="upbody vscroll" data-vscroll><div id="notePopBody"></div><button class="primary" id="notePopGot" type="button">Got it</button></div>
+      <div class="vbar" hidden><div class="vbar-thumb"></div></div>
+    </div>
+  </div>
   <div class="instr" id="apiStopDlg" hidden role="dialog" aria-modal="true" aria-label="Stop the old key now?">
     <div class="instrwrap vwrap">
       <div class="instrbody vscroll" data-vscroll>
@@ -869,15 +1047,17 @@ async function call(url, body, pwOverride) {
        'Move a tile up or down and the home page follows at once. Reset puts the shipped order back. A tool that arrived in this release is marked New, so you can see where it landed; the home page\u2019s tiles never are.'],
       ['05', 'Sign-in length',
        'The slider sets how long a member stays signed in before the League Password is asked for again, from one hour to infinite. It applies from the next sign-in. Changing the League Password signs everyone out.'],
-      ['06', 'Site API',
+      ['06', 'Note from the Site Admin',
+       'Write a short note for everyone, shown once over the home page. Select words and use the buttons for bold, italic, a colour or a link to one of the site\u2019s pages; the preview shows exactly what members will see. Pick a signature from your saved list, or add, rename and reorder them. Publishing a new note shows it again to everyone; Remove note stops it showing.'],
+      ['07', 'Site API',
        'Switch the API on or off, see when the key started and when it next changes, replace it now (gently, or at once after a leak), choose how often it is replaced, and whether it may travel in an address. The key itself is on the Site API page.'],
-      ['07', 'Trade Analyzer weighting',
+      ['08', 'Trade Analyzer weighting',
        'Sets what each statistic is worth when the tool judges a deal for your league. Anyone can still move the adjustable ones while they look at a trade; that never changes what you save here.'],
-      ['08', 'Fortune Teller',
+      ['09', 'Fortune Teller',
        'Switch it on and it builds the map by itself as soon as the league is close enough to the end of the regular season, then moves on each week. Check now asks it to look straight away; Rebuild starts the map again from scratch.'],
-      ['09', 'Re-run a pull any time',
+      ['10', 'Re-run a pull any time',
        'Refreshing league data, and re-pulling past seasons, can both be run again whenever you like. Neither loses anything by being repeated.'],
-      ['10', 'Time zone is per person',
+      ['11', 'Time zone is per person',
        'The zone under the gear is yours alone, not a league setting. Everyone picks their own.'],
     ] });
 }
