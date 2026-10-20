@@ -4,7 +4,10 @@
  * Sits on top of BASE_CSS from ui.js and redefines no token. Apart from the
  * markup it dresses because the two change for different reasons.
  */
+import { NOTE_CSS } from '../notemarkup.js';
+
 export const DASHBOARD_CSS = `
+${NOTE_CSS}
     /* A notice, not a destination.
        The instructions dialog is a full-page sheet because it explains a whole
        surface; this says a handful of sentences and gets out of the way, so it
@@ -24,11 +27,49 @@ export const DASHBOARD_CSS = `
     .uphead h2 { flex:1; margin:0; font-size:16px; font-weight:900;
       letter-spacing:-.01em; color:var(--ink,#E6F2E4); }
     .uphead .ctlbtn { margin-top:1px; }
+    .noteeyebrow { margin:0 0 6px; font-size:10px; font-weight:900; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-3); }
+    #notepop .uphead { display:block; }
+    #notepop h2 { margin:0 0 12px; font-size:20px; }
+
+    /* Week 6 (F2): the data banner's Dismiss sits at the right on a wide screen and under the text on a phone. */
+    .alertbar.dbbar { display:grid; grid-template-columns:auto minmax(0,1fr) auto; column-gap:12px; row-gap:10px; }
+    .dbbar .dbtext { min-width:0; }
+    .dbbar .dbtext strong { color:var(--ink); font-weight:800; }
+    .dbbar .ghost.dbdismiss { width:auto; align-self:start; margin:0; padding:7px 14px; font-size:11px; }
+    @media (max-width:560px) {
+      .alertbar.dbbar { grid-template-columns:auto minmax(0,1fr); }
+      .dbbar .ghost.dbdismiss { grid-column:2; justify-self:start; }
+    }
+    .dbhint { margin:0 0 12px; }
+    .dberr { margin:8px 0 0; font-size:12px; font-weight:700; color:var(--flag); }
+    .dbbtns { display:flex; gap:10px; justify-content:flex-end; margin-top:14px; }
+    .dbbtns .ghost, .dbbtns .primary { width:auto; margin:0; }
+
+    /* Week 6 (N6): the matchup card's banner. The ribbon takes the card's top line in its own colour. */
+    #cardPanel { --b:var(--accent); --bt:var(--accent); }
+    #cardPanel.hasbanner::before { background:var(--b); height:3px; }
+    #cardPanel[data-tone="gold"], #cardPanel[data-tone="goldsoft"] { --b:var(--gold); --bt:var(--gold); }
+    #cardPanel[data-tone="bronze"] { --b:var(--bronze); --bt:var(--bronze); }
+    #cardPanel[data-tone="silver"] { --b:var(--silver); --bt:var(--silver); }
+    #cardPanel[data-tone="muted"] { --b:var(--ink-3); --bt:var(--ink-2); }
+    #cardPanel[data-tone="violet"] { --b:var(--violet); --bt:var(--violet); }
+    #cardPanel[data-tone="flag"] { --b:var(--flag); --bt:var(--flag); }
+    html[data-theme="light"] #cardPanel[data-tone="gold"], html[data-theme="light"] #cardPanel[data-tone="goldsoft"] { --bt:#7A5900; }
+    .mbanner { position:relative; margin:calc(-1 * clamp(18px,1.7vw,24px)) calc(-1 * clamp(16px,1.6vw,22px)) clamp(14px,1.4vw,18px);
+      padding:10px clamp(16px,1.6vw,22px) 9px; border-bottom:1px solid color-mix(in srgb,var(--b) 40%,transparent);
+      background:linear-gradient(90deg, color-mix(in srgb,var(--b) 14%,transparent), transparent 85%); overflow:hidden; }
+    .mbanner.t-goldsoft { background:linear-gradient(90deg, var(--gold-soft), transparent 80%); }
+    .mbline { display:flex; align-items:center; gap:9px; position:relative; z-index:1; }
+    .mbglyph { width:18px; height:18px; color:var(--bt); flex:none; } .mbglyph svg { width:100%; height:100%; display:block; }
+    .mblabel { font-size:12px; font-weight:900; letter-spacing:.18em; text-transform:uppercase; color:var(--bt); line-height:1.25; }
+    .mbreason { margin:4px 0 0 27px; font-size:12.5px; line-height:1.4; color:var(--ink-2); position:relative; z-index:1; }
+    @media (max-width: 389px) { .mbreason { display:none; } }
 
     .uplist { margin:0 0 16px; padding-left:17px; }
     .uplist li { font-size:12.5px; line-height:1.55; color:var(--ink-2); margin-bottom:8px; }
     .uplist li:last-child { margin-bottom:0; }
     .uplist li::marker { color:var(--accent); }
+    .uplist a { color:var(--sky); text-decoration:underline; text-underline-offset:2px; }
 
     .tickhead { display:flex; align-items:center; gap:9px; margin-bottom:11px; }
     .tickttl { font-size:11px; font-weight:900; text-transform:uppercase; letter-spacing:.16em;
@@ -180,7 +221,7 @@ export const DASHBOARD_CSS = `
              font-weight:900; color:var(--field); }
     .medal.g { background:var(--gold); box-shadow:0 0 12px -2px var(--gold-glow); }
     .medal.s { background:#C8D2D6; }
-    .medal.b { background:#CD8A4D; }
+    .medal.b { background:#CD8A4D; color:#1C1206; }
     /* Silver is light enough that the site's own ink disappears on it in the
        light theme; the number is set dark on that one badge only. */
     .medal.s { color:#1C2B24; }
