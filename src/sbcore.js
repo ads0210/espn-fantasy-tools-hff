@@ -13,6 +13,9 @@ import { DERIVATIONS } from './derive.js';
 import { loadConfig, isSetupFinished } from './config.js';
 import { readEspnAuth } from './espnhealth.js';
 import { getPart, listAll, DATA_PREFIX, STATUS_PREFIX, statusKey } from './store.js';
+// The hourly check's record (src/datacheck.js writes it; a test holds the two names equal). Not imported from
+// there: this module's imports are reads only.
+const CHECK_KEY = 'meta/datacheck.json';
 import { TOOLS, visibilityOf } from './tools.js';
 import { teamLogoUrl } from './teamlogo.js';
 import { PAGES, pageOf } from './readers.js';
@@ -96,6 +99,8 @@ export function makeSources(deps) {
     now: Date.now(),
     facts: deps.facts || {},
     cfg: () => once('cfg', () => loadConfig(env)),
+    /** Week 6 (F2): the hourly data check's record (src/datacheck.js), read as stored. */
+    dataCheck: () => shared('datacheck', LISTING_TTL_MS, () => readJson(CHECK_KEY)),
     espnAuth: () => once('auth', () => readEspnAuth(env)),
     /** Stored objects under data/, grouped by dataset key. */
     dataList: () => shared('data', LISTING_TTL_MS, async () => {
@@ -243,8 +248,23 @@ export function datasetRow(d, cfg, list, statuses, now = Date.now()) {
 }
 
 export async function datasetRows(src) {
-  const [cfg, list, statuses] = await Promise.all([src.cfg(), src.dataList(), src.statuses()]);
-  return DATASETS.map((d) => datasetRow(d, cfg, list || {}, statuses || {}, src.now));
+  const [cfg, list, statuses, check] = await Promise.all([src.cfg(), src.dataList(), src.statuses(), src.dataCheck ? src.dataCheck() : null]);
+  const checks = (check && check.datasets) || {};
+  return DATASETS.map((d) => {
+    const row = datasetRow(d, cfg, list || {}, statuses || {}, src.now);
+    // Week 6 (P2, F2): the pages that use it, and its last 24 hourly checks (a digest is checked through its source).
+    const c = checks[d.derivedFrom ? null : d.key];
+    row.usedBy = usedBy(d.key).map((p) => p.name);
+    row.checks = d.derivedFrom ? null : ((c && c.results) || []).map((r) => ({ at: r.at, ok: r.ok, kind: r.kind }));
+    row.streak = c ? c.streak || 0 : 0;
+    row.host = d.derivedFrom ? null : hostOf(d, cfg);
+    return row;
+  });
+}
+
+/** The host a dataset's first part asks. */
+export function hostOf(d, cfg) {
+  try { const p = d.parts(cfg)[0]; return p && p.url ? new URL(p.url).hostname : null; } catch { return null; }
 }
 
 /** On-demand dataset types: which ids are stored. */
@@ -271,9 +291,19 @@ export function upstream(keys) {
       const der = [].concat(DERIVATIONS[d.derivedFrom] || []).find((x) => x.target === k);
       for (const n of (der && der.needs) || []) add(n, `needed by ${k}`);
       if (der && der.current) add(der.current, `needed by ${k}`);
+      if (der && der.needsByeMap) add('bye_weeks', `needed by ${k}`);
     }
   }
   return out;
+}
+
+/**
+ * The pages that use a dataset, directly or through anything built from it (week 6, F2 and P2): Home and the
+ * league's tools, in the site's order, by the names members know. Site Backend and the administrator's pages
+ * are left out: they list datasets, they do not show them.
+ */
+export function usedBy(key) {
+  return PAGES.filter((p) => (p.key === 'home' || (p.tool && p.tool !== 'site-backend')) && upstream(p.datasets).has(key)).map((p) => ({ key: p.key, name: p.key === 'home' ? 'the home page' : p.name }));
 }
 
 // ---------------------------------------------------------------- the log

@@ -1,6 +1,6 @@
 import ToolControls from "../shared/ToolControls.jsx";
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from "react";
-import { PALETTES, BASE_CSS, BACKDROP, TEAM_COOKIE } from "../../src/ui.js";
+import { PALETTES, BASE_CSS, BACKDROP, TEAM_COOKIE, dateTimeText } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamSelect from "../shared/TeamSelect.jsx";
 import Instructions from "../shared/Instructions.jsx";
@@ -47,12 +47,8 @@ function zone() {
 
 function whenText(isoString) {
   if (!isoString) return "unknown";
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit",
-      timeZone: zone(),
-    }).format(new Date(isoString));
-  } catch (e) { return new Date(isoString).toLocaleString(); }
+  // Week 6 (A8): the site's one date style.
+  return dateTimeText(isoString, zone()) || new Date(isoString).toISOString();
 }
 
 async function copyText(text) {

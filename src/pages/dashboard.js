@@ -16,7 +16,9 @@ import { dashboardClientJs } from './dashboard-client.js';
 export function dashboardPage({
   leagueName, season, theme, reduceMotion, tools, teams, selectedTeamId,
   initial = null, board = null, espnAuth = null,
-  version = '', releaseItems = [], repullNeeded = false, needsHistoryRepull = false,
+  version = '', releaseItems = [], repullNeeded = false, needsHistoryRepull = false, dataBanner = null,
+  // Week 6 (P9): the note from the Site Admin, already rendered by noteForBoard() (escaped markup), or null.
+  adminNote = null,
   // Diagnostics only: render the update dialog already open. The real page
   // never sets this — whether the dialog opens is decided in the browser from
   // what that browser has already seen, which a server render cannot know.
@@ -69,6 +71,8 @@ export function dashboardPage({
       </span>
     </div>` : '';
 
+  const dataAlert = dataBannerMarkup(dataBanner);
+
   /* Shown once per browser, the first time it sees a version it has not seen
      before. A browser with no record at all is a first visit rather than an
      update, and is told nothing — greeting somebody's very first arrival with
@@ -85,6 +89,21 @@ export function dashboardPage({
           ? `<ul class="uplist">${releaseItems.map((i) => `<li>${linkTools(i)}</li>`).join('')}</ul>`
           : '<p class="hint" style="margin:0 0 14px">This site was updated.</p>'}
         <button class="primary" id="updateDone">Got it</button>
+      </div>
+      <div class="vbar" hidden><div class="vbar-thumb"></div></div>
+    </div>
+  </div>` : '';
+
+  /* Week 6 (P9): the note from the Site Admin, in the update notice's dialog. Each browser sees a note once; a new
+     note (a new id) shows again. Its body arrives as HTML that noteForBoard() built from escaped markup. */
+  const notePopup = adminNote ? `
+  <div class="uplayer" id="notepop" hidden data-note="${esc(adminNote.id)}">
+    <div class="upbox vwrap" role="dialog" aria-modal="true" aria-labelledby="noteTitle">
+      <div class="upbody vscroll" data-vscroll>
+        <div class="uphead"><div><p class="noteeyebrow">Note from the Site Admin</p><h2 id="noteTitle">${esc(adminNote.subject)}</h2></div></div>
+        <div class="notebody">${adminNote.html}</div>
+        ${adminNote.sig ? `<p class="notesig">${esc(adminNote.sig)}</p>` : ''}
+        <button class="primary" id="noteDone">Got it</button>
       </div>
       <div class="vbar" hidden><div class="vbar-thumb"></div></div>
     </div>
@@ -115,6 +134,7 @@ export function dashboardPage({
   const body = `
     ${credentialAlert}
     ${repullAlert}
+    ${dataAlert}
     <div id="sitenotice" hidden></div>
     <div class="panel tight reveal">
       <div class="tickhead">
@@ -189,7 +209,7 @@ export function dashboardPage({
   return shell({
     title: leagueName || 'ESPN Fantasy Tools', theme, reduceMotion, rail, body,
     band: true, settings: true, extraCss: css, extraJs: js,
-    overlays: updatePopup,
+    overlays: updatePopup + notePopup + (dataAlert ? DATA_DISMISS_POPUP : ''),
     instructions: [
       ['01', 'Pick your team first',
        'Choose your team and the whole page follows it: your matchup card, your injury watch, your side of the standings. The choice is shared with every tool, so you only make it once.'],
@@ -210,3 +230,52 @@ export function dashboardPage({
     action: '<button class="pagebtn danger" id="out">Sign out</button>',
   });
 }
+
+/* Week 6 (F2, PD9, PD21): "Some league data can't be reached". Written for a member who cannot fix it: what is
+   missing, which pages it touches (in their names), how old the copy they see is, and that it clears itself.
+   Times are ISO instants the browser renders in the chosen zone (class "dbtime"). */
+const joinList = (a) => (a.length < 2 ? a.join('') : `${a.slice(0, -1).join(', ')} and ${a[a.length - 1]}`);
+const stamp = (ms) => (ms ? `<time class="dbtime" datetime="${new Date(ms).toISOString()}">${new Date(ms).toISOString().slice(0, 16).replace('T', ' ')} UTC</time>` : 'an earlier fetch');
+
+export function dataBannerMarkup(list) {
+  if (!list || !list.length) return '';
+  const since = Math.min(...list.map((d) => d.since || Date.now()));
+  const goods = list.map((d) => d.lastGood).filter(Boolean);
+  const good = goods.length ? Math.min(...goods) : null;
+  let what;
+  if (list.length === 1) {
+    const d = list[0];
+    what = `ESPN has not answered for <strong>${esc(d.name)}</strong> since ${stamp(d.since)}. ` + (d.tools.length
+      ? `${esc(joinList(d.tools)).replace(/^the/, 'The')} ${d.tools.length === 1 ? 'shows' : 'show'} the last good copy, from ${stamp(d.lastGood)}.`
+      : 'This is background data: nothing on the site uses it yet.');
+  } else {
+    what = `ESPN has not answered for ${list.length} kinds of league data since ${stamp(since)}: ${joinList(list.map((d) => `<strong>${esc(d.name)}</strong> (${d.tools.length ? esc(joinList(d.tools)) : 'background data, nothing on the site uses it yet'})`))}. Pages show the last good copy, from ${stamp(good)}.`;
+  }
+  return `
+    <div class="alertbar dbbar" id="databanner" role="status">
+      <span class="alerticon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>
+        </svg>
+      </span>
+      <span class="dbtext">
+        <b>Some league data can’t be reached</b>
+        <p>${what} The site checks again every hour and this notice clears itself when ESPN answers.</p>
+        <p>Whoever administers this site can look into it in <a href="/apps/site-backend/#data">Site Backend</a> (the Data Layer tab) or <a href="/config">Site Configuration</a>. Both ask for the Admin Password.</p>
+      </span>
+      <button type="button" class="ghost dbdismiss" id="dbDismiss">Dismiss</button>
+    </div>`;
+}
+
+const DATA_DISMISS_POPUP = `
+  <div class="uplayer" id="dbpop" hidden>
+    <div class="upbox" role="dialog" aria-modal="true" aria-labelledby="dbTitle">
+      <div class="upbody">
+        <div class="uphead"><h2 id="dbTitle">Dismiss for everyone</h2></div>
+        <p class="hint dbhint">This hides the notice for every member until a check fails three times in a row again. Only whoever administers this site can do that.</p>
+        ${passwordField({ id: 'dbPw', label: 'Admin Password', autocomplete: 'current-password' })}
+        <p class="dberr" id="dbErr" role="alert" hidden></p>
+        <div class="dbbtns"><button type="button" class="ghost" id="dbCancel">Cancel</button><button type="button" class="primary" id="dbGo">Dismiss for everyone</button></div>
+      </div>
+    </div>
+  </div>`;

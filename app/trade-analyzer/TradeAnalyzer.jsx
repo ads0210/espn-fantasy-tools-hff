@@ -1,7 +1,7 @@
 import React, {
   useState, useEffect, useMemo, useRef, useCallback, useDeferredValue,
 } from "react";
-import { PALETTES, BASE_CSS, BACKDROP, TEAM_COOKIE } from "../../src/ui.js";
+import { PALETTES, BASE_CSS, BACKDROP, TEAM_COOKIE, pts2 } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
 import { createEngine } from "./engine.js";
@@ -119,7 +119,7 @@ button { -webkit-tap-highlight-color:transparent; font-family:inherit; }
 .pos-TE { color:#FFB020; } .pos-K { color:#B78CF7; } .pos-DST { color:#9AA8A0; }
 .pos-FLEX { color:#9AA8A0; }
 html[data-theme="light"] .pos-QB { color:#B1256C; }
-html[data-theme="light"] .pos-RB { color:#0C7A55; }
+html[data-theme="light"] .pos-RB { color:#0A6B4A; }
 html[data-theme="light"] .pos-WR { color:#20629E; }
 html[data-theme="light"] .pos-TE { color:#8A5406; }
 html[data-theme="light"] .pos-K { color:#5C3B9E; }
@@ -313,7 +313,7 @@ html.stillness .tabbody > * { animation:none; }
   text-transform:uppercase; padding:8px 16px; cursor:pointer; white-space:nowrap;
   text-align:center; transition:color var(--dur-1) var(--ease-out); }
 .segbtn:hover:not(.on) { color:var(--accent); }
-.segbtn.on { color:var(--field); }
+.segbtn.on { color:var(--on-accent); }
 html.stillness .segthumb { transition:none; }
 
 .minibtn { background:none; border:1px solid var(--line-2); color:var(--ink-2);
@@ -843,7 +843,7 @@ function Analysis({ engine, trade, surfaceKey, weights, onWeights, onOpenInBuild
             : null}
           {overlapIds.has(p.id)
             ? <span className="mk overlap" title="also in another pending offer" /> : null}
-          <span className="pj">{(p.rosPts != null ? p.rosPts : p.pr).toFixed(0)}</span>
+          <span className="pj">{pts2(p.rosPts != null ? p.rosPts : p.pr)}</span>
         </div>
       )) : <div className="pline"><span className="nm"><i>nothing selected</i></span></div>}
     </div>
@@ -908,7 +908,7 @@ function Analysis({ engine, trade, surfaceKey, weights, onWeights, onOpenInBuild
           </div>
           <div>
             <span className="lbl">Gap</span>
-            <span className="n">{Math.abs(v.gap).toFixed(1)}</span>
+            <span className="n">{pts2(Math.abs(v.gap))}</span>
           </div>
           <div>
             <span className="lbl">{B.n}</span>
@@ -1196,7 +1196,7 @@ const OfferCard = React.memo(function OfferCard(
         <div className="ocplayer" key={p.id}>
           <span className={"posbadge " + posClassOf(p.pos)}>{p.pos}</span>
           <span className="nm">{p.n}</span>
-          <span className="pj">{(p.rosPts != null ? p.rosPts : p.pr).toFixed(0)}</span>
+          <span className="pj">{pts2(p.rosPts != null ? p.rosPts : p.pr)}</span>
         </div>
       )) : <span className="ocnone">{unsupported ? "—" : "nothing"}</span>}
     </div>
@@ -1567,7 +1567,7 @@ export default function TradeAnalyzer() {
                 onClick={() => togglePlayer(side, p.id)}>
                 <span className={"posbadge " + posClassOf(p.pos)}>{p.pos}</span>
                 <span className="nm">{p.n}</span>
-                <span className="pj">{(p.rosPts != null ? p.rosPts : p.pr).toFixed(0)}</span>
+                <span className="pj">{pts2(p.rosPts != null ? p.rosPts : p.pr)}</span>
               </button>
             ))}
           </VScrollBox>

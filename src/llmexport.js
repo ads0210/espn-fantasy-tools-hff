@@ -191,7 +191,7 @@ function playerRow(entry, p, ctx, extra = {}) {
   const sp = splits(p.stats, ctx.season, ctx.period);
   const nfl = PRO[p.proTeamId] ?? 'FA';
   const live = ctx.liveById[p.id];
-  const inj = INJURY[p.injuryStatus];
+  const inj = INJURY[ctx.pickInj ? ctx.pickInj(p.id, p.injuryStatus) : p.injuryStatus];
   const note = ctx.injuryNotes[String(p.id)];
 
   /* This week's fixture comes from the NFL schedule, so a free agent gets one
@@ -337,7 +337,9 @@ export async function buildLlmExportDigest(ctx) {
   for (const p of (src.injuries_digest && src.injuries_digest.players) || []) {
     if (!injuryNotes[p.id] && p.note) injuryNotes[p.id] = p.note;
   }
-  const ctxP = { season, period, liveById, injuryNotes, byes: nfl.byes, fixtures: nfl.fixtures };
+  // Week 6 (PD39): the newer of ESPN's two injury statuses, through the refresh runner's picker when there is one.
+  const pickInj = (ctx && ctx.injury && ctx.injury.pick) || ((id, st) => st || 'ACTIVE');
+  const ctxP = { season, period, liveById, injuryNotes, byes: nfl.byes, fixtures: nfl.fixtures, pickInj };
 
   const standings = ((src.standings_digest && src.standings_digest.rows) || []).map((r) => clean({
     rank: r.rank,

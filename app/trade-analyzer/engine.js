@@ -1,3 +1,4 @@
+import { pts2, ptsSigned, dateTimeText } from "../../src/ui.js";
 /* ============================================================================
    Trade Analyzer — evaluation engine.
 
@@ -130,7 +131,8 @@ const playerById = (id) => {
 const ownerOf = (t) => (t.ow || []).filter(Boolean).join(", ");
 const posClass = (p) => "pos-" + (p === "D/ST" ? "DST" : p);
 const sgn = (n) => (n > 0 ? "+" : n < 0 ? "\u2212" : "");
-const vp = (n) => sgn(n) + Math.abs(n).toFixed(1);
+// Week 6 (PD38): points to two decimals, signed, by the shared formatter.
+const vp = (n) => ptsSigned(n);
 const numCls = (n) => (Math.abs(n) < 0.05 ? "zero" : n > 0 ? "pos" : "neg");
 
 /* Real time. The digest is minutes old at worst, but an offer's expiry is a
@@ -154,14 +156,8 @@ function deadlineMs() {
 let TZ = null;
 function setZone(z) { TZ = z || null; }
 function tzLabel() { try { return TZ || Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { return "UTC"; } }
-function fmtWhen(ms) {
-  try {
-    return new Intl.DateTimeFormat("en-US", {
-      timeZone: tzLabel(), month: "short", day: "numeric",
-      hour: "numeric", minute: "2-digit",
-    }).format(new Date(ms));
-  } catch (e) { return new Date(ms).toISOString(); }
-}
+// Week 6 (A8): the site's one date style.
+function fmtWhen(ms) { return dateTimeText(ms, tzLabel()) || new Date(ms).toISOString(); }
 function countdown(ms) {
   const d = ms - nowMs();
   if (d <= 0) return { text: "Expired", cls: "gone", soon: false, gone: true };
@@ -610,16 +606,16 @@ function analyzeTrade(trade) {
 
     /* R1. Net rest-of-season points moving each way, slots ignored. */
     R1: (c) => ({ v: (c.rosIn - c.rosOut) / WEEKS_LEFT,
-      raw: num(c.rosIn - c.rosOut, 0) + " proj pts" }),
+      raw: ptsSigned(c.rosIn - c.rosOut) + " proj pts" }),
     /* R2. What the best legal lineup actually gains, beyond R1: three startable
        players into two open slots gain less than their projections add up to. */
     R2: (c, memo) => {
       const total = c.la.total - c.lb.total;
-      return { v: total - memo.R1, raw: num(total) + " pts/wk lineup" };
+      return { v: total - memo.R1, raw: ptsSigned(total) + " pts/wk lineup" };
     },
     /* R3. Recent form against the projected rate. */
     R3: (c) => { const v = net(c, (p) => { const f = formOf(p); return f == null ? null : f * perWeek(p); });
-      return v == null ? none : { v, raw: num(v) + " pts/wk on form" }; },
+      return v == null ? none : { v, raw: ptsSigned(v) + " pts/wk on form" }; },
     /* R4. Last season's rate against this season's projected one, fading to nothing by week 6. */
     R4: (c) => {
       const decay = Math.max(0, Math.min(1, 1 - (WEEK - 1) / (PRIOR_DECAY_WEEK - 1)));
@@ -640,7 +636,7 @@ function analyzeTrade(trade) {
     R8: (c) => {
       const share = REG_LEFT / WEEKS_LEFT;
       const v = c.dS * share * (POINTS_SEEDED ? 1 : 0.25);
-      return { v, raw: POINTS_SEEDED ? num(c.dS * REG_LEFT, 0) + " pts toward seeding" : "points break ties only" };
+      return { v, raw: POINTS_SEEDED ? ptsSigned(c.dS * REG_LEFT) + " pts toward seeding" : "points break ties only" };
     },
 
     /* R9. Points lost to the games each player is expected to miss. */
@@ -652,7 +648,7 @@ function analyzeTrade(trade) {
       return v == null ? none : { v, raw: "games missed, last season and this" }; },
     /* R11. The season solved week by week with players on a bye out of the lineup, beyond the bye-free week R2 solved. */
     R11: (c, memo) => { const v = c.dS - (memo.R1 + memo.R2);
-      return { v, raw: Math.abs(v) < 0.05 ? "no new bye clash" : (v < 0 ? "bye weeks cost " : "bye weeks eased ") + Math.abs(v * WEEKS_LEFT).toFixed(0) + " pts" }; },
+      return { v, raw: Math.abs(v) < 0.05 ? "no new bye clash" : (v < 0 ? "bye weeks cost " : "bye weeks eased ") + pts2(Math.abs(v * WEEKS_LEFT)) + " pts" }; },
     /* R12. The share of each player's rate at risk by where his depth chart lists him. */
     R12: (c) => { if (!DATA.inputs.depth) return none;
       const v = -net(c, (p) => roleRiskOf(p) * rate(p) * perWeek(p));

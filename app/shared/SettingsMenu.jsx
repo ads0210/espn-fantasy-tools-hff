@@ -77,7 +77,28 @@ function offsetLabel(zone) {
   return label;
 }
 
+/**
+ * Put a theme on the page and remember it (week 6, F4). The settings control owns this, so no tool can ship
+ * a Light theme switch that changes nothing: Site API, Trade Analyzer and LLM Data Export each kept the theme
+ * in state and never wrote it to the page, and the other tools carried hand-written copies of these two lines.
+ */
+export function applyTheme(theme) {
+  if (theme !== "light" && theme !== "dark") return;
+  if (typeof document === "undefined") return;
+  if (document.documentElement.dataset.theme !== theme) document.documentElement.dataset.theme = theme;
+  setCookie(THEME_COOKIE, theme);
+}
+
 export default function SettingsMenu({ open, onClose, theme, onTheme, anchorRef }) {
+  useEffect(() => { applyTheme(theme); }, [theme]);
+  // Week 6 (A7): a closed menu leaves the Tab order and assistive technology (it is only transparent otherwise).
+  const boxRefInert = useRef(null);
+  useEffect(() => {
+    const el = boxRefInert.current;
+    if (el) el.inert = !open;
+    const g = anchorRef && anchorRef.current;
+    if (g) g.setAttribute("aria-expanded", String(Boolean(open)));
+  }, [open, anchorRef]);
   const [motion, setMotion] = useState(
     () => readCookie(MOTION_COOKIE) === "reduce");
   const [tz, setTz] = useState(() => readCookie(TZ_COOKIE));
@@ -140,7 +161,7 @@ export default function SettingsMenu({ open, onClose, theme, onTheme, anchorRef 
   const shown = q ? zones.current.filter((z) => z.toLowerCase().includes(q)) : zones.current;
 
   return (
-    <div className={`settings${open ? " open" : ""}`} ref={boxRef}
+    <div className={`settings${open ? " open" : ""}`} ref={(el) => { boxRef.current = el; boxRefInert.current = el; if (el) el.inert = !open; }}
          role="dialog" aria-label="Site settings">
       <div className="setttl">Site settings</div>
 

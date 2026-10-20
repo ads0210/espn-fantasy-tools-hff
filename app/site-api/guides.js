@@ -1,7 +1,7 @@
 /**
  * Site API: the platform guides.
  *
- * Eleven platforms and 37 jobs: each job's steps, its code with the league's address, key and team filled in,
+ * Sixteen platforms and 70 jobs (week 6 added five platforms and 33 jobs, in jobs6.js): each job's steps, its code with the league's address, key and team filled in,
  * a picture of it working, and how it stops. Every example keeps the pace and stops itself: it waits the pace
  * the site gives (or runs on a schedule slower than the slowest pace), pauses on pace_changed and stops for
  * good on too_fast, in whatever way its platform allows.
@@ -16,6 +16,7 @@
  *   keyInExamples(), pace(), teamName(id), standingsNow(), and the page's formatting helpers.
  */
 /* eslint-disable */
+import { addWeek6Jobs } from './jobs6.js';
 export function makeGuides(env) {
   var API = env.API, D = env.D, S = env.S, LEAGUE = env.LEAGUE, WEEK = env.WEEK, DAY = 86400000, MIN = 60000;
   var esc = env.esc, iso = env.iso, stamp = env.stamp, dayOf = env.dayOf, timeOf = env.timeOf, dateOf = env.dateOf, durWords = env.durWords;
@@ -63,7 +64,7 @@ export function makeGuides(env) {
     return D.scoreboard.filter(function (m) { return m.home.teamId === t || m.away.teamId === t; })[0];
   }
   function scoreLine(m) {
-    return m.home.team + ' ' + m.home.points.toFixed(1) + ' - ' + m.away.points.toFixed(1) + ' ' + m.away.team + '  (' + (m.home.yetToPlay + m.away.yetToPlay) + ' yet to play)';
+    return m.home.team + ' ' + m.home.points.toFixed(2) + ' - ' + m.away.points.toFixed(2) + ' ' + m.away.team + '  (' + (m.home.yetToPlay + m.away.yetToPlay) + ' yet to play)';
   }
   function leftToPlay(t) {
     return D._rosterRows.filter(function (r) { return r.teamId === t && r.gameState === 'pre' && r.slot !== 'BE' && r.slot !== 'IR'; });
@@ -341,7 +342,7 @@ export function makeGuides(env) {
               '        time.sleep(int(r.headers["Retry-After"]))  # pace_changed: the site slowed down\n        continue\n' +
               '    if r.status_code != 304:                       # 304: nothing changed since last time\n        body = r.json()\n        if not body["ok"]:\n            sys.exit(body["error"]["message"])\n' +
               '        etag = r.headers.get("ETag")\n        for m in body["data"]:\n            h, a = m["home"], m["away"]\n' +
-              '            print(f\'{h["team"]} {h["points"]:.1f} - {a["points"]:.1f} {a["team"]}  \'\n                  f\'({h["yetToPlay"] + a["yetToPlay"]} yet to play)\')\n' +
+              '            print(f\'{h["team"]} {h["points"]:.2f} - {a["points"]:.2f} {a["team"]}  \'\n                  f\'({h["yetToPlay"] + a["yetToPlay"]} yet to play)\')\n' +
               '    time.sleep(int(r.headers.get("X-Suggested-Interval", "60")))\n';
           },
           look: function (c) {
@@ -415,7 +416,7 @@ export function makeGuides(env) {
               "    await sleep(Number(res.headers.get('Retry-After')));   // pace_changed: the site slowed down\n    continue;\n  }\n" +
               "  if (res.status !== 304) {                       // 304: nothing changed since last time\n    const body = await res.json();\n" +
               "    if (!body.ok) { console.error(body.error.message); process.exit(1); }\n    etag = res.headers.get('ETag');\n" +
-              "    for (const { home, away } of body.data) {\n      console.log(`${home.team} ${home.points.toFixed(1)} - ${away.points.toFixed(1)} ${away.team}  ` +\n" +
+              "    for (const { home, away } of body.data) {\n      console.log(`${home.team} ${home.points.toFixed(2)} - ${away.points.toFixed(2)} ${away.team}  ` +\n" +
               "        `(${home.yetToPlay + away.yetToPlay} yet to play)`);\n    }\n  }\n  await sleep(Number(res.headers.get('X-Suggested-Interval') ?? 60));\n}\n";
           },
           look: function (c) { var m = myMatch(c.T); return LOOK.term([['pr', '$ node live-score.mjs'], scoreLine(m)]); },
@@ -550,8 +551,8 @@ export function makeGuides(env) {
           },
           look: function (c) {
             var m = myMatch(c.T);
-            return LOOK.phone(notif('Shortcuts', 'Fantasy score', m.home.team + ' ' + m.home.points.toFixed(1) + ' – ' + m.away.points.toFixed(1) + ' ' + m.away.team + ' · ' + (m.home.yetToPlay + m.away.yetToPlay) + ' left') +
-              '<div class="widget"><div class="wt">Fantasy score</div><div class="ws"><span>' + esc(m.home.team) + '</span><span>' + m.home.points.toFixed(1) + '</span></div><div class="ws"><span>' + esc(m.away.team) + '</span><span>' + m.away.points.toFixed(1) + '</span></div></div>');
+            return LOOK.phone(notif('Shortcuts', 'Fantasy score', m.home.team + ' ' + m.home.points.toFixed(2) + ' – ' + m.away.points.toFixed(2) + ' ' + m.away.team + ' · ' + (m.home.yetToPlay + m.away.yetToPlay) + ' left') +
+              '<div class="widget"><div class="wt">Fantasy score</div><div class="ws"><span>' + esc(m.home.team) + '</span><span>' + m.home.points.toFixed(2) + '</span></div><div class="ws"><span>' + esc(m.away.team) + '</span><span>' + m.away.points.toFixed(2) + '</span></div></div>');
           },
           stop: 'An automation can’t switch itself off, so on <code>too_fast</code> the shortcut saves the site’s message to <code>SiteAPI/stopped.txt</code> and shows it. Every run checks that note first and asks nothing while it is there: delete it in the Files app (On My iPhone → Shortcuts → SiteAPI) once you have fixed the automations.' },
         { key: 'left', title: 'Who’s left to play', have: 'A tap-to-see list of your starters still to play.',
@@ -640,7 +641,7 @@ export function makeGuides(env) {
           },
           look: function (c) {
             var m = myMatch(c.T), mine = m.home.teamId === c.T ? m.home : m.away;
-            return '<div class="looks"><div class="hacard"><div class="hr"><i>◆</i><span>My fantasy score</span><b>' + mine.points.toFixed(1) + '</b></div>' +
+            return '<div class="looks"><div class="hacard"><div class="hr"><i>◆</i><span>My fantasy score</span><b>' + mine.points.toFixed(2) + '</b></div>' +
               '<div class="hr"><i>⏱</i><span>Site API next ask</span><b>' + esc(timeOf(Date.now() + (pace().secs || 60) * 1000)) + '</b></div>' +
               '<div class="hr"><i>■</i><span>Site API stopped</span><b>Off</b></div></div></div>';
           },
@@ -688,12 +689,12 @@ export function makeGuides(env) {
               "if (existsSync(STOP)) process.exit(1);\n\nconst res = await fetch(ADDRESS, { headers: KEY });\nconst body = await res.json();\nif (res.status === 429) {\n" +
               "  if (body.error.stop === 'exit') writeFileSync(STOP, body.error.message);   // too_fast: stop for good\n  process.exit(1);                                 // pace_changed: skip this post\n}\n" +
               "if (!body.ok) throw new Error(body.error.message);\n\nconst lines = body.data.map(({ state, home, away }) =>\n" +
-              "  `${state === 'final' ? '✅' : '🏈'} **${home.team}** ${home.points.toFixed(1)} – ${away.points.toFixed(1)} **${away.team}**`);\n" +
+              "  `${state === 'final' ? '✅' : '🏈'} **${home.team}** ${home.points.toFixed(2)} – ${away.points.toFixed(2)} **${away.team}**`);\n" +
               "await fetch(WEBHOOK, {\n  method: 'POST', headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({ content: `Week ${body.meta.week} scores\\n${lines.join('\\n')}` }),   // Slack: { text: … }\n});\n";
           },
           look: function () {
             return LOOK.chat('League Bot', ['<b>Week ' + WEEK + ' scores</b>' + D.scoreboard.map(function (m) {
-              return '<div>' + (m.state === 'final' ? '✅' : '🏈') + ' <b>' + esc(m.home.team) + '</b> ' + m.home.points.toFixed(1) + ' – ' + m.away.points.toFixed(1) + ' <b>' + esc(m.away.team) + '</b></div>';
+              return '<div>' + (m.state === 'final' ? '✅' : '🏈') + ' <b>' + esc(m.home.team) + '</b> ' + m.home.points.toFixed(2) + ' – ' + m.away.points.toFixed(2) + ' <b>' + esc(m.away.team) + '</b></div>';
             }).join('')]);
           },
           stop: STOPFILE() },
@@ -769,7 +770,7 @@ export function makeGuides(env) {
       }
       return keyed(o + esc(text.slice(l)));
     }
-    var cm = lang === 'js' || lang === 'm' ? '\\/\\/[^\\n]*' : '#[^\\n]*';
+    var cm = lang === 'js' || lang === 'm' || lang === 'html' ? '\\/\\/[^\\n]*' : '#[^\\n]*';
     var re = new RegExp('(' + cm + ')|("(?:[^"\\\\\\n]|\\\\.)*"|\'(?:[^\'\\\\\\n]|\\\\.)*\'|`(?:[^`\\\\]|\\\\.)*`)|(\\b\\d+(?:\\.\\d+)?\\b)|' + KW.source, 'g');
     var out = '', last = 0, m;
     while ((m = re.exec(text))) {
@@ -872,7 +873,7 @@ export function makeGuides(env) {
           return [t].concat(v).concat([got.reduce(function (a, b) { return a + b; }, 0) / (got.length || 1)]); })
           .sort(function (a, b) { return b[b.length - 1] - a[a.length - 1]; }).slice(0, 6);
         return '<div class="looks"><table class="nbtable"><tr><th>team</th>' + weeks.map(function (k) { return '<th>' + k + '</th>'; }).join('') + '<th>average</th></tr>' +
-          rows.map(function (r) { return '<tr><th>' + esc(r[0]) + '</th>' + r.slice(1).map(function (v) { return '<td>' + (v == null ? 'NaN' : v.toFixed(1)) + '</td>'; }).join('') + '</tr>'; }).join('') + '</table>' +
+          rows.map(function (r) { return '<tr><th>' + esc(r[0]) + '</th>' + r.slice(1).map(function (v) { return '<td>' + (v == null ? 'NaN' : v.toFixed(2)) + '</td>'; }).join('') + '</tr>'; }).join('') + '</table>' +
           '<p class="cap">The cell’s last line: points by week, best average first.</p></div>';
       },
       stop: 'A notebook asks only when you run the cell, so nothing keeps asking. If you run it again too soon, the cell stops with the site’s message; wait for the time it gives.' },
@@ -989,7 +990,7 @@ export function makeGuides(env) {
       },
       look: function (c) {
         var m = myMatch(c.T), me = m.home.teamId === c.T ? m.home : m.away, them = m.home.teamId === c.T ? m.away : m.home, d = me.points - them.points;
-        return LOOK.phone(notif('Home Assistant', d >= 0 ? 'You took the lead' : 'You fell behind', (d >= 0 ? '+' : '') + d.toFixed(1) + ' points with ' + me.points.toFixed(1) + ' scored'));
+        return LOOK.phone(notif('Home Assistant', d >= 0 ? 'You took the lead' : 'You fell behind', (d >= 0 ? '+' : '') + d.toFixed(2) + ' points with ' + me.points.toFixed(2) + ' scored'));
       },
       stop: 'It asks nothing itself: the lead sensor rides on the live score’s request, so the live score’s <b>Site API stopped</b> helper covers it.' },
   ]);
@@ -1043,22 +1044,22 @@ export function makeGuides(env) {
           'week = max((w for w, ms in weeks.items() if all(m["state"] == "final" for m in ms)), default=None)\n' +
           'if week is None or POSTED.exists() and POSTED.read_text() == str(week):\n    sys.exit(0)                          # nothing new to post\n' +
           'games = weeks[week]\ngap = lambda m: abs(m["home"]["points"] - m["away"]["points"])\n' +
-          'lines = []\nfor m in games:\n    w, l = sorted((m["home"], m["away"]), key=lambda s: -s["points"])\n    lines.append(f"**{w[\'team\']}** {w[\'points\']:.1f} – {l[\'points\']:.1f} {l[\'team\']}")\n' +
+          'lines = []\nfor m in games:\n    w, l = sorted((m["home"], m["away"]), key=lambda s: -s["points"])\n    lines.append(f"**{w[\'team\']}** {w[\'points\']:.2f} – {l[\'points\']:.2f} {l[\'team\']}")\n' +
           'top = max((s for m in games for s in (m["home"], m["away"])), key=lambda s: s["points"])\nclose, rout = min(games, key=gap), max(games, key=gap)\n' +
           'table = "\\n".join(f"{t[\'seed\']}. {t[\'team\']} ({t[\'wins\']}-{t[\'losses\']})" for t in league["standings"])\n' +
           'text = (f"🏈 **Week {week} results**\\n" + "\\n".join(lines) +\n' +
-          '        f"\\n\\nTop score: {top[\'team\']}, {top[\'points\']:.1f}"\n' +
-          '        f"\\nClosest: {close[\'home\'][\'team\']} v {close[\'away\'][\'team\']}, by {gap(close):.1f}"\n' +
-          '        f"\\nBiggest win: {rout[\'home\'][\'team\']} v {rout[\'away\'][\'team\']}, by {gap(rout):.1f}"\n' +
+          '        f"\\n\\nTop score: {top[\'team\']}, {top[\'points\']:.2f}"\n' +
+          '        f"\\nClosest: {close[\'home\'][\'team\']} v {close[\'away\'][\'team\']}, by {gap(close):.2f}"\n' +
+          '        f"\\nBiggest win: {rout[\'home\'][\'team\']} v {rout[\'away\'][\'team\']}, by {gap(rout):.2f}"\n' +
           '        f"\\n\\n**Standings**\\n{table}")\n' +
           'requests.post(WEBHOOK, json={"content": text}, timeout=30).raise_for_status()   # Slack: json={"text": text}\nPOSTED.write_text(str(week))\n';
       },
       look: function () {
         var wk = lastFinalWeek(), g = D.schedule.filter(function (m) { return m.week === wk; });
         var gap = function (m) { return Math.abs(m.home.points - m.away.points); };
-        var lines = g.map(function (m) { var w = m.home.points >= m.away.points ? [m.home, m.away] : [m.away, m.home]; return '<div><b>' + esc(w[0].team) + '</b> ' + w[0].points.toFixed(1) + ' – ' + w[1].points.toFixed(1) + ' ' + esc(w[1].team) + '</div>'; });
+        var lines = g.map(function (m) { var w = m.home.points >= m.away.points ? [m.home, m.away] : [m.away, m.home]; return '<div><b>' + esc(w[0].team) + '</b> ' + w[0].points.toFixed(2) + ' – ' + w[1].points.toFixed(2) + ' ' + esc(w[1].team) + '</div>'; });
         var close = g.slice().sort(function (a, b) { return gap(a) - gap(b); })[0];
-        return LOOK.chat('League Bot', ['<b>🏈 Week ' + wk + ' results</b>' + lines.join('') + '<div style="margin-top:6px">Closest: ' + esc(close.home.team) + ' v ' + esc(close.away.team) + ', by ' + gap(close).toFixed(1) + '</div>'], 'Posted once, the Tuesday after the week settles.');
+        return LOOK.chat('League Bot', ['<b>🏈 Week ' + wk + ' results</b>' + lines.join('') + '<div style="margin-top:6px">Closest: ' + esc(close.home.team) + ' v ' + esc(close.away.team) + ', by ' + gap(close).toFixed(2) + '</div>'], 'Posted once, the Tuesday after the week settles.');
       },
       stop: STOPFILE() + ' A run refused with <code>pace_changed</code> skips; a week is only marked posted once it has been.' },
     { key: 'rivalry', title: 'Post a rivalry preview for each matchup', have: 'Midweek, every matchup with its all-time head-to-head record and when the two last met.',
@@ -1152,6 +1153,10 @@ export function makeGuides(env) {
     'ha.lead': 'With the live score', 'chat.recap': 'Tuesday mornings', 'chat.rivalry': 'Wednesdays',
     'calendar.gcal': 'Wednesdays at about 9', 'calendar.ics': 'When you run it',
   });
+
+  /* Week 6 (N3, PD24, PD43): the twelve picked jobs, five new platforms among them (app/site-api/jobs6.js). */
+  addWeek6Jobs({ PLATFORMS: PLATFORMS, GL: GL, PLAT_KIND: PLAT_KIND, RUNS: RUNS, U: U, D: D, S: S, LOOK: LOOK, esc: esc, notif: notif, myMatch: myMatch,
+    WEEK: WEEK, LEAGUE: LEAGUE, STOPFILE: STOPFILE, standingsNow: standingsNow, addJobs: addJobs, lastFinalWeek: lastFinalWeek, actions: actions });
 
   /* What each job calls itself in name=, read from its own code: Site Backend's Jobs panel counts requests by it. */
   function jobNames() {

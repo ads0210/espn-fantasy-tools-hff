@@ -1,7 +1,7 @@
 import ScrollBox from "../shared/ScrollBox.jsx";
 import ToolControls from "../shared/ToolControls.jsx";
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { PALETTES, BASE_CSS, BACKDROP } from "../../src/ui.js";
+import { PALETTES, BASE_CSS, BACKDROP, pts2, ptsSigned } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
 import Instructions from "../shared/Instructions.jsx";
@@ -61,8 +61,9 @@ function stillnessOn() {
 
 const pairKey = (a, b) => (a < b ? `${a}:${b}` : `${b}:${a}`);
 const pct = (x) => `${(Number(x || 0) * 100).toFixed(1)}%`;
-const num1 = (n) => Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-const signed = (n) => `${Number(n) >= 0 ? "+" : ""}${Number(n || 0).toFixed(1)}`;
+// Week 6 (PD38): every points figure to two decimals, by the shared formatter.
+const num1 = (n) => pts2(Number(n || 0));
+const signed = (n) => ptsSigned(Number(n || 0));
 const yy = (year) => `'${String(year).slice(2)}`;
 
 function ordinal(n) {
@@ -1244,10 +1245,7 @@ export default function HallOfFame() {
   const expandAll = typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).get("expand") === "1";
 
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.cookie = `${THEME_COOKIE}=${theme}; path=/; max-age=31536000; samesite=lax`;
-  }, [theme]);
+  // The theme is put on the page by the shared settings control (week 6, F4).
 
   useEffect(() => {
     fetch("/api/meta", { credentials: "same-origin" })

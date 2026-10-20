@@ -357,7 +357,7 @@ export const PAGE_CSS = `/* ====================================================
 .eptab[aria-selected="true"]::after { content:""; position:absolute; left:50%; bottom:-8px; width:10px; height:10px; background:var(--panel);
   border-right:1px solid var(--accent); border-bottom:1px solid var(--accent); transform:translateX(-50%) rotate(45deg); }
 .eptab .m { font:900 9px/1 var(--mono); letter-spacing:.1em; color:var(--field); background:var(--accent); padding:3px 5px 2px; }
-.eptab[aria-selected="false"] .m { background:var(--line-2); color:var(--ink-2); }
+.eptab[aria-selected="false"] .m { background:var(--line-2); color:var(--ink); }
 .eptab .p { font:800 13.5px/1.2 var(--mono); color:inherit; overflow-wrap:anywhere; }
 .eptab .z { font-size:var(--fs-micro); font-weight:900; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); line-height:1.3; }
 @media (max-width:760px) { .eptabs { grid-template-columns:repeat(3,minmax(0,1fr)); } .eptab[aria-selected="true"]::after { display:none; } }
@@ -515,7 +515,7 @@ html[data-theme="light"] .code .kw { color:#7A3E9D; }
 .stopbox { border:1px solid var(--flag); background:var(--flag-soft); }
 .stopbox .sbh { display:flex; align-items:center; gap:8px; padding:9px 14px; border-bottom:1px solid color-mix(in srgb,var(--flag) 35%,transparent); background:color-mix(in srgb,var(--flag) 10%,transparent); }
 .stopbox .sbh svg { width:15px; height:15px; flex:none; color:var(--flag); }
-.stopbox .sbh b { font-size:var(--fs-micro); font-weight:900; letter-spacing:.14em; text-transform:uppercase; color:var(--flag); }
+.stopbox .sbh b { font-size:var(--fs-micro); font-weight:900; letter-spacing:.14em; text-transform:uppercase; color:color-mix(in srgb,var(--flag) 82%,var(--ink)); }
 .stopbox p { padding:12px 14px 13px; font-size:12.5px; line-height:1.6; color:var(--ink-2); }
 .stopbox p code { color:var(--ink); }
 .stopbox p b { color:var(--ink); }
@@ -526,7 +526,7 @@ html[data-theme="light"] .code .kw { color:#7A3E9D; }
 .looks .cap { font-size:11px; color:var(--ink-3); margin-top:10px; line-height:1.45; }
 .term { background:#070907; border:1px solid #1d251e; padding:10px 12px; font:11.5px/1.6 var(--mono); color:#B9D6BA; white-space:pre-wrap; overflow-wrap:anywhere; }
 .term .pr { color:#63FF4A; }
-.term .dim { color:#5E7260; }
+.term .dim { color:#82988A; }
 .term .err { color:#FF7070; }
 html[data-theme="light"] .term { background:#0E130F; }
 .sheet { border:1px solid var(--line-2); background:var(--panel); font-size:11px; overflow:hidden; }
@@ -559,6 +559,7 @@ html[data-theme="light"] .chat { background:#f3f3f5; color:#26272b; }
 html[data-theme="light"] .chat .who { color:#111; }
 .chat .who i { width:26px; height:26px; border-radius:50%; background:var(--accent); display:inline-block; flex:none; }
 .chat .who small { font-weight:400; font-size:11px; color:#8e9096; }
+html[data-theme="light"] .chat .who small { color:#63656b; }
 .chat .emb { margin:6px 0 0 34px; border-left:3px solid var(--accent); background:rgba(0,0,0,.18); border-radius:4px; padding:8px 10px; }
 html[data-theme="light"] .chat .emb { background:#fff; }
 .chat .emb + .emb { margin-top:6px; }
@@ -614,6 +615,7 @@ html[data-theme="light"] .hacard { background:#fff; color:#212121; border:1px so
 .levels th { text-align:center; font-size:var(--fs-micro); font-weight:900; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); padding:8px 10px; border-bottom:1px solid var(--line-2); }
 .levels td { padding:9px 10px; border-bottom:1px solid var(--line); color:var(--ink-2); vertical-align:top; line-height:1.45; }
 .levels td b { color:var(--ink); }
+.levels tr.now td .small { color:var(--ink-2); }
 .levels tr.now td { background:color-mix(in srgb,var(--pc,var(--accent)) 10%,transparent); }
 .levels tr.now td:first-child { box-shadow:inset 3px 0 0 var(--pc,var(--accent)); }
 .levels .nowtag { display:inline-block; margin-left:8px; padding:1px 6px; font-size:9px; font-weight:900; letter-spacing:.14em; text-transform:uppercase; color:var(--field); background:var(--pc,var(--accent)); vertical-align:1px; }

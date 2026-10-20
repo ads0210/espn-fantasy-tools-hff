@@ -10,6 +10,7 @@
  * exactly where it was, so a page always has something to serve.
  */
 
+import { loadPicker } from './injurystatus.js';
 import { fetchPart, mapLimit, inspectBody } from './espn.js';
 import { noteEspnAuth, readAuthOutcome } from './espnhealth.js';
 import { headPart, getPart, putPart, writeStatus, readStatus, isFresh, ageSeconds } from './store.js';
@@ -307,6 +308,9 @@ export async function refreshDataset(env, cfg, dataset, { force = false } = {}) 
         }
       }
 
+      // Week 6 (PD39): a digest carrying injury statuses takes the newer of ESPN's two; the ledger is saved after.
+      if (derivation.injuryCheck) ctx.injury = await loadPicker(env);
+
       if (derivation.buildMulti) {
         // Sources spread across many parts build from the parts directly.
         digest = await derivation.buildMulti({
@@ -350,6 +354,7 @@ export async function refreshDataset(env, cfg, dataset, { force = false } = {}) 
         }
       }
 
+      if (ctx.injury) await ctx.injury.save();
       if (digest) {
         const body = new TextEncoder().encode(JSON.stringify(digest));
         await putPart(env, derivation.target, 'main', body.buffer, {

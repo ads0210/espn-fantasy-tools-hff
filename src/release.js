@@ -13,16 +13,19 @@
  * updated, which is the honest thing to say about a build whose changes nobody
  * outside the repo would notice.
  */
+/* Week 6 (v1.2xx): the list the user wrote and approved on 17 October 2026, spell-checked only. Its last line is the
+   user's own wording of the usual closing line. */
 export const RELEASE_NOTE_ITEMS = [
-  'The site now keeps running when it is flooded with requests. Signing in no longer depends on the activity log, '
-  + 'and the log limits how much of the day\u2019s allowance it can use.',
-  'Site Backend now steps down in stages as the day\u2019s allowance is used: panels built from the activity log '
-  + 'rest first, and everything else, the Overview included, carries on. Everything returns at 00:00 UTC.',
-  'The activity log no longer records visits to the sign-in page, or failed sign-ins with no team chosen, so bots '
-  + 'and scanners cannot fill it.',
-  'New in Site Configuration: Sign-in length. Whoever administers this site can choose how long a sign-in lasts, '
-  + 'from one hour to infinite. Changing the League Password signs everyone out.',
-  'Various bug fixes and performance improvements.',
+  'You can now add the site as an app on your phone: on iPhone, open the home page, tap Share, then Add to Home Screen.',
+  'New in Fortune Teller: league-wide odds charts show every team\u2019s ESPN and simulated playoff odds after each week. '
+  + 'Point at a line to read it, or tap a team to show it alone. Standings now toggle between live and selected.',
+  'You can now hover over Live Matchups\u2019 score, margin and win-probability charts to read any moment of a game.',
+  'The matchup card on the home page now carries a banner when a game matters: the Championship, playoff rounds, '
+  + 'Must Win, Win and You\u2019re In, and more.',
+  'Whoever administers the site can now leave a note for everyone on the home page from Site Configuration.',
+  'NFL depth charts and team schedules load reliably again, and the home page says so if any league data can\u2019t be reached.',
+  'Site API: twelve new ready-made jobs, from game alerts and a desk scoreboard to league dashboards, with phone alerts through ntfy.',
+  'Various bug fixes, theme support, and performance improvements.',
 ];
 
 /**
@@ -34,4 +37,5 @@ export const RELEASE_NOTE_ITEMS = [
  * production package's Step 0): the list is reviewed with the notes, and like them it is cleared or rewritten for the
  * next release. Keys are those in src/tools.js; a test holds every one to a registered tool.
  */
-export const NEW_TOOLS = ['site-api'];
+/* Week 6: no new tool in this release; Site API's tag from v1.199 cleared at the user's word (20 October 2026). */
+export const NEW_TOOLS = [];

@@ -56,7 +56,9 @@ export async function fortuneTellerPayload(env) {
   try { s = await obj.json(); } catch { return notReady(); }
   const logos = await teamLogos(env);
   s.teams = (s.teams || []).map((t) => ({ ...t, logo: logos.get(Number(t.id)) || null }));
-  return { ok: true, ready: true, ...s, pipeline, espnHistory };
+  // Week 6 (N1, PD2): the standings as they stand, for the Standings panel's Live mode and the league odds legend.
+  const standingsNow = await previewData(env).catch(() => null);
+  return { ok: true, ready: true, ...s, pipeline, espnHistory, standingsNow };
 }
 
 /** One team's map, compressed exactly as stored: the browser inflates it. */
@@ -95,6 +97,8 @@ export async function simOdds(env, { fresh = false } = {}) {
     const odds = finalOdds(summary, tr) || tr.odds;
     const byTeam = {}; if (Array.isArray(odds)) summary.teams.forEach((t, i) => { if (typeof odds[i] === 'number') byTeam[t.id] = odds[i]; });
     if (Object.keys(byTeam).length) value = { state: st === 'updating' || (st === 'building' && summary.source === 'build') ? 'updating' : 'ready', thru: tr.thru, byTeam };
+    // Week 6 (N6): each team's banner finding for its next game, stored with the update (never counted here).
+    if (Object.keys(byTeam).length && Array.isArray(tr.next)) { const nb = {}; summary.teams.forEach((t, i) => { if (tr.next[i]) nb[t.id] = tr.next[i]; }); value.nextByTeam = nb; }
   }
   value.final = await espnFinal(env);
   SIM_MEMO.set(env.DATA, { at: Date.now(), value });
@@ -140,7 +144,7 @@ export async function previewData(env) {
     places, seasonOver, weeksPlayed: rows.reduce((a, r) => Math.max(a, (r.wins || 0) + (r.losses || 0) + (r.ties || 0)), 0),
     consolation: !sch.consolationLadderDisabled, started: Boolean(st && st.started),
     teams: rows.slice().sort((a, b) => (a.rank || 99) - (b.rank || 99)).map((r) => ({
-      id: r.teamId, name: r.name, logo: r.logo || null, rank: r.rank, w: r.wins || 0, l: r.losses || 0, t: r.ties || 0,
+      id: r.teamId, name: r.name, owner: r.owner || null, logo: r.logo || null, rank: r.rank, w: r.wins || 0, l: r.losses || 0, t: r.ties || 0,
       pf: r.pointsFor || 0, pa: r.pointsAgainst || 0,
       // After the regular season a team is in or out: ESPN's figure is replaced by its final seed.
       playoffPct: seasonOver && r.rank ? (r.rank <= places ? 1 : 0) : typeof r.playoffPct === 'number' ? r.playoffPct : null })),

@@ -4,6 +4,7 @@ import TeamSelect from "../shared/TeamSelect.jsx";
 import ScrollBox from "../shared/ScrollBox.jsx";
 import { noteBrake, pollDelay } from "../shared/brake.js";
 import { Ctx, Blocks, Feed, KV, Heartbeat, Dot, Time, useNow } from "./blocks.jsx";
+import VisitsChart from "./VisitsChart.jsx";
 import { setZone, readZone, localMidnight, clockText, num, toMs } from "./format.js";
 
 /* ==========================================================================
@@ -35,7 +36,7 @@ const HELP = [
   [11, "Jobs", "Which of the Site API page’s jobs are in use: requests by the name each example sends. A program with no name, or a name of its own, counts as Unknown, with its name shown if it sent one."],
 ];
 
-const KINDS = [["", "everything"], ["visit", "visits"], ["sign-in", "sign-ins"], ["admin", "admin"], ["operation", "operations"], ["change", "changes of state"], ["status", "hourly status"]];
+const KINDS = [["", "everything"], ["visit", "visits"], ["sign-in", "sign-ins"], ["admin", "admin"], ["operation", "operations"], ["change", "changes of state"], ["error", "browser errors"], ["status", "hourly status"]];
 const RANGES = [{ value: "24h", label: "Last 24 hours" }, { value: "7d", label: "Last 7 days" }, { value: "30d", label: "Last 30 days" }, { value: "season", label: "Whole season" }];
 
 function readCookie(name) {
@@ -57,6 +58,9 @@ export default function SiteBackend() {
   const [status, setStatus] = useState("loading");
   const [problem, setProblem] = useState(null);
   const [act, setAct] = useState({ page: "", kind: "", sev: "", team: "all", q: "", range: "7d", season: null });
+  // Week 6 (N7): Visits over time, shut until opened; its range and page go with the Activity tab's request.
+  const [vis, setVis] = useState({ open: false, range: "7d", page: "", hidden: [] });
+  const visRef = useRef(vis); visRef.current = vis;
   const [feed, setFeed] = useState({ items: [], newestId: null, newestHour: null, oldestId: null, oldestAt: null, more: false, loaded: false });
   const [fresh, setFresh] = useState(() => new Set());
   const [pendingJump, setPendingJump] = useState(null);
@@ -76,10 +80,7 @@ export default function SiteBackend() {
   const lastBeatRef = useRef(null);
   tabRef.current = tab; openRef.current = open; actRef.current = act; feedRef.current = feed;
 
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.cookie = `eft_theme=${theme}; path=/; max-age=31536000; samesite=lax`;
-  }, [theme]);
+  // The theme is put on the page by the shared settings control (week 6, F4).
 
   useEffect(() => {
     if (readCookie("eft_motion") === "reduce") document.documentElement.classList.add("stillness");
@@ -106,6 +107,7 @@ export default function SiteBackend() {
       for (const k of ["page", "kind", "sev", "q", "range"]) if (a[k]) q.set(k, a[k]);
       if (a.team && a.team !== "all") q.set("team", a.team);
       if (a.season) q.set("season", String(a.season));
+      if (visRef.current.open) q.set("vrange", visRef.current.range);
     }
     for (const [k, v] of Object.entries(extra)) if (v != null && v !== "") q.set(k, String(v));
     return `${API}?${q.toString()}`;
@@ -272,6 +274,14 @@ export default function SiteBackend() {
     return () => clearTimeout(h);
   }, [act, load]);
 
+  // Opening the chart or changing its range asks for its rows at once (a poll: the feed keeps its place).
+  const visKey = `${vis.open}|${vis.range}`, firstVis = useRef(visKey);
+  useEffect(() => {
+    if (firstVis.current === visKey) return;
+    firstVis.current = visKey;
+    if (tabRef.current === "activity" && vis.open) load("activity", "poll");
+  }, [visKey, load]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ------------------------------------------------------------ render
 
   const d = data[tab] || null;
@@ -320,7 +330,7 @@ export default function SiteBackend() {
         {d && d.rest ? <div className="restbar" role="status"><b>Saving reads</b> {d.rest.text}</div> : null}
         <main>
           {!d ? <div className="empty" style={{ marginTop: 14 }}>{problem ? "Nothing to show until the site can be reached." : "Reading the site…"}</div>
-            : tab === "activity" ? <Activity d={d} act={act} setAct={setAct} feed={feed} fresh={fresh} older={() => load("activity", "older")} />
+            : tab === "activity" ? <Activity d={d} act={act} setAct={setAct} feed={feed} fresh={fresh} older={() => load("activity", "older")} vis={vis} setVis={setVis} />
               : <TabBody d={d} tab={tab} openSet={openSet} setPanelOpen={setPanelOpen} jump={jump} allPanels={allPanels} beatFresh={beatFresh} />}
         </main>
         <div className="toolfoot">
@@ -485,7 +495,7 @@ function Panel({ p, at, open, onToggle }) {
   );
 }
 
-function Activity({ d, act, setAct, feed, fresh, older }) {
+function Activity({ d, act, setAct, feed, fresh, older, vis, setVis }) {
   const teams = Object.entries(d.teams || {}).map(([id, t]) => ({ value: String(id), label: t.name }));
   const teamOpts = [{ value: "all", label: "All teams" }, ...teams, { value: "none", label: "No team chosen" }];
   const pageOpts = [{ value: "", label: "All pages" }, ...(d.pages || []).map(([k, n]) => ({ value: k, label: n }))];
@@ -496,6 +506,7 @@ function Activity({ d, act, setAct, feed, fresh, older }) {
   return (
     <>
       <Hero d={d} />
+      <VisitsChart d={d} vis={vis} setVis={setVis} />
       <section className="panel" id="p-feed">
         <div className="ph">
           <span className="tog" style={{ cursor: "default" }}>

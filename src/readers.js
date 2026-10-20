@@ -21,6 +21,7 @@ const FIXED = [
       ['GET', '/', 'document'], ['GET', '/api/dashboard/status', 'every 15 s, with the board every 90 s', 15],
       ['GET', '/api/dashboard/board', 'on load and on a team change'], ['GET', '/api/logo/:team', 'on load'],
       ['GET', '/api/img', 'on load'], ['GET', '/favicon.svg', 'on load'], ['POST', '/api/auth/logout', 'on sign out'],
+      ['POST', '/api/admin/data-banner-dismiss', 'on Dismiss, with the Admin Password'],
     ],
     datasets: ['scoreboard_digest', 'matchup_digest', 'live_scoring_digest', 'bye_weeks', 'standings_digest',
       'roster_digest', 'injuries_digest', 'transaction_digest', 'nfl_news', 'league_teams', 'league_settings'],
@@ -143,6 +144,7 @@ export function pageForRoute(routeKey) {
   if (path === '/' || path.startsWith('/api/dashboard/') || path === '/api/logo/:team' || path === '/api/img' || path.startsWith('/favicon')) return 'home';
   if (path.startsWith('/api/auth/') || path === '/api/health') return 'signin';
   if (path.startsWith('/api/setup/')) return 'wizard';
+  if (path === '/api/admin/data-banner-dismiss') return 'home';
   if (path === '/config' || path.startsWith('/api/admin/') || path === '/api/meta') return path === '/api/admin/fortune-teller' ? 'fortune-teller' : 'config';
   if (path === '/api/data' || path.startsWith('/api/data/')) return 'draft-helper';
   if (path.startsWith('/api/live/')) return 'live-matchups';

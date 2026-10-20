@@ -105,13 +105,13 @@ export function gameChances(g, week, current, projections, ppg) {
   if (week === current && g.home.winProbability != null && g.away.winProbability != null) {
     const a = g.home.winProbability, b = g.away.winProbability, sum = a + b || 1;
     return { pA: +(a / sum * (1 - pT)).toFixed(3), pB: +(b / sum * (1 - pT)).toFixed(3), pT,
-      projA: +(g.home.totalProjectedPoints ?? 0).toFixed(1), projB: +(g.away.totalProjectedPoints ?? 0).toFixed(1), source: 'espn' };
+      projA: +(g.home.totalProjectedPoints ?? 0).toFixed(2), projB: +(g.away.totalProjectedPoints ?? 0).toFixed(2), source: 'espn' };
   }
   const pw = projections && projections.get(week);
   let pa = pw && pw.get(g.home.teamId), pb = pw && pw.get(g.away.teamId), source = 'projection';
   if (!(pa > 0) || !(pb > 0)) { pa = ppg.get(g.home.teamId) || 100; pb = ppg.get(g.away.teamId) || 100; source = 'season average'; }
   const pA = phi((pa - pb) / SCORE_DIFF_SD) * (1 - pT);
-  return { pA: +pA.toFixed(3), pB: +(1 - pT - pA).toFixed(3), pT, projA: +pa.toFixed(1), projB: +pb.toFixed(1), source };
+  return { pA: +pA.toFixed(3), pB: +(1 - pT - pA).toFixed(3), pT, projA: +pa.toFixed(2), projB: +pb.toFixed(2), source };
 }
 
 /** The input a build needs, from the real league, with the window starting at `windowStart`. */

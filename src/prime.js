@@ -168,6 +168,9 @@ function newJob(cfg) {
     retry: {},
     retryRound: 0,
     failures: [],
+    // Week 6 (F3): rises with every dataset handled, retries included, so the browser's stall guard can tell a
+    // retry sweep (the done count deliberately still) from a real hang.
+    step: 0,
     complete: false,
   };
 }
@@ -185,6 +188,9 @@ function report(job, label) {
     retrying: Object.keys(job.retry || {}).length,
     retryRound: job.retryRound || 0,
     failures: job.failures.slice(0, 12),
+    // Every failed dataset by key, so a finished pull can name them all.
+    failedKeys: job.failures.map((f) => String(f).split(':')[0]),
+    step: job.step || 0,
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,
   };
@@ -224,6 +230,7 @@ export async function runPrimeBatch(env, cfg, { restart = false } = {}) {
   if (typeof job.retryRound !== 'number') job.retryRound = 0;
 
   for (const key of batch) {
+    job.step = (job.step || 0) + 1;
     let res = null;
     try {
       res = await coordinatorRefresh(env, key, false);

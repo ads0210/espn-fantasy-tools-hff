@@ -20,6 +20,7 @@
 
 import { normaliseSiteApi, keyState } from './apikey.js';
 import { SESSION_STOPS, sessionHoursOf } from './auth.js';
+import { cleanNote, cleanSigs } from './notemarkup.js';
 
 export const CONFIG_KEY = 'config:v1';
 
@@ -109,6 +110,10 @@ function normalise(raw) {
     sessionHours: SESSION_STOPS.includes(c.sessionHours) ? c.sessionHours : null,
     /* Seconds since the epoch: sign-ins made before this moment no longer count (set when the League Password changes). */
     sessionsFrom: Number.isFinite(c.sessionsFrom) ? c.sessionsFrom : null,
+    /* Week 6 (P9): the note from the Site Admin shown once over the home page, and the saved signatures (null: the
+       starting list). The note's body is the panel's small markup, never HTML. */
+    adminNote: cleanNote(c.adminNote),
+    noteSigs: Array.isArray(c.noteSigs) && c.noteSigs.length ? cleanSigs(c.noteSigs) : null,
     toolOrder: Array.isArray(c.toolOrder) && c.toolOrder.length ? c.toolOrder.filter((k) => typeof k === 'string').slice(0, 40) : null,
     /* The league's own Trade Analyzer weighting, holding only the rows an
        administrator has an opinion about. Absent means "use the shipped
@@ -215,6 +220,7 @@ export async function saveConfig(env, patch) {
     'leagueId', 'espnS2', 'swid', 'season', 'leaguePrivate', 'historySeasons',
     'leaguePasswordHash', 'adminPasswordHash', 'sessionSecret', 'setupCompletedAt',
     'toolVisibility', 'toolOrder', 'sessionHours', 'sessionsFrom', 'datasetsCheckedVersion', 'tradeWeights', 'fortuneTeller', 'stamps', 'siteApi',
+    'adminNote', 'noteSigs',
     'workersOrigin',
   ];
   for (const field of allowed) {
@@ -254,6 +260,8 @@ export function describeConfig(cfg) {
     tradeWeights: cfg.tradeWeights || {},
     toolOrder: cfg.toolOrder || null,
     sessionHours: sessionHoursOf(cfg),
+    adminNote: cfg.adminNote || null,
+    noteSigs: cleanSigs(cfg.noteSigs),
     fortuneTeller: { enabled: Boolean(cfg.fortuneTeller && cfg.fortuneTeller.enabled) },
     // The switch, dates, interval and address setting; never anything that could rebuild a key.
     siteApi: describeSiteApi(cfg.siteApi),

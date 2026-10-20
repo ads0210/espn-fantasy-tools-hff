@@ -42,8 +42,7 @@ const EVENT_BYTE_BUDGET = 6 * 1024 * 1024;
 const WEEK_CONCURRENCY = 5;
 const EVENT_CONCURRENCY = 3;
 
-const CORE = 'https://sports.core.api.espn.com/v2/sports/football/leagues/nfl';
-const SITE = 'https://site.web.api.espn.com/apis/site/v2/sports/football/nfl';
+const SITE = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl'; // the edge that answers Workers (see datasets.js)
 
 const MAX_RECORDED_FAILURES = 60;
 
@@ -67,6 +66,11 @@ const MAX_TRIES = 3;
  * unavailable would otherwise accumulate a thousand strings and rewrite all of
  * them, over a thousand times.
  */
+/** The game ids in one week's scoreboard (week 6, F1: the site edge's scoreboard replaced the Core API's event list). */
+export function weekEventIds(doc) {
+  return ((doc && doc.events) || []).map((e) => (e && e.id != null ? String(e.id) : null)).filter((id) => id && /^\d+$/.test(id));
+}
+
 function noteFailure(job, message) {
   job.failureTotal = (job.failureTotal || 0) + 1;
   if (job.failures.length < MAX_RECORDED_FAILURES) job.failures.push(message);
@@ -152,6 +156,8 @@ export function jobStatus(job) {
     eventsTotal: job.eventsTotal,
     eventsDone: job.eventsDone,
     failures: job.failures.slice(-10),
+    // Week 6 (F3): rises with every call that handled anything, retries included (the stall guard keys on it).
+    step: job.step || 0,
     failureCount: job.failureTotal != null ? job.failureTotal : job.failures.length,
     retrying: (job.eventRetry || []).length + (job.weekRetry || []).length,
     retryRound: job.retryRound || 0,
@@ -200,17 +206,13 @@ export async function runBatch(env, cfg, { restart = false } = {}) {
     } else {
       const results = await mapLimit(slice, WEEK_CONCURRENCY, async (w) => {
         try {
-        const url = `${CORE}/seasons/${w.season}/types/2/weeks/${w.week}/events?limit=100`;
+        // Week 6 (F1): the scoreboard for that week, on the site edge (the Core API refuses Workers).
+        const url = `${SITE}/scoreboard?seasontype=2&week=${w.week}&dates=${w.season}`;
         const res = await fetchPart(cfg, { url }, { auth: false });
         if (!res.ok || !res.buffer) return { w, ids: [], error: res.error };
         try {
           const doc = JSON.parse(new TextDecoder().decode(res.buffer));
-          const ids = (doc.items || [])
-            .map((i) => {
-              const m = /\/events\/(\d+)/.exec(i.$ref || '');
-              return m ? m[1] : null;
-            })
-            .filter(Boolean);
+          const ids = weekEventIds(doc);
           return { w, ids };
         } catch (err) {
           return { w, ids: [], error: 'unparseable event list' };
@@ -340,6 +342,7 @@ export async function runBatch(env, cfg, { restart = false } = {}) {
     }
   }
 
+  job.step = (job.step || 0) + 1;
   await writeJob(env, job);
   return { ...jobStatus(job), label: label || (job.complete ? 'Complete' : 'Working') };
 }

@@ -161,7 +161,7 @@ export const FT_CSS = `
 .slot { display:flex; align-items:center; gap:8px; padding:7px 10px; min-height:38px; }
 .slot + .slot { border-top:1px solid var(--line); }
 .slot .sd { flex:none; width:21px; height:21px; display:grid; place-items:center; font-size:10.5px; font-weight:900; color:var(--ink-2); background:var(--inset); border:1px solid var(--line-2); }
-.slot.me .sd { background:var(--accent); border-color:var(--accent); color:#04170A; }
+.slot.me .sd { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
 .slot .lg { flex:none; width:22px; height:22px; } .slot .lg img, .slot .lg svg { width:22px; height:22px; display:block; }
 .slot .nm { flex:1; min-width:0; font-size:12.5px; font-weight:800; line-height:1.25; overflow-wrap:break-word; }
 .slot.me .nm { color:var(--accent); }
@@ -179,7 +179,7 @@ export const FT_CSS = `
   color:var(--ink); background:var(--panel-2); border:1px solid var(--line-2); cursor:pointer; border-radius:9px; }
 .jump svg { width:15px; height:15px; } .jump svg path { fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
 .jump:hover { border-color:var(--accent); }
-.jump.on { color:#04170A; background:var(--accent); border-color:var(--accent); }
+.jump.on { color:var(--on-accent); background:var(--accent); border-color:var(--accent); }
 .pathsum { display:flex; flex-wrap:wrap; align-items:stretch; gap:8px; }
 .psum { display:flex; flex-direction:column; justify-content:center; gap:2px; min-width:112px; padding:7px 12px; background:var(--panel-2); border:1px solid var(--line); border-radius:9px; }
 .psum small { font-size:9px; font-weight:900; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); }
@@ -210,7 +210,8 @@ export const FT_CSS = `
 @media (max-width:600px) { .pathbtns { margin-left:0; width:100%; } .pathbtns .ftbtn { flex:1 1 0; min-width:0; justify-content:center; gap:6px; padding:8px 6px; font-size:10px; letter-spacing:.05em; white-space:normal; text-align:center; line-height:1.2; } .psum { flex:1 1 100%; min-width:0; } }
 
 /* --- the map ----------------------------------------------------------------------- */
-.ftgrid { display:grid; grid-template-columns:minmax(0,1fr) 440px; gap:20px; align-items:start; }
+/* Week 6 (N1, A9): the Standings panel sits full width under the map, so Sim% stays inside it and no name wraps. */
+.ftgrid { display:grid; grid-template-columns:minmax(0,1fr); gap:20px; align-items:start; }
 @media (max-width:1080px) { .ftgrid { grid-template-columns:minmax(0,1fr); } }
 .map { position:relative; padding-left:80px; padding-top:22px; }
 .ghost { position:absolute; z-index:0; pointer-events:none; }
@@ -244,6 +245,9 @@ export const FT_CSS = `
 .week.now .wkno b { background:linear-gradient(96deg,var(--ink) 20%,var(--sky) 130%); -webkit-background-clip:text; background-clip:text; }
 .wkchips { display:flex; flex-wrap:wrap; gap:6px; }
 .chip.now { color:#041017; background:var(--sky); border-color:var(--sky); }
+/* Week 6 (A3): text on the darker light-theme fills is white, so it reaches 4.5:1. */
+html[data-theme="light"] .chip.now, html[data-theme="light"] .tag.big, html[data-theme="light"] .tag.big strong { color:#FFFFFF; }
+html[data-theme="light"] table.ftst tr:not([data-tone="b"]) .tpill, html[data-theme="light"] .slot .tiemark:not([data-tone="b"]) { color:#FFFFFF; }
 .chip.played { color:var(--sky); border-color:var(--sky); }
 .chip.hid { border-style:dashed; color:var(--ink-3); }
 .wkrule { flex:1 1 40px; min-width:40px; height:2px; background:linear-gradient(90deg,var(--line-2),transparent); }
@@ -281,7 +285,7 @@ export const FT_CSS = `
 .seg[disabled] { cursor:default; } .seg[disabled][aria-checked="false"] { opacity:.4; }
 .seg.best::after { content:""; position:absolute; inset:4px; border:1px dashed var(--accent); pointer-events:none; }
 .seg .besttag { position:absolute; top:-8px; left:50%; transform:translateX(-50%); z-index:2; padding:1px 5px; font-size:8.5px; font-weight:900;
-  letter-spacing:.14em; text-transform:uppercase; color:#04170A; background:var(--accent); }
+  letter-spacing:.14em; text-transform:uppercase; color:var(--on-accent); background:var(--accent); }
 .game.irrelevant .switch { opacity:.5; filter:saturate(0); }
 @media (max-width:600px) {
   .switch { grid-template-columns:minmax(0,1fr) minmax(58px,.42fr) minmax(0,1fr); }
@@ -313,7 +317,7 @@ table.ftst .stnamewrap b { white-space:normal; overflow-wrap:break-word; }
 table.ftst td.c-num small.gap { display:block; font-size:10px; font-weight:800; } table.ftst small.gap.up { color:var(--accent); } table.ftst small.gap.dn { color:var(--signal); }
 table.ftst .tklogo, table.ftst .stname img, table.ftst .stname svg { width:22px; height:22px; flex:none; }
 table.ftst .medal { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:50%; font-size:10px; font-weight:900; color:var(--field); }
-table.ftst .medal.g { background:var(--gold); box-shadow:0 0 12px -2px var(--gold-glow); } table.ftst .medal.s { background:#C8D2D6; color:#1C2B24; } table.ftst .medal.b { background:#CD8A4D; }
+table.ftst .medal.g { background:var(--gold); box-shadow:0 0 12px -2px var(--gold-glow); } table.ftst .medal.s { background:#C8D2D6; color:#1C2B24; } table.ftst .medal.b { background:#CD8A4D; color:#1C1206; }
 table.ftst tr.po td:first-child { box-shadow:inset 2px 0 0 var(--accent); }
 table.ftst tr.tie td:first-child { box-shadow:inset 3px 0 0 var(--tc); }
 table.ftst tr.me td { background:var(--accent-glow); }
@@ -383,7 +387,7 @@ table.ftst tr.dragging td:first-child { box-shadow:0 10px 22px rgba(0,0,0,.5), i
 .owaxis span.hid { visibility:hidden; }
 .owespn { fill:none; stroke:color-mix(in srgb,var(--ink) 55%,transparent); stroke-width:1.6; stroke-linejoin:round; vector-effect:non-scaling-stroke; opacity:.9; }
 .owdot.espn { background:var(--panel); border:2px solid color-mix(in srgb,var(--ink) 55%,transparent); }
-.owdot.espn b { color:color-mix(in srgb,var(--ink) 55%,transparent); }
+.owdot.espn b { color:var(--ink-2); }
 .owkey i.espnk { display:inline-block; width:14px; height:0; border-top:2px solid color-mix(in srgb,var(--ink) 55%,transparent); margin:0 6px 0 0; vertical-align:middle; }
 .seedby { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 12px; }
 .seedby .ftbtn[aria-pressed="true"] { color:var(--accent); border-color:var(--accent); background:var(--accent-glow); }
@@ -392,6 +396,7 @@ table.ftst tr.dragging td:first-child { box-shadow:0 10px 22px rgba(0,0,0,.5), i
 .owdot.now { width:14px; height:14px; margin:-7px 0 0 -7px; box-shadow:0 0 0 3px var(--panel), 0 0 0 5px var(--accent), 0 0 16px var(--accent-glow); }
 .owdot b { position:absolute; bottom:calc(100% + 6px); left:50%; transform:translateX(-50%); font-size:10.5px; font-weight:900; color:var(--ink); white-space:nowrap; font-variant-numeric:tabular-nums; }
 .owdot.projected b { color:var(--sky); }
+.owdot b { padding:0 3px; border-radius:3px; background:var(--panel); }
 .owdot b.below, .owdot.high b { bottom:auto; top:calc(100% + 6px); }
 .owdot.high b.below { top:auto; bottom:calc(100% + 6px); }
 .owdot b.hid, .fv.hid { visibility:hidden; }
@@ -436,4 +441,39 @@ table.ftst tr.dragging td:first-child { box-shadow:0 10px 22px rgba(0,0,0,.5), i
 .finalres > span { font-size:11px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; color:color-mix(in srgb,var(--ink) 60%,transparent); }
 .finalres .stflag, .ftst .stflag, .ftfinal .stflag { display:inline-block; font-size:8.5px; font-weight:900; letter-spacing:.11em; text-transform:uppercase; padding:3px 8px; border:1px solid currentColor; }
 .finalres .stflag.in { color:var(--accent); } .finalres .stflag.out { color:var(--flag); }
+/* ---- week 6 (N1): league odds charts and the Standings panel's modes ---- */
+.lgrow { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:14px; margin:0 0 6px; }
+.lgrow.single { grid-template-columns:minmax(0, 1fr); }
+@media (max-width: 899px) { .lgrow { grid-template-columns:minmax(0, 1fr); } }
+.lgpanel { margin-bottom:0; min-width:0; }
+.lgplot { position:relative; width:100%; max-width:100%; margin-left:auto; }
+.lgplot svg { position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+.lggrid { stroke:var(--line); stroke-width:1; vector-effect:non-scaling-stroke; }
+.lgylab { position:absolute; left:0; transform:translateY(-50%); font-size:10px; font-weight:700; color:var(--ink-3); pointer-events:none; }
+.lgline path { fill:none; stroke:var(--c); stroke-width:1.6; vector-effect:non-scaling-stroke; stroke-linejoin:round; stroke-linecap:round; transition:opacity .15s ease, stroke-width .15s ease; }
+.lgline circle { fill:var(--c); stroke:var(--panel); stroke-width:1.5; vector-effect:non-scaling-stroke; }
+.lgline.me path { stroke-width:3.2; }
+.lgline.dim { opacity:.12; }
+.lgplot:hover .lgline:not(.hot) path, .lgplot:focus-visible .lgline:not(.hot) path { opacity:.45; }
+.lgline.hot path { stroke-width:3; opacity:1; }
+.lgaxis { position:relative; height:20px; margin:4px 0 10px; }
+.lgaxis span { position:absolute; transform:translateX(-50%); font-size:10.5px; font-weight:800; color:var(--ink-3); letter-spacing:.06em; white-space:nowrap; }
+.lgaxis span:last-child { color:var(--ink); }
+.lglegend { display:flex; flex-wrap:wrap; gap:4px 6px; border-top:1px solid var(--line); padding-top:10px; }
+.lgkey { display:inline-flex; align-items:center; gap:6px; max-width:100%; font-family:inherit; font-weight:700; font-size:11.5px; line-height:1.2; color:var(--ink-2); background:transparent; border:1px solid transparent; padding:4px 7px; cursor:pointer; text-align:left; border-radius:0; }
+.lgkey i { flex:none; width:14px; height:3px; background:var(--c); border-radius:2px; }
+.lgkey.me { color:var(--ink); } .lgkey.me i { height:5px; }
+.lgkey.on { border-color:var(--c); color:var(--ink); } .lgkey.off { opacity:.55; }
+.lgkey.all { border-color:var(--line-2); color:var(--ink); text-transform:uppercase; letter-spacing:.1em; font-size:10.5px; }
+.lgkey:hover { color:var(--ink); } .lgkey:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.stpanel .panelhead { flex-wrap:wrap; gap:8px; }
+.stmodes { margin-left:auto; display:inline-flex; align-items:center; border:1px solid var(--line-2); }
+.stmode { font-family:inherit; font-weight:800; font-size:10.5px; line-height:1; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-2); background:transparent; border:0; padding:8px 11px; cursor:pointer; border-radius:0; }
+.stmode + .stmode { border-left:1px solid var(--line-2); }
+.stmode.on { background:var(--accent); color:var(--on-accent); }
+.stmode:disabled { cursor:not-allowed; color:var(--ink-3); }
+.stmode:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.stmodehint { font-style:normal; font-size:10.5px; color:var(--ink-3); padding:0 10px; letter-spacing:.06em; }
+.stmodes + .sttoggle { margin-left:0; }
+@media (max-width: 560px) { .stmodes { margin-left:0; width:100%; flex-wrap:wrap; } .stmode { flex:1; } }
 `;

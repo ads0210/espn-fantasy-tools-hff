@@ -23,6 +23,10 @@ const BROWSERISH_UA =
  * /apis/site/v2/ namespace with no such protection — verified live against
  * scoreboard, teams and team-roster resources.
  *
+ * [October 2026: the flip happened. site.api.espn.com answers Workers again and
+ * site.web.api.espn.com refuses them, so the registry now points at site.api;
+ * the paragraph above describes the earlier edge.]
+ *
  * The registry points at the working host; this map exists so that if ESPN ever
  * flips which edge is protected, a 403 automatically retries on the twin rather
  * than silently taking the whole NFL data group offline.

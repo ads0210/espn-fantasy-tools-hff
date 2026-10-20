@@ -6,8 +6,8 @@
 :root, :root[data-theme="dark"] {
   color-scheme: dark;
   --bg:#0A0D0B; --panel:#121714; --panel-2:#161C18; --head:#1B211C; --line:#252C26; --line-2:#334036;
-  --ink:#DCEFDD; --dim:#96A599; --faint:#5C6960;
-  --acc:#63FF4A; --link:#5BA8FF; --red:#FF5C5C; --amber:#FFB020; --blue:#5BA8FF; --grey:#6E7C71;
+  --ink:#DCEFDD; --dim:#96A599; --faint:#7F8D82; /* week 6 (A3): was #5C6960 */
+  --acc:#63FF4A; --link:#5BA8FF; --red:#FF5C5C; --amber:#FFB020; --blue:#5BA8FF; --grey:#86948A;
   --t-red:rgba(255,92,92,.10); --t-amber:rgba(255,176,32,.12); --t-blue:rgba(91,168,255,.10); --t-acc:rgba(99,255,74,.08);
   --glow:rgba(99,255,74,.35); --scrim:rgba(0,0,0,.6);
   --accent:#63FF4A; --accent-deep:#2E9E22; --inset:#161C18;
@@ -15,8 +15,8 @@
 :root[data-theme="light"] {
   color-scheme: light;
   --bg:#EDF1EB; --panel:#FFFFFF; --panel-2:#F5F8F4; --head:#E4EBE2; --line:#CFD9CD; --line-2:#B4C1B2;
-  --ink:#122218; --dim:#526356; --faint:#8A978C;
-  --acc:#187A0C; --link:#1C5DBD; --red:#BF3328; --amber:#935E00; --blue:#1C5DBD; --grey:#7A887C;
+  --ink:#122218; --dim:#526356; --faint:#5E6B60; /* week 6 (A3): was #8A978C */
+  --acc:#187A0C; --link:#1C5DBD; --red:#BF3328; --amber:#935E00; --blue:#1C5DBD; --grey:#5E6B60;
   --t-red:rgba(191,51,40,.08); --t-amber:rgba(147,94,0,.09); --t-blue:rgba(28,93,189,.07); --t-acc:rgba(24,122,12,.07);
   --glow:rgba(24,122,12,.25); --scrim:rgba(18,34,24,.35);
   --accent:#187A0C; --accent-deep:#0E4F07; --inset:#F5F8F4;
@@ -411,3 +411,11 @@ tr.dim td { opacity:.6; }
   text-transform:uppercase; letter-spacing:.16em; text-decoration:none; transition:color .16s ease; }
 .toolfoot .gh::before { content:""; width:5px; height:5px; background:currentColor; transform:rotate(45deg); }
 .toolfoot .gh:hover { color:var(--acc); text-decoration:none; }
+
+/* Week 6 (F2): a dataset's last 24 hourly checks as a strip of marks, and the pages that use it. */
+.reach { display:inline-flex; gap:2px; vertical-align:middle; }
+.reach i { width:4px; height:12px; border-radius:1px; background:var(--grey); }
+.reach i.r-ok { background:var(--acc); opacity:.75; }
+.reach i.r-bad { background:var(--red); }
+.reach i.r-warn { background:var(--amber); }
+td.used { min-width:26ch; max-width:40ch; white-space:normal; color:var(--dim); font-size:11.5px; line-height:1.4; }

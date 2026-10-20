@@ -1,3 +1,4 @@
+import { pts2 } from './ui.js';
 /**
  * Site Backend: the page tabs. Every tab has the same five standard panels
  * (settings, datasets read, routes called, access, log) after the panels that
@@ -173,9 +174,9 @@ async function matchupRows(src, withProj) {
   const cols = [['Away'], ['Score', 'n'], ['Home'], ['Score', 'n'], ['Win chance', 'n']].concat(withProj ? [['Projected', 'n']] : []).concat([['State']]);
   return [B.table(cols, lsd.games.map((g) => {
     const st = g.state === 'live' ? C.pill('run', 'live') : g.state === 'final' ? C.pill('idle', 'final') : C.pill('ok', 'not started');
-    const cells = [C.team(g.away.teamId), C.txt((g.away.points || 0).toFixed(1)), C.team(g.home.teamId), C.txt((g.home.points || 0).toFixed(1)),
+    const cells = [C.team(g.away.teamId), C.txt(pts2(g.away.points || 0)), C.team(g.home.teamId), C.txt(pts2(g.home.points || 0)),
       C.txt(`${g.away.winProb ?? '?'}% / ${g.home.winProb ?? '?'}%`)];
-    if (withProj) cells.push(C.txt(`${(g.away.projected || 0).toFixed(1)} / ${(g.home.projected || 0).toFixed(1)}`));
+    if (withProj) cells.push(C.txt(`${pts2(g.away.projected || 0)} / ${pts2(g.home.projected || 0)}`));
     cells.push(st);
     return B.row(cells, g.state === 'live' ? 'run' : null);
   })), B.kv([['Week', C.n(lsd.matchupPeriod)], ['Read', C.time(lsd.generatedAt)]])];
@@ -224,7 +225,7 @@ const OWN = {
           const rows = st.rows.slice().sort((a, b) => (a.rank || 99) - (b.rank || 99));
           const out = [];
           rows.forEach((r, i) => {
-            const cells = [C.n(r.rank || i + 1), C.team(r.teamId), C.txt(`${r.wins}-${r.losses}${r.ties ? `-${r.ties}` : ''}`), C.txt((r.pointsFor || 0).toFixed(1)),
+            const cells = [C.n(r.rank || i + 1), C.team(r.teamId), C.txt(`${r.wins}-${r.losses}${r.ties ? `-${r.ties}` : ''}`), C.txt(pts2(r.pointsFor || 0)),
               typeof r.playoffPct === 'number' ? C.pct(r.playoffPct) : '—'];
             if (sim && sim.byTeam) cells.push(sim.byTeam[r.teamId] != null ? C.pct(sim.byTeam[r.teamId]) : '—');
             out.push(B.row(cells));
@@ -872,7 +873,7 @@ function ftPanels() {
         const rows = ((lsd && lsd.games) || []).map((g) => {
           const a = (g.away.winProb ?? 50) / 100, h = (g.home.winProb ?? 50) / 100, sum = a + h || 1;
           return B.row([C.mix(C.team(g.away.teamId), C.txt(' at '), C.team(g.home.teamId)), C.pct((a / sum) * (1 - TIE_CHANCE)), C.pct((h / sum) * (1 - TIE_CHANCE)), C.pct(TIE_CHANCE),
-            C.txt(`${(g.away.projected || 0).toFixed(1)} / ${(g.home.projected || 0).toFixed(1)}`)]);
+            C.txt(`${pts2(g.away.projected || 0)} / ${pts2(g.home.projected || 0)}`)]);
         });
         const sum = await src.ftSummary();
         return [B.kv([['Engine version', C.n(ENGINE_VERSION)], ['Score spread', C.txt(`${SCORE_DIFF_SD} points`, 'one matchup\'s score difference')], ['Tie chance', C.pct(TIE_CHANCE)],
