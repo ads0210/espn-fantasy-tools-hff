@@ -13,6 +13,10 @@ import { fortuneTellerPayload, fortuneTellerMap, simOdds } from './fortuneteller
 export { FortuneTellerDO } from './ftdo.js';
 import { FT_ACTIVE_KEY } from './ftdo.js';
 import { DATASETS, getDataset, planBatches, PARAM_DATASETS, TTL } from './datasets.js';
+import { sweepRetired } from './retired.js';
+import { cardFacts, cardBanner } from './banners.js';
+import { checkDue, bannerFacts, dismiss as dismissDataBanner } from './datacheck.js';
+import { usedBy } from './sbcore.js';
 import { loadConfig, saveConfig, describeConfig, isConfigured, isSetupFinished, canCallEspn, workersOriginOf } from './config.js';
 import { coordinatorRefresh } from './dedupe.js';
 import { getPart, headPart, readStatus, isFresh, ageSeconds } from './store.js';
@@ -37,7 +41,11 @@ import {
 import { refreshAllowed, objectCallAllowed, BLIND_AFTER_MS } from './budget.js';
 import { MARK_HEADER, busyWarning, LIMIT_COPY } from './pages/limitnotice.js';
 import { swScript, restingPage, RESTING_PATH } from './sw.js';
-import { SHARE_PARAMS, DATA_ROUTE_DATASETS, apiTool } from './readers.js';
+import { SHARE_PARAMS, DATA_ROUTE_DATASETS, apiTool, pageOf } from './readers.js';
+import { errorText } from './pages/errorreport.js';
+import { NOTE_LIMITS, cleanSigs, noteForBoard, notePages } from './notemarkup.js';
+import { manifest as appManifest } from './appicon.js';
+import { APP_ICON_PNG } from './appiconpng.js';
 import { BUILD_INFO } from './generated/build-info.js';
 import { runBatch, readJob, jobStatus } from './history.js';
 import { runPrimeBatch, primeStatus, missingDatasetKeys } from './prime.js';
@@ -62,7 +70,7 @@ import { started as startedKey, normaliseSiteApi, replaced as replacedKey, dueCh
 import { RELEASE_NOTE_ITEMS } from './release.js';
 import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r203';
+const BUILD_MARKER = 'r223';
 
 
 
@@ -188,6 +196,14 @@ export async function runMinute(rawEnv, { at = Date.now(), via = 'cron', cron = 
       result: { teams: (r.teams || []).map((t) => ({ teamId: t.teamId, name: t.name, state: t.state, status: t.status || null })) },
     } : { ran: false }));
     await timed('ft', () => fortuneTellerCheck(env), (r) => (r ? { ran: true, state: r.state || null } : { ran: false }));
+    // Week 6 (F2): the hourly reachability check, one dataset a minute (src/datacheck.js).
+    await timed('check', async () => {
+      const cfg = await loadConfig(env);
+      if (!isSetupFinished(cfg)) return null;
+      return checkDue(env, cfg, { at, brake: brakeNow(at).brake });
+    }, (r) => (r ? { ran: !r.rested, key: r.key, ...(r.rested ? { rested: true } : { ok: r.ok, kind: r.kind, streak: r.streak }) } : { ran: false }));
+    // Week 6 (P1): the stored copies of the fourteen retired datasets are deleted once (src/retired.js).
+    if (new Date(at).getUTCMinutes() % 15 === 7) await timed('retired', () => sweepRetired({ DATA: rawEnv.DATA }, { now: at }), (r) => (r && !r.already ? { ran: true, ...r } : { ran: false }));
     let nudge = null;
     await timed('nudge', async () => { nudge = await nudgeFortuneTeller(env); return nudge; }, (r) => ({
       ran: Boolean(r && typeof r === 'object'), result: typeof r === 'string' ? r : r && r.ran ? `ran ${r.ran} slice${r.ran === 1 ? '' : 's'}` : r && r.paused ? 'build paused' : r && r.onTime ? 'on time' : r && r.idle ? 'no build' : null,
@@ -436,6 +452,16 @@ async function route(request, env, ctx) {
     });
   }
 
+  /* Week 6 (P7): Install to Home Screen. The manifest and its icons, ahead of the gate like the favicon: a phone
+     fetches them without the page's cookies, and they hold no league data. */
+  if (path === '/manifest.webmanifest') {
+    return new Response(JSON.stringify(appManifest()), { headers: { 'content-type': 'application/manifest+json; charset=utf-8', 'cache-control': 'public, max-age=3600, must-revalidate' } });
+  }
+  if (path.startsWith('/icons/') && Object.prototype.hasOwnProperty.call(APP_ICON_PNG, path.slice(7))) {
+    const bytes = Uint8Array.from(atob(APP_ICON_PNG[path.slice(7)]), (c) => c.charCodeAt(0));
+    return new Response(bytes, { headers: { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400, must-revalidate' } });
+  }
+
   /* The browser helper (C6) and the resting page it keeps, ahead of the gate: neither holds league data. The
      helper is fetched afresh on every check (no-cache), so its kill switch reaches every browser within about a day. */
   if (path === '/sw.js') {
@@ -625,11 +651,12 @@ async function route(request, env, ctx) {
   if (path === '/' || path === '/index.html') {
     markPage(request, 'home', 'Home');
     const selectedTeam = readCookie(request, TEAM_COOKIE) || '';
-    const [teams, initial, board, repullNeeded] = await Promise.all([
+    const [teams, initial, board, repullNeeded, dataBanner] = await Promise.all([
       getTeams(env, ctx),
       dashboardPayload(env, ctx),
       boardPayload(env, ctx, selectedTeam),
       repullBannerNeeded(env, cfg),
+      bannerFacts(env, { usedBy }).catch(() => null),
     ]);
     return html(dashboardPage({
       leagueName: await leagueName(env, { ensure: true, ctx }),
@@ -644,6 +671,9 @@ async function route(request, env, ctx) {
       releaseItems: RELEASE_NOTE_ITEMS,
       repullNeeded,
       needsHistoryRepull: NEEDS_HISTORY_REPULL,
+      dataBanner,
+      // Links in the note go only to pages the league can open (a hidden tool's name stays plain words).
+      adminNote: noteForBoard(cfg.adminNote, notePages(visibleTools(cfg))),
     }));
   }
 
@@ -716,10 +746,24 @@ const CLIENT_EVENTS = {
   'limit-seen': { text: 'A page saw Cloudflare’s daily limit and rested until 00:00 UTC', page: null, limit: true },
 };
 
+/* Week 6 (P3): repeats of the same browser error report, held per isolate for ten minutes (at most 100 kept). */
+const ERROR_SEEN = new Map();
+function errorEvent(body) {
+  const page = pageOf(String((body && body.page) || '')) ? String(body.page) : null;
+  const text = errorText(page ? pageOf(page).name : 'a page', body);
+  const now = Date.now();
+  for (const [k, at] of ERROR_SEEN) if (now - at > 600000) ERROR_SEEN.delete(k);
+  if (ERROR_SEEN.has(text)) return null;
+  if (ERROR_SEEN.size >= 100) ERROR_SEEN.delete(ERROR_SEEN.keys().next().value);
+  ERROR_SEEN.set(text, now);
+  return { text, page, error: true };
+}
+
 async function siteLogEvent(request, env) {
   if (request.method !== 'POST') return json({ ok: false, error: 'POST required' }, 405);
   const body = await readJson(request);
-  const ev = CLIENT_EVENTS[body && body.name];
+  const ev = body && body.name === 'page-error' ? errorEvent(body) : CLIENT_EVENTS[body && body.name];
+  if (body && body.name === 'page-error' && !ev) return json({ ok: true, recorded: false });
   if (!ev) return json({ ok: false, error: 'unknown event' }, 400);
   const trace = traceOf(request);
   if (!trace || !trace.record) return json({ ok: true, recorded: false });
@@ -731,7 +775,7 @@ async function siteLogEvent(request, env) {
     const team = m && Number(decodeURIComponent(m[1])) > 0 ? Number(decodeURIComponent(m[1])) : null;
     try {
       const r = await stub.fetch('https://site-log/client', { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text: ev.text, page: ev.page, team, ...(ev.limit ? { limit: true, seenAt: Number(body.at) || null } : {}) }) });
+        body: JSON.stringify({ text: ev.text, page: ev.page, team, ...(ev.error ? { error: true } : {}), ...(ev.limit ? { limit: true, seenAt: Number(body.at) || null } : {}) }) });
       if (r.body && r.body.cancel) await r.body.cancel().catch(() => {});
     } catch { /* recording must never matter */ }
   }
@@ -1256,6 +1300,41 @@ async function handleAdmin(request, env, cfg, path) {
     const t = TOOLS.find((x) => x.key === body.tool);
     note(request, 'admin', `Tool visibility changed: ${t ? t.name : body.tool} → ${body.visibility === 'admin' ? 'admin-only' : body.visibility}`, { page: body.tool });
     return json({ ok: true, tools: describeTools(saved) });
+  }
+
+  if (path === '/api/admin/data-banner-dismiss') {
+    // Week 6 (F2, PD21): hides "Some league data can't be reached" for every member until a check fails three
+    // times in a row again.
+    const r = await dismissDataBanner(env, Date.now());
+    note(request, 'admin', `Dismissed the data banner for everyone (${r.keys.length} dataset${r.keys.length === 1 ? '' : 's'})`, { page: 'home' });
+    return json({ ok: true, dismissedAt: new Date(r.dismissedAt).toISOString() });
+  }
+
+  if (path === '/api/admin/note') {
+    // Week 6 (P9): the note from the Site Admin. `publish` shows a new note to every browser once; `remove` stops it
+    // showing; `sigs` saves the signature list. The body is the panel's markup, kept as text and rendered escaped.
+    const action = body.action;
+    if (action === 'sigs') {
+      const list = Array.isArray(body.sigs) ? body.sigs.map((s) => String(s || '').trim()).filter(Boolean) : [];
+      if (!list.length) return json({ ok: false, error: 'Keep at least one signature.' }, 400);
+      if (list.length > NOTE_LIMITS.sigs || list.some((s) => s.length > NOTE_LIMITS.sig)) return json({ ok: false, error: `Up to ${NOTE_LIMITS.sigs} signatures, each up to ${NOTE_LIMITS.sig} characters.` }, 400);
+      const saved = await saveConfig(env, { noteSigs: list, stamps: { noteSigs: stamp() } });
+      note(request, 'admin', 'Note signatures saved', { page: 'config' });
+      return json({ ok: true, sigs: cleanSigs(saved.noteSigs) });
+    }
+    if (action === 'remove') {
+      await saveConfig(env, { adminNote: null, stamps: { adminNote: stamp() } });
+      note(request, 'admin', 'Note from the Site Admin removed', { page: 'home' });
+      return json({ ok: true, note: null });
+    }
+    if (action !== 'publish') return json({ ok: false, error: 'Unknown action.' }, 400);
+    const subject = String(body.subject || '').trim(), text = String(body.body || '').replace(/\r\n?/g, '\n').trim(), sig = String(body.sig || '').trim();
+    if (!subject || !text) return json({ ok: false, error: 'A note needs a subject and some words.' }, 400);
+    if (subject.length > NOTE_LIMITS.subject || text.length > NOTE_LIMITS.body || sig.length > NOTE_LIMITS.sig) return json({ ok: false, error: `Keep the subject to ${NOTE_LIMITS.subject} characters and the note to ${NOTE_LIMITS.body}.` }, 400);
+    const at = new Date().toISOString();
+    const saved = await saveConfig(env, { adminNote: { id: Date.now().toString(36), subject, body: text, sig, at }, stamps: { adminNote: stamp() } });
+    note(request, 'admin', 'Note from the Site Admin published', { page: 'home' });
+    return json({ ok: true, note: saved.adminNote });
   }
 
   if (path === '/api/admin/session-length') {
@@ -1829,6 +1908,13 @@ async function dashboardBoard(env, ctx, url) {
   return json(await boardPayload(env, ctx, url.searchParams.get('team')));
 }
 
+/* Dev only (production has no DEV_TOKEN): the dev layer's banner route (src/dev.js) forces the card's banner facts for a while, so every banner
+   can be looked at live. */
+async function devBannerFacts(env) {
+  if (!env.DEV_TOKEN) return null;
+  try { const o = await env.DATA.get('dev/banner-force.json'); if (!o) return null; const f = await o.json(); return f && f.until > Date.now() ? f.facts : null; } catch { return null; }
+}
+
 export async function boardPayload(env, ctx, teamId) {
   // Rules and team identity ride along with the board poll rather than the
   // 15-second status poll: slow-moving data on the slow-moving endpoint.
@@ -1997,6 +2083,11 @@ export async function boardPayload(env, ctx, teamId) {
         ? settled(liveGame.state, matchup.me.points, matchup.opp.points) === 'final'
         : Boolean(matchup.game.winner),
       period: matchup.game.period,
+      /* Week 6 (N6): why this matchup matters, one banner at a time (src/banners.js). Fortune Teller's part is the
+         finding stored with its latest update, never counted here. */
+      banner: (await devBannerFacts(env)) ? cardBanner(await devBannerFacts(env))
+        : cardBanner(cardFacts({ round: matchup.game.round || null, finding: out.sim && out.sim.nextByTeam ? out.sim.nextByTeam[id] : null,
+          week: matchup.game.period, myRank: row ? row.rank : null, oppRank: oppRow ? oppRow.rank : null, started: Boolean(standings && standings.started) })),
     } : null,
   };
 
