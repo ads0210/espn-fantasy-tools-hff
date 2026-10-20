@@ -1,9 +1,10 @@
 import ToolControls from "../shared/ToolControls.jsx";
 import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
-import { PALETTES, BASE_CSS, BACKDROP } from "../../src/ui.js";
+import { PALETTES, BASE_CSS, BACKDROP, pts2, dateTimeText } from "../../src/ui.js";
 import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
 import { weightDays, makeXOf } from "./axis.js";
+import { attachLineHover, LINEHOVER_CSS } from "../shared/linehover.js";
 import { playerMeta, pointsText, projectionShare, pointsDelta, liveClock, gameProgress } from "./gamestate.js";
 import { noteBrake, pollDelay } from "../shared/brake.js";
 import Instructions from "../shared/Instructions.jsx";
@@ -62,12 +63,15 @@ function readSiteTz() {
   catch { return "UTC"; }
 }
 
-const n1 = (v) => (Number(v) || 0).toFixed(1);
+// Week 6 (PD38): every points figure to two decimals, by the shared formatter.
+const n1 = (v) => pts2(Number(v) || 0);
 const initials = (name) => String(name || "").split(" ")
   .filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 const shortName = (name) => {
   const parts = String(name || "").split(" ").filter(Boolean);
   if (parts.length < 2) return name || "";
+  // Week 6 (A5): a defence is a team, not a person: "Titans D/ST" never becomes "T. D/ST".
+  if (/\bD\/ST$/i.test(String(name).trim())) return String(name).trim();
   return `${parts[0][0]}. ${parts.slice(1).join(" ")}`;
 };
 
@@ -401,7 +405,33 @@ function ChartSlot({ name, children, empty }) {
   );
 }
 
-function Progression({ series, tz, homeName, awayName, kickoff }) {
+/* Week 6 (N2, PD11, PD22): a chart that reads out on hover. Only the chart under the pointer reacts; its popup
+   follows the pointer and lists every line there, with the values held at that moment. */
+const escH = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function HoverPlot({ conf, sig, children }) {
+  const ref = useRef(null);
+  // Attached again only when what is drawn changes (`sig`): the page re-renders every few seconds, and a popup
+  // being read must survive that.
+  useEffect(() => {
+    const plot = ref.current, svg = plot && plot.querySelector("svg");
+    if (!svg || !conf) return undefined;
+    const h = attachLineHover(plot, { svg, ...conf });
+    return () => h.destroy();
+  }, [sig]);
+  return <div className="lmplot" ref={ref}>{children}</div>;
+}
+
+/** The hover's figures for the three charts, from the series as drawn (plain, so it can be tested). */
+export function progressionReader(series, xOf, days) {
+  const { times } = series;
+  const tOf = (x) => { let lo = times[0], hi = times[times.length - 1]; for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; if (xOf(m) < x) lo = m; else hi = m; } return (lo + hi) / 2; };
+  const held = (arr, t) => { let v = arr[0]; for (let i = 0; i < times.length && times[i] <= t; i++) v = arr[i]; return v; };
+  const segs = (days || []).flatMap((d) => d.segments || []);
+  const idleAt = (t) => segs.find((g) => g.idle && t >= g.start && t < g.end) || null;
+  return { tOf, held, idleAt };
+}
+
+function Progression({ series, tz, homeName, awayName, kickoff, homeLogo = null, awayLogo = null }) {
   const frame = useMemo(() => {
     if (!series || series.times.length < 2) return null;
     const times = series.times;
@@ -441,10 +471,26 @@ function Progression({ series, tz, homeName, awayName, kickoff }) {
   const hasWp = wp.some((v) => v !== null && v !== undefined);
   const maxDevWP = hasWp ? (Math.max(...wp.map((v) => Math.abs((v ?? 50) - 50))) * 1.2 || 5) : 5;
 
+  const innerH = CHART_H - padTop - padBottom;
+  const R = progressionReader(series, xOf, days);
+  const ptsOf = (vals, min, max) => seriesPoints(vals, times).map(([t, v]) => [xOf(t), yOf(v, min, max, padTop, innerH)]);
+  const when = (t) => { const idle = R.idleAt(t); return idle ? `No change from ${dateTimeText(idle.start, tz)} to ${dateTimeText(idle.end, tz)}` : dateTimeText(t, tz); };
+  const row = (side, v) => `<div class="lhrow"><i class="lhkey" style="background:${side === "home" ? "var(--accent)" : "var(--sky)"}"></i>${(side === "home" ? homeLogo : awayLogo) ? `<img class="lhlogo" src="${escH(side === "home" ? homeLogo : awayLogo)}" alt="">` : "<span></span>"}<span class="lhname"><b class="grad">${escH(side === "home" ? homeName : awayName)}</b></span><span class="lhval">${v}</span></div>`;
+  const hoverSig = `${tz}|${times.length}|${times[times.length - 1]}|${home[home.length - 1]}|${away[away.length - 1]}|${wp[wp.length - 1]}|${homeName}|${awayName}`;
+  const base = { snap: (x) => R.tOf(x), xOf: (t) => xOf(t), steps: () => times.map((t) => xOf(t)) };
+  const confTotal = { ...base, label: "Total score", series: () => [{ key: "home", points: ptsOf(home, 0, scoreMax) }, { key: "away", points: ptsOf(away, 0, scoreMax) }],
+    render: (keys, t) => `<p class="lhhead">${when(t)}</p>${keys.map((k) => row(k, pts2(R.held(k === "home" ? home : away, t)))).join("")}` };
+  const confMargin = { ...base, label: "Margin", series: () => [{ key: "m", points: ptsOf(margin, -maxAbsM, maxAbsM) }],
+    render: (keys, t) => { const m = R.held(margin, t); return `<p class="lhhead">${when(t)}</p>${m > 0 ? row("home", `ahead by ${pts2(m)}`) : m < 0 ? row("away", `ahead by ${pts2(-m)}`) : '<p class="lhnote">Level</p>'}`; } };
+  const wpVals = wp.map((v) => v ?? 50);
+  const confWp = { ...base, label: "Win probability", series: () => [{ key: "w", points: ptsOf(wpVals, 50 - maxDevWP, 50 + maxDevWP) }],
+    render: (keys, t) => { const w = R.held(wpVals, t); return `<p class="lhhead">${when(t)}</p>${row("home", `${Math.round(w)}%`)}${row("away", `${100 - Math.round(w)}%`)}`; } };
+
   return (
     <>
       <div className="chartblock">
         <span className="chartname">Total score</span>
+        <HoverPlot conf={confTotal} sig={hoverSig}>
         <svg className="progchart" viewBox={`0 0 ${CHART_W} ${CHART_H}`}>
           <GridLines padTop={padTop} padBottom={padBottom} n={3} />
           <path className="chartpath" style={{ stroke: "var(--accent)" }}
@@ -453,15 +499,18 @@ function Progression({ series, tz, homeName, awayName, kickoff }) {
             d={linePath(away, times, xOf, 0, scoreMax, padTop, padBottom)} />
           <DayAxis days={days} />
         </svg>
+        </HoverPlot>
       </div>
       <div className="chartblock">
         <span className="chartname">Margin</span>
+        <HoverPlot conf={confMargin} sig={hoverSig}>
         <svg className="progchart" viewBox={`0 0 ${CHART_W} ${CHART_H}`}>
           <GridLines padTop={padTop} padBottom={padBottom} n={4} />
           <Diverging values={margin} times={times} xOf={xOf} min={-maxAbsM} max={maxAbsM}
             baseline={0} padTop={padTop} padBottom={padBottom} />
           <DayAxis days={days} />
         </svg>
+        </HoverPlot>
       </div>
       {!hasWp && (
         <ChartSlot name="Win probability"
@@ -470,6 +519,7 @@ function Progression({ series, tz, homeName, awayName, kickoff }) {
       {hasWp && (
         <div className="chartblock">
           <span className="chartname">Win probability</span>
+          <HoverPlot conf={confWp} sig={hoverSig}>
           <svg className="progchart" viewBox={`0 0 ${CHART_W} ${CHART_H}`}>
             <GridLines padTop={padTop} padBottom={padBottom} n={4} />
             <Diverging values={wp.map((v) => v ?? 50)} times={times} xOf={xOf}
@@ -477,6 +527,7 @@ function Progression({ series, tz, homeName, awayName, kickoff }) {
               padTop={padTop} padBottom={padBottom} />
             <DayAxis days={days} />
           </svg>
+          </HoverPlot>
         </div>
       )}
       <div className="legend">
@@ -607,7 +658,7 @@ function PtsCell({ p, side }) {
       <b>{pointsText(p, n1)}</b>
       <span className={`pbar${share === null ? " none" : ""}${share === 1 ? " over" : ""}`}><i style={{ width: `${Math.round((share || 0) * 100)}%` }} /></span>
       <small>{n1(p.proj)}</small>
-      {flash ? <i key={flash.k} className={`ptsflash${flash.d < 0 ? " down" : ""}`} aria-hidden="true">{flash.d > 0 ? "+" : "\u2212"}{Math.abs(flash.d).toFixed(1)}</i> : null}
+      {flash ? <i key={flash.k} className={`ptsflash${flash.d < 0 ? " down" : ""}`} aria-hidden="true">{flash.d > 0 ? "+" : "\u2212"}{pts2(Math.abs(flash.d))}</i> : null}
     </td>
   );
 }
@@ -617,7 +668,7 @@ function Lineups({ g, tz }) {
   const games = useMemo(() => Object.fromEntries((g.nflGames || []).map((ng) => [ng.key, ng])), [g.nflGames]);
   // Before kickoff a row shows the opponent and when that player's own NFL game starts, in the zone chosen in Site
   // settings; while it is live, the quarter, the clock and the score; once it is over, the result.
-  const when = (iso) => new Date(iso).toLocaleString(undefined, { timeZone: tz, weekday: "short", hour: "numeric", minute: "2-digit" });
+  const when = (iso) => dateTimeText(iso, tz);   // week 6 (A8): the site's one date style
   const meta = (p) => {
     const text = playerMeta(p, p ? games[p.game] : null, when);
     const parts = text ? text.split(" \u00b7 ") : [];
@@ -1173,7 +1224,7 @@ function MatchCard({ g, tz, timelineRows, lastTick, events, h2h, pinned, expandA
 
           <Disclosure defaultOpen={expandAll} label="Score progression">
             <Progression series={series} tz={tz} kickoff={g.firstKickoff}
-              homeName={g.home.name} awayName={g.away.name} />
+              homeName={g.home.name} awayName={g.away.name} homeLogo={g.home.logo || null} awayLogo={g.away.logo || null} />
           </Disclosure>
 
           <Disclosure defaultOpen={expandAll} label="Position breakdown">
@@ -1255,10 +1306,7 @@ export default function LiveMatchups() {
   const expandAll = typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).get("expand") === "1";
 
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.cookie = `${THEME_COOKIE}=${theme}; path=/; max-age=31536000; samesite=lax`;
-  }, [theme]);
+  // The theme is put on the page by the shared settings control (week 6, F4).
 
   // The zone can change in Site settings while this page is open.
   useEffect(() => {
@@ -1606,6 +1654,8 @@ export default function LiveMatchups() {
         /* Aspect-ratio locked to the viewBox, so the SVG's own uniform scaling
            handles every width at every moment. Nothing measures the container,
            so there is no measurement to go stale on a resize. */
+        .lmplot { position:relative; }
+        ${LINEHOVER_CSS}
         .progchart { width:100%; aspect-ratio:600/150; height:auto; display:block;
           filter:drop-shadow(0 0 6px var(--accent-glow)); }
         .chartpath { fill:none; stroke-width:2.5; }
@@ -1735,7 +1785,7 @@ export default function LiveMatchups() {
         .nflteamtag.away { color:var(--sky); }
 
         button.primary { width:100%; margin-top:8px; border:0; cursor:pointer;
-          background:var(--accent); color:#04170A; padding:14px; font-size:12.5px; font-weight:900;
+          background:var(--accent); color:var(--on-accent); padding:14px; font-size:12.5px; font-weight:900;
           text-transform:uppercase; letter-spacing:.14em;
           clip-path:polygon(0 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%); }
 
