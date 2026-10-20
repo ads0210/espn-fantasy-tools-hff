@@ -171,6 +171,10 @@ function deriveBye(stats) {
  * all of it per-week stat splits. Shipping that to a phone on every page load
  * is the difference between a tool that works at a draft and one that does not.
  */
+/* Week 6 (PD39): a player's injury status, the newer of ESPN's two (src/injurystatus.js). Without the refresh
+   runner's picker (a test, a direct call) the fantasy record's status stands. */
+const injuryPick = (ctx) => (ctx && ctx.injury && ctx.injury.pick) || ((id, s) => s || 'ACTIVE');
+
 export function buildPlayerDigest(doc, ctx = {}) {
   const byeMap = ctx.byeMap || {};
   const players = [];
@@ -189,7 +193,7 @@ export function buildPlayerDigest(doc, ctx = {}) {
       adp: (p.ownership && p.ownership.averageDraftPosition) ?? 999,
       rank: (ranks.PPR && ranks.PPR.rank) ?? (ranks.STANDARD && ranks.STANDARD.rank) ?? 999,
       percentOwned: (p.ownership && p.ownership.percentOwned) ?? 0,
-      injuryStatus: p.injuryStatus || 'ACTIVE',
+      injuryStatus: injuryPick(ctx)(p.id, p.injuryStatus),
       onTeamId: entry.onTeamId ?? 0,
     });
   }
@@ -418,13 +422,16 @@ export function buildMatchupDigest(doc, ctx = {}) {
        * alone left every in-progress matchup on the dashboard reading 0-0 while
        * Live Matchups, which already preferred the live figure, showed the real
        * score. Same rule in both places now. */
-      points: round1((s && (s.totalPointsLive ?? s.totalPoints)) || 0),
-      projected: round1((s && (s.totalProjectedPointsLive ?? s.totalProjectedPoints)) || 0),
+      points: roundPts((s && (s.totalPointsLive ?? s.totalPoints)) || 0),
+      projected: roundPts((s && (s.totalProjectedPointsLive ?? s.totalProjectedPoints)) || 0),
       winProb: s && typeof s.winProbability === 'number'
         ? Math.round(s.winProbability * 1000) / 10 : null,
     };
   };
 
+  // Week 6 (N6): the postseason weeks, so a game's bracket round can name its banner.
+  const postWeeks = (doc && doc.schedule || []).filter((m) => m.playoffTierType && m.playoffTierType !== 'NONE').map((m) => m.matchupPeriodId);
+  const bounds = { firstPlayoffWeek: postWeeks.length ? Math.min(...postWeeks) : null, lastPlayoffWeek: postWeeks.length ? Math.max(...postWeeks) : null };
   const games = (doc && doc.schedule || [])
     .filter((m) => m.matchupPeriodId === period)
     .map((m) => {
@@ -435,6 +442,8 @@ export function buildMatchupDigest(doc, ctx = {}) {
         home, away, started,
         winner: m.winner && m.winner !== 'UNDECIDED' ? m.winner : null,
         period,
+        tier: m.playoffTierType && m.playoffTierType !== 'NONE' ? m.playoffTierType : null,
+        round: bannerRound(m.playoffTierType, period, bounds),
       };
     });
 
@@ -564,7 +573,8 @@ export function buildStandingsDigest(doc, ctx = {}) {
 }
 
 /** Per-team rosters, reduced to lineup identity. */
-export function buildRosterDigest(doc) {
+export function buildRosterDigest(doc, ctx = {}) {
+  const pickInj = injuryPick(ctx);
   const teams = {};
   for (const t of (doc && doc.teams) || []) {
     const ordered = bySlotOrder((t.roster && t.roster.entries) || [], (e) => e.lineupSlotId);
@@ -578,7 +588,7 @@ export function buildRosterDigest(doc) {
         nfl: PRO_TEAM_MAP[p.proTeamId] ?? 'FA',
         slot: SLOT_NAMES[slot] || String(slot),
         starter: !BENCH_SLOTS.has(slot),
-        injuryStatus: p.injuryStatus || 'ACTIVE',
+        injuryStatus: pickInj(p.id ?? e.playerId, p.injuryStatus),
       };
     });
     teams[t.id] = entries;
@@ -947,7 +957,8 @@ function weeklyStat(player, scoringPeriodId, sourceId) {
   return null;
 }
 
-const round1 = (n) => Math.round((Number(n) || 0) * 10) / 10;
+// Week 6 (PD38): points are kept to two decimals, half up, so every page can show them to two (it was one).
+const roundPts = (n) => Math.round((Number(n) || 0) * 100 + (Number(n) < 0 ? -1e-6 : 1e-6)) / 100;
 
 /**
  * The best score this roster could have produced, given what everyone actually
@@ -967,7 +978,7 @@ function optimalTotal(all, slotIds) {
     candidates[0].used = true;
     total += candidates[0].points;
   }
-  return round1(total);
+  return roundPts(total);
 }
 
 export function buildLiveScoringDigest(doc, ctx = {}) {
@@ -1093,9 +1104,9 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
         slotId: slot,
         eligible: Array.isArray(p.eligibleSlots) ? p.eligibleSlots : [],
         starter: !BENCH_SLOTS.has(slot),
-        injury: p.injuryStatus && p.injuryStatus !== 'ACTIVE' ? p.injuryStatus : '',
-        points: round1(actual),
-        proj: round1(weeklyStat(p, week, 1) || 0),
+        injury: ((s) => (s && s !== 'ACTIVE' ? s : ''))(injuryPick(ctx)(p.id, p.injuryStatus)),
+        points: roundPts(actual),
+        proj: roundPts(weeklyStat(p, week, 1) || 0),
         game: game ? game.key : null,
         gameStatus: game ? game.status : 'pre',
         gameState: game ? game.state : '',
@@ -1109,9 +1120,9 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
     const byPos = {};
     for (const [label, slots] of POS_GROUPS) {
       const inGroup = starters.filter((p) => slots.includes(p.slotId));
-      if (inGroup.length) byPos[label] = round1(inGroup.reduce((a, p) => a + p.points, 0));
+      if (inGroup.length) byPos[label] = roundPts(inGroup.reduce((a, p) => a + p.points, 0));
     }
-    byPos.BN = round1(bench.reduce((a, p) => a + p.points, 0));
+    byPos.BN = roundPts(bench.reduce((a, p) => a + p.points, 0));
 
     const scored = [...starters].sort((a, b) => b.points - a.points);
     const counts = {
@@ -1120,8 +1131,8 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
       upcoming: starters.filter((p) => p.gameStatus === 'pre').length,
     };
 
-    const points = round1(s && (s.totalPointsLive ?? s.totalPoints));
-    byPos.SUM = round1(points + byPos.BN);
+    const points = roundPts(s && (s.totalPointsLive ?? s.totalPoints));
+    byPos.SUM = roundPts(points + byPos.BN);
 
     return {
       teamId: (s && s.teamId) || null,
@@ -1130,7 +1141,7 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
       owner: info.owner || '',
       logo: info.logo || null,
       points,
-      projected: round1(s && (s.totalProjectedPointsLive ?? s.totalProjectedPoints)),
+      projected: roundPts(s && (s.totalProjectedPointsLive ?? s.totalProjectedPoints)),
       // ESPN's own metric, expressed as a percentage for display only.
       winProb: s && typeof s.winProbability === 'number'
         ? Math.round(s.winProbability * 1000) / 10 : null,
@@ -1144,13 +1155,13 @@ export function buildLiveScoringDigest(doc, ctx = {}) {
       benchPoints: byPos.BN,
       // The bench's own projected total, so "what is still sitting there" can
       // be read before those players have played rather than only after.
-      benchProjected: round1(bench.reduce((a, p) => a + p.proj, 0)),
+      benchProjected: roundPts(bench.reduce((a, p) => a + p.proj, 0)),
       byPos,
       counts,
       optimal: optimalTotal(players, starters.map((p) => p.slotId)),
       top: scored[0] || null,
       bottom: scored.length > 1 ? scored[scored.length - 1] : null,
-      avgPerStarter: starters.length ? round1(points / starters.length) : 0,
+      avgPerStarter: starters.length ? roundPts(points / starters.length) : 0,
     };
   };
 
@@ -1434,6 +1445,21 @@ export async function buildHeadToHeadHistory({ teamIds, readPart, readCurrent })
  * Game". That needs the consolation bracket's real seeding, which is not
  * present in the payload, and a wrong placement reads as fact.
  */
+/**
+ * Week 6 (N6): a postseason game's banner: 'championship', 'third', 'semi', 'quarter' or 'consolation' (null in the
+ * regular season, or for an earlier winners round). ESPN names the bracket, never the round: the winners bracket's last
+ * week is the final; its other game that week, on the winners' consolation ladder, is the third place game (the
+ * semifinals' losers); the losers' ladder is the consolation.
+ */
+export function bannerRound(tier, week, { lastPlayoffWeek } = {}) {
+  const t = String(tier || '').toUpperCase();
+  if (!t || t === 'NONE' || lastPlayoffWeek == null) return null;
+  const fromEnd = Number(lastPlayoffWeek) - Number(week);
+  if (t === 'WINNERS_BRACKET') return fromEnd <= 0 ? 'championship' : fromEnd === 1 ? 'semi' : fromEnd === 2 ? 'quarter' : null;
+  if (t === 'WINNERS_CONSOLATION_LADDER') return fromEnd <= 0 ? 'third' : 'consolation';
+  return 'consolation';
+}
+
 export function playoffRoundLabel(tier, week, { firstPlayoffWeek, lastPlayoffWeek }) {
   if (!tier || tier === 'NONE') return null;
   const fromEnd = Number(lastPlayoffWeek) - Number(week);
@@ -2323,7 +2349,7 @@ export function buildTradeDigest(doc, ctx = {}) {
         sl: SLOT_NAMES[e.lineupSlotId] || String(e.lineupSlotId),
         tm: PRO_TEAM_MAP[p.proTeamId] ?? 'FA',
         pr: Math.round((proj || 0) * 10) / 10,
-        inj: p.injuryStatus || 'ACTIVE',
+        inj: injuryPick(ctx)(p.id ?? e.playerId, p.injuryStatus),
         ow: Math.round(((p.ownership && p.ownership.percentOwned) || 0) * 10) / 10,
         bl: null,
         // ESPN's updated projection as a rate a game, and the games it expects all season.
@@ -2505,6 +2531,39 @@ export function buildTradeDigest(doc, ctx = {}) {
 }
 
 /**
+ * NFL statistical leaders, reduced (week 6, F1). ESPN's answer carries every leader's full athlete
+ * record (links, headshots, birthplace) and both team blocks: about 2.4 MB for 160 rows. The digest keeps
+ * what a page would show: per category its names and the top ten, each with the player, position, NFL
+ * team and the value as ESPN prints it.
+ */
+export function buildLeadersDigest(doc) {
+  const cats = (doc && doc.leaders && doc.leaders.categories) || [];
+  return {
+    season: (doc && doc.requestedSeason && doc.requestedSeason.year) || null,
+    categories: cats.map((c) => ({
+      key: c.name || '',
+      name: c.displayName || c.name || '',
+      abbreviation: c.abbreviation || '',
+      leaders: (c.leaders || []).slice(0, 10).map((l, i) => {
+        const a = l.athlete || {}, t = l.team || {}, pos = a.position || {};
+        return {
+          rank: i + 1,
+          athleteId: a.id ? String(a.id) : null,
+          name: a.displayName || a.fullName || '',
+          shortName: a.shortName || '',
+          position: pos.abbreviation || '',
+          teamId: t.id ? String(t.id) : null,
+          team: t.displayName || '',
+          teamAbbr: t.abbreviation || '',
+          value: typeof l.value === 'number' ? l.value : Number(l.value),
+          display: l.displayValue != null ? String(l.displayValue) : '',
+        };
+      }),
+    })),
+  };
+}
+
+/**
  * Registry of derivations, keyed by the source dataset.
  *
  * A source may drive more than one digest — `league_history` feeds Live
@@ -2520,6 +2579,7 @@ export const DERIVATIONS = {
   league_players: {
     target: 'player_digest',
     build: buildPlayerDigest,
+    injuryCheck: true,
     // Bye weeks come from a separately derived, long-lived lookup rather than
     // being recomputed from 32 team schedules every time the pool refreshes.
     needsByeMap: true,
@@ -2531,6 +2591,10 @@ export const DERIVATIONS = {
   player_weeks: {
     target: 'player_form_digest',
     buildMulti: buildPlayerFormDigest,
+  },
+  nfl_leaders: {
+    target: 'nfl_leaders_digest',
+    build: buildLeadersDigest,
   },
   nfl_depth_charts: {
     target: 'depth_digest',
@@ -2576,10 +2640,12 @@ export const DERIVATIONS = {
   rosters: {
     target: 'roster_digest',
     build: buildRosterDigest,
+    injuryCheck: true,
   },
   live_scoring: {
     target: 'live_scoring_digest',
     build: buildLiveScoringDigest,
+    injuryCheck: true,
     // Identity for the team join, standings for the season context strip, and
     // the NFL scoreboard for every live/final/upcoming state in the tool. All
     // three are resolved through the coordinator rather than read hopefully.
@@ -2595,6 +2661,7 @@ export const DERIVATIONS = {
   free_agent_pool: {
     target: 'llm_export_digest',
     buildMulti: buildLlmExportDigest,
+    injuryCheck: true,
     // Settings and rosters are small or already fetched for other tools; every
     // other input is a digest, so the export never parses a large raw payload
     // it does not need. Resolved through the coordinator, never read hopefully.
@@ -2611,6 +2678,7 @@ export const DERIVATIONS = {
   pending_transactions: {
     target: 'trade_digest',
     build: buildTradeDigest,
+    injuryCheck: true,
     // Identity for names and logos, rosters for projections, standings for
     // ESPN's published playoff odds, settings for roster shape and the trade
     // deadline. All four resolved through the coordinator, never read hopefully.
