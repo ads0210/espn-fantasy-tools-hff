@@ -23,6 +23,8 @@
 
 import { VSCROLL_JS } from './vscroll.js';
 import { LIMIT_JS } from './pages/limitnotice.js';
+import { ERROR_JS } from './pages/errorreport.js';
+import { APP_HEAD } from './appicon.js';
 
 export const THEME_COOKIE = 'eft_theme';
 export const TEAM_COOKIE = 'eft_team';
@@ -55,7 +57,9 @@ export const PALETTES = `
   html[data-theme="dark"] {
     --field:#070A08; --field-2:#0B100C; --panel:#111713; --panel-2:#161D18;
     --inset:#0A0F0B; --line:#1F2A21; --line-2:#2C3B2E;
-    --ink:#E6F2E4; --ink-2:#93A695; --ink-3:#5A6A5C;
+    /* Week 6 (A3, PD37): --ink-3 raised to 4.5:1 on every surface it sits on (was #5A6A5C). */
+    --ink:#E6F2E4; --ink-2:#93A695; --ink-3:#7C8E7E;
+    --on-accent:#04170A;
     --accent:#63FF4A; --accent-2:#B6FF3C; --accent-deep:#2BB81C;
     --accent-glow:rgba(99,255,74,.16);
     --flag:#FF5C5C; --flag-soft:rgba(255,92,92,.13);
@@ -65,6 +69,8 @@ export const PALETTES = `
        dashboard needs it for a finished matchup and two tools already had
        their own copy of the same two values. */
     --gold:#FFD24D; --gold-glow:rgba(255,210,77,.28);
+    /* Week 6 (N6): the banners' colours, site tokens now (Hall of Fame keeps its own silver and bronze). */
+    --violet:#B99BFF; --silver:#C2CEC9; --bronze:#E3A06C; --gold-soft:rgba(255,210,77,.12);
     --grid-opacity:.55; --ghost-opacity:.05; --bloom-a:.20; --bloom-b:.13;
     --scan:rgba(255,255,255,.016); --mote:rgba(190,255,180,.62); --grain-opacity:.055;
     color-scheme:dark;
@@ -72,13 +78,17 @@ export const PALETTES = `
   html[data-theme="light"] {
     --field:#EBF1E9; --field-2:#F7FAF6; --panel:#FFFFFF; --panel-2:#F4F8F3;
     --inset:#F3F8F2; --line:#D4E0D3; --line-2:#B4C6B3;
-    --ink:#0D140C; --ink-2:#48564A; --ink-3:#75846F;
-    --accent:#12762E; --accent-2:#4FA524; --accent-deep:#0A5220;
+    /* Week 6 (A3, PD37): muted ink, green text, text on green and gold raised to 4.5:1 (were #75846F, #4FA524,
+       #04170A and #B8860B). */
+    --ink:#0D140C; --ink-2:#48564A; --ink-3:#5B6956;
+    --accent:#12762E; --accent-2:#2F7215; --accent-deep:#0A5220;
+    --on-accent:#FFFFFF;
     --accent-glow:rgba(18,118,46,.13);
     --flag:#BF2231; --flag-soft:rgba(191,34,49,.08);
     --signal:#8A5406; --signal-soft:rgba(138,84,6,.10);
     --sky:#20629E;
-    --gold:#B8860B; --gold-glow:rgba(184,134,11,.22);
+    --gold:#876300; --gold-glow:rgba(135,99,0,.22);
+    --violet:#6A4BC4; --silver:#56635E; --bronze:#99521F; --gold-soft:rgba(135,99,0,.10);
     --grid-opacity:1; --ghost-opacity:.08; --bloom-a:.22; --bloom-b:.16;
     --scan:rgba(0,0,0,.018); --mote:rgba(18,118,46,.5); --grain-opacity:.05;
     color-scheme:light;
@@ -121,17 +131,19 @@ const FIELD_SVG = `
   </g>
 </svg>`;
 
+/* Week 6 (A7): every piece of the backdrop is decoration, so assistive technology skips all of it (the yard numbers
+   were read out as "10 20 30 40 50"). */
 export const BACKDROP = `
-<div class="fieldwash"></div>
+<div class="fieldwash" aria-hidden="true"></div>
 ${FIELD_SVG}
-<div class="bloom bloom-a"></div>
-<div class="bloom bloom-b"></div>
-<div class="scanlines"></div>
-<div class="grain"></div>
-<div class="sweeplight"></div>
-<div class="sweeplight b"></div>
+<div class="bloom bloom-a" aria-hidden="true"></div>
+<div class="bloom bloom-b" aria-hidden="true"></div>
+<div class="scanlines" aria-hidden="true"></div>
+<div class="grain" aria-hidden="true"></div>
+<div class="sweeplight" aria-hidden="true"></div>
+<div class="sweeplight b" aria-hidden="true"></div>
 <div class="motes" aria-hidden="true">${Array.from({ length: 22 }, () => '<i></i>').join('')}</div>
-<div class="livebar"><i></i></div>`;
+<div class="livebar" aria-hidden="true"><i></i></div>`;
 
 export const BASE_CSS = `
   *, *::before, *::after { box-sizing:border-box; }
@@ -309,10 +321,12 @@ td.c-key { font-weight: 900; font-size: 13.5px; font-variant-numeric: tabular-nu
 td.c-pos { color: var(--accent); font-weight: 800; font-variant-numeric: tabular-nums; }
 td.c-neg { color: var(--flag); font-weight: 800; font-variant-numeric: tabular-nums; }
 td.c-gold { color: var(--gold); font-weight: 900; }
-/* The one exception to "every table centred": a standings table's team column (the logo and the name, class
-   col-team) is set from the left, header and values alike, which reads cleaner down a column of names. The Playoffs
-   cut line is not a cell value, so the rule does not apply to it either. test/layout.mjs holds both. */
-table.datatable th.col-team, table.datatable td.col-team, th.col-team, td.col-team { text-align: left; }
+/* Every header in every table is centred, no exceptions (week 6, V1: PD1 as amended 16 October). The one
+   exception for values: a team cell carrying a logo (class col-team, on any table) is set from the left, which reads
+   cleaner down a column of names. The Playoffs cut line is not a cell value, so neither rule applies to it.
+   test/layout.mjs holds all three, and fails a logo cell that lacks col-team. */
+table.datatable th.col-team, th.col-team { text-align: center; }
+table.datatable td.col-team, td.col-team { text-align: left; }
 .stname { display: flex; align-items: center; gap: 9px; text-align: left; }
 .stname .lgo, .stname img { width: 26px; height: 26px; flex: none; object-fit: contain; }
 .stnamewrap { min-width: 0; }
@@ -595,7 +609,7 @@ html.stillness .scrollpane { scroll-behavior: auto; }
 
   /* --- buttons ---------------------------------------------------------------------- */
   button.primary { position:relative; width:100%; margin-top:18px; border:0; cursor:pointer;
-    background:var(--accent); color:#04170A; border-radius:0; padding:14px;
+    background:var(--accent); color:var(--on-accent); border-radius:0; padding:14px;
     font-size:12.5px; font-weight:900; font-family:inherit; text-transform:uppercase;
     letter-spacing:.14em; overflow:hidden;
     clip-path:polygon(0 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%);
@@ -1026,9 +1040,71 @@ function instructionsDialog(steps) {
   </div>`;
 }
 
+/* Week 6 (PD38): every points figure on the site shows exactly two decimals: team and player points, live and
+   settled, projections, margins, differences, points per game, points for and against (25.40, 7.00). Half up, the
+   way pct1() rounds, so 11.025 shows 11.03 and never 11.02 because the float held 11.02499. One definition for the
+   React tools (these two functions) and one for the server pages' scripts (PTS_JS, a literal: never toString());
+   a test prints a long list of values through both and requires them equal. Percentages keep one decimal; chart
+   axis ticks are a scale; data handed over as data (Site API, the LLM export) keeps ESPN's numbers. */
+export function pts2(x) {
+  if (x == null || x === '' || !Number.isFinite(Number(x))) return '\u2013';
+  const n = Number(x), a = Math.round(Math.abs(n) * 100 + 1e-6) / 100;
+  const s = a.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (n < 0 && a > 0 ? '\u2212' : '') + s;
+}
+/** A signed points figure (margins, differences): +18.40, \u22120.30, 0.00. */
+export function ptsSigned(x) {
+  const n = Number(x);
+  if (x == null || x === '' || !Number.isFinite(n)) return '\u2013';
+  const t = pts2(n);
+  return n > 0 && t !== '0.00' ? '+' + t : t;
+}
+/* Week 6 (A8): one date style site-wide. A date: "Fri, Oct 16" (with the year when it is not this year's, or when
+   asked); a time: "1:30 PM"; both: "Sun, Oct 18 \u00b7 1:30 PM". Always in the zone chosen in Site settings, which the
+   caller passes (a zone of undefined is the device's). The server pages' scripts get the same through
+   window.fmtDate / fmtDateTime / fmtClock (tzFmt in SHARED_JS); a test holds the two alike. */
+const asDate = (at) => (at instanceof Date ? at : new Date(typeof at === 'number' ? at : Date.parse(at)));
+export function dateText(at, tz, { year = false } = {}) {
+  const d = asDate(at);
+  if (Number.isNaN(d.getTime())) return '';
+  const o = { timeZone: tz || undefined, weekday: 'short', month: 'short', day: 'numeric' };
+  try {
+    const y = new Intl.DateTimeFormat('en-US', { timeZone: tz || undefined, year: 'numeric' });
+    if (year || y.format(d) !== y.format(new Date())) o.year = 'numeric';
+    return new Intl.DateTimeFormat('en-US', o).format(d);
+  } catch { return d.toISOString().slice(0, 10); }
+}
+export function timeText(at, tz) {
+  const d = asDate(at);
+  if (Number.isNaN(d.getTime())) return '';
+  try { return new Intl.DateTimeFormat('en-US', { timeZone: tz || undefined, hour: 'numeric', minute: '2-digit' }).format(d); }
+  catch { return d.toISOString().slice(11, 16) + ' UTC'; }
+}
+export function dateTimeText(at, tz) {
+  const a = dateText(at, tz), b = timeText(at, tz);
+  return a && b ? `${a} \u00b7 ${b}` : a || b;
+}
+
+export const PTS_JS = `
+function pts2(x) {
+  if (x == null || x === '' || !isFinite(Number(x))) return '\\u2013';
+  var n = Number(x), a = Math.round(Math.abs(n) * 100 + 1e-6) / 100;
+  var s = a.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (n < 0 && a > 0 ? '\\u2212' : '') + s;
+}
+function ptsSigned(x) {
+  var n = Number(x);
+  if (x == null || x === '' || !isFinite(n)) return '\\u2013';
+  var t = pts2(n);
+  return n > 0 && t !== '0.00' ? '+' + t : t;
+}
+`;
+
 export const SHARED_JS = `
+${PTS_JS}
 ${VSCROLL_JS}
 ${LIMIT_JS}
+${ERROR_JS}
 (function () {
   var SUN = ${JSON.stringify(SUN)}, MOON = ${JSON.stringify(MOON)};
   var root = document.documentElement;
@@ -1118,15 +1194,19 @@ ${LIMIT_JS}
     if (isNaN(d.getTime())) return '';
     var o = { timeZone: window.siteTz() };
     for (var k in opts) o[k] = opts[k];
-    try { return new Intl.DateTimeFormat(undefined, o).format(d); } catch (e) { return ''; }
+    try { return new Intl.DateTimeFormat('en-US', o).format(d); } catch (e) { return ''; }
   }
-  window.fmtDate = function (iso) {
-    return tzFmt(iso, { month: 'short', day: 'numeric' });
+  /* Week 6 (A8): one date style, the same as dateText / timeText / dateTimeText for the tools. */
+  function thisYear(iso) { return tzFmt(iso, { year: 'numeric' }) === tzFmt(new Date().toISOString(), { year: 'numeric' }); }
+  window.fmtDate = function (iso, withYear) {
+    var o = { weekday: 'short', month: 'short', day: 'numeric' };
+    if (withYear || !thisYear(iso)) o.year = 'numeric';
+    return tzFmt(iso, o);
   };
   window.fmtDateTime = function (iso) {
-    var d = tzFmt(iso, { month: 'numeric', day: 'numeric' });
-    var t = tzFmt(iso, { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
-    return d && t ? d + ' - ' + t : (d || t);
+    var d = window.fmtDate(iso);
+    var t = window.fmtClock(iso);
+    return d && t ? d + ' \u00b7 ' + t : (d || t);
   };
   window.fmtClock = function (iso) {
     return tzFmt(iso, { hour: 'numeric', minute: '2-digit' });
@@ -1223,14 +1303,22 @@ ${LIMIT_JS}
 
   var gear = document.getElementById('gearBtn'), menu = document.getElementById('settings');
   if (gear && menu) {
+    /* Week 6 (A7): a closed menu is only transparent, so it is made inert: its switches leave the Tab order and
+       assistive technology until it opens. */
+    var syncMenu = function () {
+      var open = menu.classList.contains('open');
+      menu.inert = !open;
+      gear.setAttribute('aria-expanded', String(open));
+    };
+    syncMenu();
     gear.addEventListener('click', function (e) {
-      e.stopPropagation(); menu.classList.toggle('open');
+      e.stopPropagation(); menu.classList.toggle('open'); syncMenu();
     });
     document.addEventListener('click', function (e) {
-      if (!menu.contains(e.target) && e.target !== gear) menu.classList.remove('open');
+      if (!menu.contains(e.target) && e.target !== gear) { menu.classList.remove('open'); syncMenu(); }
     });
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') menu.classList.remove('open');
+      if (e.key === 'Escape') { menu.classList.remove('open'); syncMenu(); }
     });
     var swM = document.getElementById('swMotion');
     swM.setAttribute('aria-checked', String(root.classList.contains('stillness')));
@@ -1540,10 +1628,14 @@ async function runHistoryPull(opts) {
          so the signal has to include the retry state, or a long retry sweep
          would look exactly like a hang and be abandoned just as it was about
          to recover. */
-      var mark = String(r.done) + ':' + String(r.retrying || 0) + ':' + String(r.retryRound || 0);
+      /* Week 6 (F3): a job that reports a step (one per dataset or batch handled, retries included) is judged
+         on it: the same step three times running is a hang. The old mark (done, retrying, round) stays for a
+         job without one, but it was what made a pull with 8 or more failing datasets give up mid-sweep. */
+      var hasStep = typeof r.step === 'number';
+      var mark = hasStep ? 'step:' + r.step : String(r.done) + ':' + String(r.retrying || 0) + ':' + String(r.retryRound || 0);
       if (mark === lastDone) { stalled++; } else { stalled = 0; lastDone = mark; }
-      if (stalled >= 8) {
-        return { ok: false, error: 'The pull stopped making progress. Try resuming it again.' };
+      if (stalled >= (hasStep ? 2 : 8)) {
+        return { ok: false, error: 'The pull stopped making progress. Resume to carry on, or Retry to start over.' };
       }
 
       await histSleep(HIST_PACE_MS);
@@ -1576,7 +1668,7 @@ async function runHistoryPull(opts) {
       retries + ' of ' + HIST_MAX_RETRIES + ')' + why);
     await histSleep(wait);
   }
-  return { ok: false, error: 'The pull ran longer than expected. Resume it to carry on.' };
+  return { ok: false, error: 'The pull ran longer than expected. Resume to carry on, or Retry to start over.' };
   } finally {
     window.removeEventListener('beforeunload', guardUnload);
     try { if (wake && wake.release) wake.release(); } catch (e) {}
@@ -1613,6 +1705,7 @@ export function shell({
 <meta name="robots" content="noindex,nofollow">
 <meta name="theme-color" content="${light ? '#EBF1E9' : '#070A08'}">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+${APP_HEAD}
 <title>${esc(title)}</title>
 <style>
   ${PALETTES}
