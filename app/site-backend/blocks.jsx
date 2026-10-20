@@ -172,7 +172,7 @@ function Seen() {
 // ---------------------------------------------------------------- the log
 
 const sevDot = (s) => (s === "info" ? "idle" : s === "warn" ? "warn" : s === "bad" ? "bad" : s === "ok" ? "ok" : "idle");
-const KIND = { visit: "visit", "sign-in": "sign-in", admin: "admin", operation: "operation", change: "change", status: "status" };
+const KIND = { visit: "visit", "sign-in": "sign-in", admin: "admin", operation: "operation", change: "change", error: "browser error", status: "status" };
 
 export function Feed({ items, compact, fresh }) {
   const { go, pages } = useContext(Ctx);
@@ -216,7 +216,7 @@ export function Feed({ items, compact, fresh }) {
 const STATE = { fresh: ["ok", "fresh"], resting: ["idle", "resting"], manual: ["idle", "manual"], kept: ["warn", "kept stale"], failing: ["bad", "failing"], missing: ["warn", "never fetched"], empty: ["idle", "empty"] };
 const RANK = { bad: 4, warn: 3, run: 2, ok: 1, idle: 0 };
 const ttlText = (t) => (!t ? "manual" : t >= 3600 ? `${t / 3600} h` : t >= 60 ? `${t / 60} min` : `${t} s`);
-const COLS = [["Dataset", "key"], ["State", "state"], ["Newest", "age", "n"], ["Refresh interval", "ttl", "n"], ["Parts", "parts", "n"], ["Size", "size", "n"], ["Kind"], ["Tier", "tier"], ["Group", "group"]];
+const COLS = [["Dataset", "key"], ["State", "state"], ["Reachable", "reach"], ["Used by", "used"], ["Newest", "age", "n"], ["Refresh interval", "ttl", "n"], ["Parts", "parts", "n"], ["Size", "size", "n"], ["Kind"], ["Tier", "tier"], ["Group", "group"]];
 
 function DatasetDetail({ row }) {
   const { detail, cachedDetail, go, pages } = useContext(Ctx);
@@ -257,6 +257,19 @@ function DatasetDetail({ row }) {
   );
 }
 
+/* Week 6 (F2): a dataset's last 24 hourly checks, oldest first: answered, failed, sign-in refused. */
+function Reach({ checks, streak }) {
+  if (!checks) return <span className="mono-dim">through its source</span>;
+  if (!checks.length) return <span className="mono-dim">not checked yet</span>;
+  const bad = checks.filter((c) => c.ok === false).length;
+  const label = `${checks.length} checks: ${checks.length - bad} answered, ${bad} failed${streak >= 3 ? `, ${streak} in a row` : ""}`;
+  return (
+    <span className="reach" role="img" aria-label={label} title={label}>
+      {checks.map((c, i) => <i key={i} className={c.ok === true ? "r-ok" : c.ok === false ? "r-bad" : "r-warn"} />)}
+    </span>
+  );
+}
+
 function Datasets({ b }) {
   const [sort, setSort] = useState(b.keepOrder ? { col: null, dir: 1 } : { col: "state", dir: -1 });
   const [f, setF] = useState({ group: "all", tier: "all", kind: "all", state: "all", q: "" });
@@ -270,7 +283,7 @@ function Datasets({ b }) {
   const list = rows.filter((d) => (f.group === "all" || d.group === f.group) && (f.tier === "all" || d.tier === f.tier)
     && (f.kind === "all" || (f.kind === "derived") === Boolean(d.derivedFrom)) && (f.state === "all" || (STATE[d.state] || [])[1] === f.state)
     && (!f.q.trim() || d.key.includes(f.q.trim().toLowerCase()) || String(d.label || "").toLowerCase().includes(f.q.trim().toLowerCase())));
-  const val = (d) => (sort.col === "age" ? (d.newest ? now - Date.parse(d.newest) : Infinity) : sort.col === "size" ? d.bytes : sort.col === "state" ? RANK[d.sev] : sort.col === "ttl" ? (d.ttl || 1e12) : sort.col === "parts" ? d.parts : String(d[sort.col] || ""));
+  const val = (d) => (sort.col === "reach" ? (d.checks ? d.streak * 100 + d.checks.filter((c) => c.ok === false).length : -1) : sort.col === "used" ? (d.usedBy || []).length : sort.col === "age" ? (d.newest ? now - Date.parse(d.newest) : Infinity) : sort.col === "size" ? d.bytes : sort.col === "state" ? RANK[d.sev] : sort.col === "ttl" ? (d.ttl || 1e12) : sort.col === "parts" ? d.parts : String(d[sort.col] || ""));
   const sorted = sort.col ? list.slice().sort((a, c) => (val(a) > val(c) ? sort.dir : val(a) < val(c) ? -sort.dir : 0)) : list;
   const chip = (field, v, label) => <button key={field + v} className="chip" type="button" aria-pressed={f[field] === v} onClick={() => setF((x) => ({ ...x, [field]: v }))}>{label || v}</button>;
   const counts = { fresh: 0, rest: 0, trouble: 0 };
@@ -314,6 +327,8 @@ function Datasets({ b }) {
                       onFocus={() => detail(d.key, d.newest).catch(() => {})}>
                       <td><span className="key">{d.key}</span><span className="lbl">{d.label}</span>{d.error ? <span className="lbl c-warn">{d.error}</span> : null}</td>
                       <td><Pill s={sev}>{label}</Pill></td>
+                      <td className="nw"><Reach checks={d.checks} streak={d.streak} /></td>
+                      <td className="used">{(d.usedBy || []).length ? d.usedBy.join(", ") : <span className="mono-dim">nothing yet</span>}</td>
                       {b.via ? <td className="nw mono-dim">{d.via}</td> : null}
                       <td className="n">{d.newest ? <Time v={d.newest} /> : "—"}</td>
                       <td className="n">{ttlText(d.ttl)}</td>
