@@ -24,6 +24,8 @@ import { draftPlan } from '../app/draft-helper/draftPlan.js';
 import { SHARE_PARAMS } from './readers.js';
 import { normaliseSiteApi } from './apikey.js';
 import { SITE_API_PANELS } from './sbapi.js';
+import { ssKey, RECHECK_AFTER_MS } from './seasonstep.js';
+import { homeStandingsOf } from './tools.js';
 import {
   C, B, worst, hourOf, utcMidnight, median, ttlText, upstream, countEvents, eventsSince, groupEvents, latestEvents, sumReq,
   pageVisibility, visibilityLabel,
@@ -31,6 +33,8 @@ import {
 import { feedRows, ftSev, gameWindow, agoText, fmtB, fmtPaths, fmtHours, aboutHours, seedingText, timelineWeeks, usage } from './sbover.js';
 
 const P = (id, title, def) => ({ id, title, ...def });
+/* Season Statistics' stored state, index and weeks, read as stored (src/seasonstep.js). */
+const ssJson = async (src, ctx, rest) => src.r2json(ssKey(Number(ctx.cfg.season), rest));
 const DAY = 86400000;
 /** A trade's status in the words the home page's league activity uses (a proposal pulled by its proposer is withdrawn). */
 export const TRADE_STATUS = { completed: 'Completed', on_the_table: 'On the table', pending_approval: 'Pending approval', rejected: 'Rejected', cancelled: 'Withdrawn', expired: 'Expired' };
@@ -513,6 +517,44 @@ const OWN = {
           ['Scoring events', C.txt(`up to ${MAX_EVENTS.toLocaleString('en-US')} a week`)], ['Past weeks', C.txt('kept all season, one object per week')]])],
       }),
       P('l-poll', 'Polling', { live: true, sum: async (src) => { const o = openTabs(await src.hours(48), '/api/live/week', 15); return [null, `${o || 0} tab${o === 1 ? '' : 's'} open now`]; }, body: polling([['/api/live/week', 15], ['/api/live/timeline', 60], ['/api/live/h2h', null]]) }),
+    ],
+  },
+
+  'season-stats': {
+    settings: async (src, ctx) => [['Standings on the home page', C.txt(homeStandingsOf(ctx.cfg) ? 'on' : 'off',
+      visibilityOf(ctx.cfg, 'season-stats') === 'visible' ? 'Site Configuration\u2019s switch' : 'on while Season Statistics is not Visible')]],
+    panels: [
+      P('s-weeks', 'Weeks read', {
+        sum: async (src, ctx) => { const st = await ssJson(src, ctx, 'state.json'); const n = st ? Object.keys(st.periods || {}).length : 0; return [null, st ? `${n} scoring week${n === 1 ? '' : 's'} stored` : 'none yet']; },
+        body: async (src, ctx) => {
+          const st = await ssJson(src, ctx, 'state.json');
+          if (!st || !Object.keys(st.periods || {}).length) return [B.empty('No settled week has been read yet. Each is read once, the minute after it settles.')];
+          return [B.table([['Scoring week', 'n'], ['Read'], ['Re-checked'], ['Correction']], Object.entries(st.periods).sort((a, b) => a[0] - b[0]).map(([p, s]) =>
+            B.row([C.n(p), C.time(s.at), s.recheckedAt ? C.time(s.recheckedAt) : C.txt('due', `${Math.round(RECHECK_AFTER_MS / 86400000)} days after it was read`), C.txt(s.recheckedAt ? (s.corrected ? 'yes' : 'none') : '\u2014')]))),
+            B.note('A week is read once from ESPN when it settles and once more a week later, for ESPN\u2019s stat corrections.')];
+        },
+      }),
+      P('s-timeline', 'Game timelines', {
+        sum: async (src, ctx) => { const st = await ssJson(src, ctx, 'state.json'); const t = st ? Object.values(st.tl || {}) : []; return [null, `${t.filter((x) => x.recorded).length} of ${t.length} weeks recorded`]; },
+        body: async (src, ctx) => {
+          const st = await ssJson(src, ctx, 'state.json');
+          const rows = Object.entries((st && st.tl) || {}).sort((a, b) => a[0] - b[0]);
+          if (!rows.length) return [B.empty('No settled week has been read yet.')];
+          return [B.table([['Week', 'n'], ['Score rows', 'n'], ['Recorded'], ['Read']], rows.map(([w, s]) => B.row([C.n(w), C.n(s.rows), C.txt(s.recorded ? 'yes' : 'no'), C.time(s.at)]))),
+            B.note('Records about how a game unfolded (lead changes, comebacks, time spent leading) count only weeks the score timeline recorded.')];
+        },
+      }),
+      P('s-periods', 'Stored periods', {
+        sum: async (src, ctx) => { const ix = await ssJson(src, ctx, 'index.json'); return [null, ix ? `${(ix.periods || []).length} periods` : 'not built yet']; },
+        body: async (src, ctx) => {
+          const [ix, st] = await Promise.all([ssJson(src, ctx, 'index.json'), ssJson(src, ctx, 'state.json')]);
+          if (!ix) return [B.empty('The figures have not been built yet.')];
+          const lb = (st && st.lastBuild) || {};
+          return [B.kv([['Periods', C.txt((ix.periods || []).map((p) => p.label).join(', '))], ['Last built', C.time(ix.builtAt)],
+            ['Last build', C.txt(`${lb.built || 0} part${lb.built === 1 ? '' : 's'} in ${lb.ms || 0} ms`)], ['Still to build', C.n(ix.pending || 0)]]),
+            B.note('Whole season, Regular season and Postseason are rebuilt whenever anything they read changes; each After week view is built once and again only if a week it covers is corrected.')];
+        },
+      }),
     ],
   },
 
