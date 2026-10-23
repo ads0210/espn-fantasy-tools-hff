@@ -13,19 +13,17 @@
  * updated, which is the honest thing to say about a build whose changes nobody
  * outside the repo would notice.
  */
-/* Week 6 (v1.2xx): the list the user wrote and approved on 17 October 2026, spell-checked only. Its last line is the
-   user's own wording of the usual closing line. */
+/* Season Statistics (v1.227 or later): the user's own list, approved 22 October 2026, spell-check only. It leaves
+   out how to show the standings on the home page again (plan D31's draft line); the user's wording stands.
+   It replaces the week-6 list (v1.223). */
 export const RELEASE_NOTE_ITEMS = [
-  'You can now add the site as an app on your phone: on iPhone, open the home page, tap Share, then Add to Home Screen.',
-  'New in Fortune Teller: league-wide odds charts show every team\u2019s ESPN and simulated playoff odds after each week. '
-  + 'Point at a line to read it, or tap a team to show it alone. Standings now toggle between live and selected.',
-  'You can now hover over Live Matchups\u2019 score, margin and win-probability charts to read any moment of a game.',
-  'The matchup card on the home page now carries a banner when a game matters: the Championship, playoff rounds, '
-  + 'Must Win, Win and You\u2019re In, and more.',
-  'Whoever administers the site can now leave a note for everyone on the home page from Site Configuration.',
-  'NFL depth charts and team schedules load reliably again, and the home page says so if any league data can\u2019t be reached.',
-  'Site API: twelve new ready-made jobs, from game alerts and a desk scoreboard to league dashboards, with phone alerts through ntfy.',
-  'Various bug fixes, theme support, and performance improvements.',
+  'New tool: Season Statistics. This season\u2019s standings and around a hundred and twenty of its records, from the '
+  + 'highest weekly score to the luckiest team, each with the team or player holding it. Choose the whole season, the '
+  + 'regular season, the postseason, or the season as it stood after any week.',
+  'The standings now live on Season Statistics, with each team\u2019s all-play record, luck and power ranking now included.',
+  'LLM Data Export and Site API now carry this season\u2019s standings columns and records, and Site API has two new '
+  + 'jobs for keeping the season\u2019s records in a sheet.',
+  'Various bug fixes and performance improvements.',
 ];
 
 /**
@@ -37,5 +35,5 @@ export const RELEASE_NOTE_ITEMS = [
  * production package's Step 0): the list is reviewed with the notes, and like them it is cleared or rewritten for the
  * next release. Keys are those in src/tools.js; a test holds every one to a registered tool.
  */
-/* Week 6: no new tool in this release; Site API's tag from v1.199 cleared at the user's word (20 October 2026). */
-export const NEW_TOOLS = [];
+/* Season Statistics' release: the new tool carries the tag (the week-6 release had none). */
+export const NEW_TOOLS = ['season-stats'];
