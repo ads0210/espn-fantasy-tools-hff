@@ -371,32 +371,35 @@ export function addWeek6Jobs(g) {
 
   /* ---- dashboards and SQL ---- */
   var DATA = [
-    { key: 'duckdb', title: 'Ask the league anything in SQL (DuckDB)', have: 'The standings, this week’s scoreboard, every roster and all league activity as tables in one DuckDB file, ready for any question in SQL.',
+    { key: 'duckdb', title: 'Ask the league anything in SQL (DuckDB)', have: 'The standings, this week’s scoreboard, every roster, all league activity and this season’s records as tables in one DuckDB file, ready for any question in SQL.',
       steps: ['Install Python 3.9+ and two packages: <code>pip install requests duckdb</code>.',
-        'Save the script below as <code>league_sql.py</code> and run it: <code>python league_sql.py</code>. It asks for the four CSV answers in one round and writes <code>league.duckdb</code> beside itself.',
+        'Save the script below as <code>league_sql.py</code> and run it: <code>python league_sql.py</code>. It asks for the five CSV answers in one round (the fifth is Season Statistics’ records) and writes <code>league.duckdb</code> beside itself.',
         'Ask your own questions: <code>duckdb league.duckdb</code> (the DuckDB command line), or any tool that opens DuckDB files. Run the script again whenever you want fresh tables.'],
       file: 'league_sql.py', lang: 'py',
       code: function (c) {
         return '# league_sql.py: the league as tables in league.duckdb, for questions in SQL.\nimport pathlib, sys, time, requests, duckdb\n\n' +
           'BASE = "' + U('', {}).replace(/\/$/, '') + '"\nKEY = {"Authorization": "Bearer ' + c.K + '"}\nHERE = pathlib.Path(__file__).parent\nSTOP = HERE / "SITE_API_STOPPED"\n' +
           'if STOP.exists():\n    sys.exit(f"Stopped earlier: {STOP.read_text()}")\n\n' +
-          'db = duckdb.connect(str(HERE / "league.duckdb"))\nfor table in ("standings", "scoreboard", "rosters", "activity"):   # four answers: one round\n' +
-          '    r = requests.get(f"{BASE}/{table}.csv?name=league-sql", headers=KEY, timeout=60)\n    if r.status_code == 429:\n        err = r.json()["error"]\n' +
+          'db = duckdb.connect(str(HERE / "league.duckdb"))\nASK = {"standings": "standings.csv", "scoreboard": "scoreboard.csv", "rosters": "rosters.csv",\n       "activity": "activity.csv", "records": "season.csv?table=records&"}   # five answers: one round\n' +
+          'for table, path in ASK.items():\n    sep = "" if path.endswith("&") else "?"\n' +
+          '    r = requests.get(f"{BASE}/{path}{sep}name=league-sql", headers=KEY, timeout=60)\n    if r.status_code == 429:\n        err = r.json()["error"]\n' +
           '        if err["stop"] == "exit":\n            STOP.write_text(err["message"])\n        sys.exit(err["message"])      # pace_changed: the message says when to try again\n' +
           '    r.raise_for_status()\n    path = HERE / f"{table}.csv"\n    path.write_bytes(r.content)\n' +
           '    db.execute(f"CREATE OR REPLACE TABLE {table} AS SELECT * FROM read_csv_auto(\'{path.as_posix()}\', header=true)")\n\n' +
-          'print(db.sql("SELECT team, wins, losses, pointsFor FROM standings ORDER BY seed"))\n' +
+          'print(db.sql("SELECT team, wins, losses, pointsFor, luck, power FROM standings ORDER BY seed"))\n' +
+          'print(db.sql("SELECT record, holder, value FROM records WHERE id LIKE \'S21.%\' OR id = \'S59\'"))\n' +
           'print(db.sql("""SELECT team, position, ROUND(SUM(seasonPoints), 2) AS points FROM rosters\n                 WHERE slot NOT IN (\'BE\', \'IR\') GROUP BY ALL ORDER BY points DESC LIMIT 5"""))\n' +
           'print("Saved league.duckdb: open it with  duckdb league.duckdb")\n';
       },
       look: function () {
         var s = standingsNow().slice(0, 4);
-        return LOOK.term([['pr', '$ python league_sql.py'], '┌────────────────────────┬──────┬────────┬───────────┐', '│ team                   │ wins │ losses │ pointsFor │']
-          .concat(s.map(function (t) { var n = String(t.team).slice(0, 22); return '│ ' + n + new Array(23 - n.length + 1).join(' ') + '│ ' + String(t.wins).padStart(4) + ' │ ' + String(t.losses).padStart(6) + ' │ ' + Number(t.pointsFor).toFixed(2).padStart(9) + ' │'; }))
-          .concat(['└────────────────────────┴──────┴────────┴───────────┘', 'Saved league.duckdb: open it with  duckdb league.duckdb']));
+        var f = function (x, n) { return x == null ? new Array(n + 1).join(' ') : String(x).padStart(n); };
+        return LOOK.term([['pr', '$ python league_sql.py'], '┌────────────────────────┬──────┬────────┬───────────┬───────┬───────┐', '│ team                   │ wins │ losses │ pointsFor │  luck │ power │']
+          .concat(s.map(function (t) { var n = String(t.team).slice(0, 22); return '│ ' + n + new Array(23 - n.length + 1).join(' ') + '│ ' + String(t.wins).padStart(4) + ' │ ' + String(t.losses).padStart(6) + ' │ ' + Number(t.pointsFor).toFixed(2).padStart(9) + ' │ ' + f(t.luck == null ? null : Number(t.luck).toFixed(2), 5) + ' │ ' + f(t.power == null ? null : Number(t.power).toFixed(1), 5) + ' │'; }))
+          .concat(['└────────────────────────┴──────┴────────┴───────────┴───────┴───────┘', 'Saved league.duckdb: open it with  duckdb league.duckdb']));
       },
       stop: STOPFILE(), _runs: 'When you run it' },
-    { key: 'grafana', title: 'A season dashboard in Grafana', have: 'A Grafana dashboard of the season: the standings with both playoff odds, points by week, and every team’s odds after each week.',
+    { key: 'grafana', title: 'A season dashboard in Grafana', have: 'A Grafana dashboard of the season: the standings with both playoff odds, all-play, luck and power, points by week, and every team’s odds after each week.',
       steps: ['In Grafana (Cloud’s free tier, or your own), install the <b>Infinity</b> data source: <b>Connections → Add new connection → Infinity</b>.',
         'In the data source’s <b>Authentication</b>, choose <b>Bearer token</b> and paste the league’s key. Under <b>Allowed hosts</b>, add the site’s address. Save it as <code>Site API</code>.',
         '<b>Dashboards → New → Import</b>, paste the JSON below and pick the <code>Site API</code> data source.',
@@ -413,7 +416,8 @@ export function addWeek6Jobs(g) {
           panels: [
             { type: 'table', title: 'Standings', gridPos: { x: 0, y: 0, w: 12, h: 10 },
               targets: [q('A', 'standings', 'data', [col('seed', 'Seed', 'number'), col('team', 'Team'), col('wins', 'W', 'number'), col('losses', 'L', 'number'),
-                col('pointsFor', 'PF', 'number'), col('playoffOdds', 'Playoff %', 'number'), col('simPlayoffOdds', 'Sim %', 'number')])],
+                col('pointsFor', 'PF', 'number'), col('playoffOdds', 'Playoff %', 'number'), col('simPlayoffOdds', 'Sim %', 'number'),
+                col('allPlay.wins', 'All-play W', 'number'), col('allPlay.losses', 'All-play L', 'number'), col('luck', 'Luck', 'number'), col('power', 'Power', 'number')])],
               fieldConfig: { defaults: { decimals: 2 }, overrides: [{ matcher: { id: 'byRegexp', options: '.*%' }, properties: [{ id: 'unit', value: 'percentunit' }, { id: 'decimals', value: 1 }] }] } },
             { type: 'barchart', title: 'Points by week', gridPos: { x: 12, y: 0, w: 12, h: 10 },
               targets: [q('A', 'full', 'data.schedule', [col('week', 'Week', 'string'), col('home.team', 'Home'), col('home.points', 'Home points', 'number'), col('away.team', 'Away'), col('away.points', 'Away points', 'number')])] },
