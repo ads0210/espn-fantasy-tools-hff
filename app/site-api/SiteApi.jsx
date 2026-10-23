@@ -40,13 +40,13 @@ function Endpoints({ bump }) {
   const S = PG.S;
   const e = PG.endpoint(S.ep);
   const fmt = S.epFormat[e.key] || "json", team = S.epTeam[e.key] || "";
-  const url = PG.endpointUrl(e.key, { team, format: fmt, logos: S.logos });
+  const url = PG.endpointUrl(e.key, { team, format: fmt, logos: S.logos, table: S.epTable });
   const t = PG.tryState();
   const tryRef = useRef(null), fieldRef = useRef(null);
   useEffect(() => { if (tryRef.current) PG.attachViewers(tryRef.current); });
   const open = !!S.openField[e.key];
   const rows = e.key === "full" ? null : PG.endpointRows(e.key, team);
-  const n = e.key === "full" ? 32 : PG.fieldCount(rows);
+  const n = e.key === "full" ? PG.sectionCount() : PG.fieldCount(rows);
   const teams = PG.teams();
   const opts = [{ value: "", label: "All teams", logo: null }].concat(teams.map((x) => ({ value: String(x.teamId), label: x.name, logo: x.logo })));
   const set = (fn) => () => { fn(); bump(); };
@@ -65,7 +65,7 @@ function Endpoints({ bump }) {
           <div className="fact wide"><span className="k">Made for</span><span className="v">{e.madeFor}</span></div>
           <div className="fact"><span className="k">Size</span><span className="v"><span className="valg">{PG.epSize(e.key) || e.size.replace("About ", "").replace(" of JSON; about 120 to 180 KB sent", "")}</span>{PG.epSize(e.key) ? <small> {e.key === "full" ? "of JSON now, without logos" : e.team ? "now, all teams" : "now"}</small> : null}</span></div>
           <div className="fact"><span className="k">Refreshes</span><span className="v"><span className="valg">{e.refreshWords()}</span></span></div>
-          <div className="fact"><span className="k">Takes</span><span className="v"><span className="valg">{(e.team ? "team, " : "") + (e.csv ? "format, " : "") + (e.logos ? "logos, " : "") + "name, pretty"}</span></span></div>
+          <div className="fact"><span className="k">Takes</span><span className="v"><span className="valg">{(e.team ? "team, " : "") + (e.period ? "period, table, " : "") + (e.csv ? "format, " : "") + (e.logos ? "logos, " : "") + "name, pretty"}</span></span></div>
         </div>
         <div className="epctl">
           {e.team ? (
@@ -78,6 +78,12 @@ function Endpoints({ bump }) {
             <div className="seg" role="group" aria-label="Format">
               <button type="button" aria-pressed={fmt === "json"} onClick={set(() => { S.epFormat[S.ep] = "json"; delete S.tries[S.ep]; })}>JSON</button>
               <button type="button" aria-pressed={fmt === "csv"} onClick={set(() => { S.epFormat[S.ep] = "csv"; delete S.tries[S.ep]; })}>CSV</button>
+            </div>
+          ) : null}
+          {e.period && fmt === "csv" ? (
+            <div className="seg" role="group" aria-label="Table">
+              <button type="button" aria-pressed={S.epTable !== "records"} onClick={set(() => { S.epTable = "standings"; delete S.tries[S.ep]; })}>Standings</button>
+              <button type="button" aria-pressed={S.epTable === "records"} onClick={set(() => { S.epTable = "records"; delete S.tries[S.ep]; })}>Records</button>
             </div>
           ) : null}
           {e.logos ? (
@@ -259,7 +265,7 @@ export default function SiteApi() {
         ) : null}
         <Head t="Your league’s key" count="One for the whole league · opens the API only" id="key" />
         <div ref={refs.key} id="p-key" />
-        <Head t="What you can ask for" count="Five endpoints · one key · read-only" id="endpoints" />
+        <Head t="What you can ask for" count="Six endpoints · one key · read-only" id="endpoints" />
         <Endpoints bump={bump} />
         <div id="p-guides">
           <GuidesIntro bump={bump} />
