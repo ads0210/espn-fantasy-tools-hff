@@ -600,9 +600,9 @@ export function applyLiveScoring(digest, live, now = Date.now()) {
  * What the route and the dev preview both send. One function, so a preview
  * cannot show a payload the signed-in page would not.
  */
-export function llmExportPayload(raw, sim = null) {
-  // Fortune Teller's odds are laid over here, the one shaping function the route and the preview share.
-  const digest = applySimOdds(raw, sim);
+export function llmExportPayload(raw, sim = null, season = null) {
+  // Fortune Teller's odds and Season Statistics are laid over here, the one shaping function the route and the preview share.
+  const digest = applySeasonStats(applySimOdds(raw, sim), season);
   if (!digest || !digest.export || !Array.isArray(digest.export.teams) || !digest.export.teams.length) {
     return { ok: true, ready: false };
   }
@@ -614,6 +614,46 @@ export function llmExportPayload(raw, sim = null) {
     teamsUi: digest.teamsUi || [],
     export: digest.export,
   };
+}
+
+/**
+ * Season Statistics for the whole season (plan D15), laid over at request time right after `standings`, the export's
+ * fixed order: the standings' all-play, luck and power, then every record with who holds it. `season` is the Whole
+ * season as src/apiseason.js shapes it (seasonPeriod), or null to leave the section out (not built yet, or the tool
+ * not visible to members). Settled figures only (D33); owner names never appear.
+ */
+export function applySeasonStats(digest, season) {
+  if (!digest || !digest.export || !season || !Array.isArray(season.records)) return digest;
+  const holderWords = (r, h) => {
+    if (r.kind === 'player') return `${h.player} (${h.position}), ${h.freeAgent ? 'free agent' : h.team}${h.against ? ' (against)' : ''}`;
+    if (r.kind === 'matchup') return h.winnerTeamId != null ? `${h.team} over ${h.opponent}` : `${h.team} v ${h.opponent}`;
+    return h.team;
+  };
+  const section = {
+    period: season.period ? season.period.label : 'Whole season',
+    standings: season.standings.map((s) => ({ teamId: s.teamId, team: s.team,
+      allPlay: s.allPlay ? `${s.allPlay.wins}-${s.allPlay.losses}${s.allPlay.ties ? `-${s.allPlay.ties}` : ''}` : null, luck: s.luck, power: s.power })),
+    records: season.records.map((r) => {
+      const h0 = r.holders[0] || null;
+      const out = { id: r.id, section: r.section, record: r.record };
+      if (r.headline) out.headline = true;
+      if (!h0) return { ...out, holder: null, note: r.empty };
+      out.value = h0.text || h0.value;
+      if (r.unit) out.unit = r.unit;
+      const weeks = new Set(r.holders.map((h) => (h.weeks ? `${h.weeks[0]}-${h.weeks[1]}` : h.week || '')));
+      if (weeks.size === 1 && [...weeks][0]) out.week = [...weeks][0];
+      out.holders = r.holders.map((h) => (weeks.size > 1 && (h.week || h.weeks) ? `${holderWords(r, h)}, week ${h.weeks ? `${h.weeks[0]}-${h.weeks[1]}` : h.week}` : holderWords(r, h)));
+      if (r.recordedFromWeek) out.recordedFromWeek = r.recordedFromWeek;
+      return out;
+    }),
+  };
+  const ex = {};
+  for (const [k, v] of Object.entries(digest.export)) {
+    ex[k] = v;
+    if (k === 'standings') ex.seasonStats = section;
+  }
+  if (!('seasonStats' in ex)) ex.seasonStats = section;
+  return { ...digest, export: ex };
 }
 
 /**
