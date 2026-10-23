@@ -74,7 +74,7 @@ import { started as startedKey, normaliseSiteApi, replaced as replacedKey, dueCh
 import { RELEASE_NOTE_ITEMS } from './release.js';
 import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r227';
+const BUILD_MARKER = 'r228';
 
 
 
@@ -139,9 +139,10 @@ export default {
    * Cron Trigger, once a minute.
    *
    * The minute's work (runMinute below) is the site's backend: it must never stop. Where the backend clock is on
-   * (BACKEND_CLOCK = "on", dev for now), the cron only knocks on the clock object, which does the work once a
-   * minute from its own alarm or this knock, whichever comes first (C5). If the knock fails the cron does the work
-   * itself, so a broken clock can never cost a minute. Everywhere else the cron does the work, as it always has.
+   * (every deployment since r228; BACKEND_CLOCK = "off" is the kill switch), the cron only knocks on the clock
+   * object, which does the work once a minute from its own alarm or this knock, whichever comes first (C5). If the
+   * knock fails the cron does the work itself, so a broken clock can never cost a minute. A cron run gets 10 ms of
+   * CPU on the free plan and is cut off past it (a lost minute); the clock object gets 30 s.
    */
   async scheduled(event, rawEnv, ctx) {
     rawEnv.BUILD_MARKER = BUILD_MARKER;
@@ -160,9 +161,13 @@ export default {
   },
 };
 
-/** Whether the backend clock does the minute's work (C5): on where the deployment says so, and has the object. */
+/**
+ * Whether the backend clock does the minute's work (C5): wherever the deployment binds the clock object, unless it
+ * sets BACKEND_CLOCK = "off" (the kill switch). On by default since r228, so dev, production and every fork run the
+ * minute's work the same way.
+ */
 export function clockIsOn(env) {
-  return Boolean(env && env.CLOCK && String(env.BACKEND_CLOCK || '').toLowerCase() === 'on');
+  return Boolean(env && env.CLOCK && String(env.BACKEND_CLOCK || '').toLowerCase() !== 'off');
 }
 
 /**
