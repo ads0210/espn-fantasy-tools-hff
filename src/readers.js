@@ -77,6 +77,13 @@ const TOOL_READS = {
     ],
     datasets: ['live_scoring_digest', 'h2h_digest', 'season_schedule'],
   },
+  'season-stats': {
+    routes: [['GET', '/apps/season-stats/', 'document'], ['GET', '/apps/season-stats/api', 'on load, on a period change and once a minute while open', 60],
+      ['GET', '/api/meta', 'on load'], ['GET', '/api/logo/:team', 'on load']],
+    // Everything it shows is built on the backend from these (src/seasonstep.js), plus the week box scores and score
+    // timeline facts it keeps under its own prefix.
+    datasets: ['season_schedule', 'league_settings', 'standings_digest', 'player_weeks', 'transactions', 'draft_results', 'league_history_digest'],
+  },
   'hall-of-fame': {
     routes: [['GET', '/apps/hall-of-fame/', 'document'], ['GET', '/api/hof', 'on load'], ['GET', '/api/meta', 'on load']],
     datasets: ['league_history_digest', 'h2h_full_digest'],
