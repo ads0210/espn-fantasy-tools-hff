@@ -213,31 +213,7 @@ ${NOTE_CSS}
                  letter-spacing:.02em; color:var(--ink); }
     .countdown em { font-style:normal; color:var(--ink-3); font-size:12px; margin:0 1px 0 1px; }
 
-    /* standings */
-    /* The table and its scroller are the shared ones from src/ui.js. These
-       are the additions this season's table makes on top of them. */
-    .medal { display:inline-flex; align-items:center; justify-content:center;
-             width:22px; height:22px; border-radius:50%; font-size:10px;
-             font-weight:900; color:var(--field); }
-    .medal.g { background:var(--gold); box-shadow:0 0 12px -2px var(--gold-glow); }
-    .medal.s { background:#C8D2D6; }
-    .medal.b { background:#CD8A4D; color:#1C1206; }
-    /* Silver is light enough that the site's own ink disappears on it in the
-       light theme; the number is set dark on that one badge only. */
-    .medal.s { color:#1C2B24; }
-    .stflag { display:inline-block; font-size:8.5px; font-weight:900; letter-spacing:.11em;
-              text-transform:uppercase; padding:3px 8px; border:1px solid currentColor; }
-    .stflag.in { color:var(--accent); }
-    .stflag.out { color:var(--flag); }
-    .stupd { opacity:.55; }
-    /* The line under the last playoff place, drawn as Fortune Teller draws it. */
-    table.stbl tr.porow td { padding:0; height:20px; border:0; position:relative; background:transparent; }
-    table.stbl tr.porow td::before { content:""; position:absolute; left:0; right:0; top:50%; height:1px;
-      background:repeating-linear-gradient(90deg,var(--accent) 0 7px,transparent 7px 11px); opacity:.9; }
-    table.stbl tr.porow td span { position:absolute; left:10px; top:50%; transform:translateY(-50%); z-index:2; display:inline-flex; align-items:center; gap:6px; padding:0 7px 0 5px;
-      font-size:7.5px; font-weight:900; letter-spacing:.18em; text-transform:uppercase; color:var(--accent); background:var(--panel); line-height:1; }
-    table.stbl tr.porow td span i { width:6px; height:6px; background:var(--accent); transform:rotate(45deg); box-shadow:0 0 8px var(--accent-glow); }
-    .stbl tr.me td { background:var(--accent-glow); }
+    /* standings: the shared table's own rules (src/standingstable.js STANDINGS_CSS) are added by the page. */
 
     /* injuries */
     .inj { display:flex; align-items:center; gap:11px; padding:9px 0;
