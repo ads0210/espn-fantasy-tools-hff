@@ -23,6 +23,7 @@ export const TOOL_ICONS = {
   // covers every team rather than only the winners, but the name on the tile
   // says Hall of Fame, and a glyph that argues with its own label just reads as
   // the wrong icon.
+  'season-stats': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 20.6h17.6"/><rect x="4.6" y="13.2" width="3.3" height="7.4" rx=".6"/><rect x="10.35" y="9.2" width="3.3" height="11.4" rx=".6"/><rect x="16.1" y="11.8" width="3.3" height="8.8" rx=".6"/><path d="M12 2.9l1.75 1.75L12 6.4l-1.75-1.75z"/></svg>',
   'hall-of-fame': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7.4 3.2h9.2v5.4a4.6 4.6 0 0 1-9.2 0z"/><path d="M7.4 4.9H4.9v1.8a3.1 3.1 0 0 0 3.1 3.1"/><path d="M16.6 4.9h2.5v1.8a3.1 3.1 0 0 1-3.1 3.1"/><path d="M12 13.2v3.1"/><path d="M8.9 20.8h6.2l-.7-4.5H9.6z"/><path d="M6.6 20.8h10.8"/></svg>',
   // A beam across a fulcrum with a pan hanging either side, tipped slightly.
   // The subject is the judgement, not the transaction, so this is a balance
