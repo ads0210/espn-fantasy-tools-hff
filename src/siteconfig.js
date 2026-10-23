@@ -90,6 +90,9 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
           <ol id="orderRows" class="orderlist"></ol>
           <button class="ghost" id="orderReset" hidden>Reset to the default order</button>
           <div class="msg" id="msgOrder"></div>
+          <span class="lbl2">Standings</span>
+          <div id="homeStRows"></div>
+          <div class="msg" id="msgHomeSt"></div>
           </div>
         </div>
 
@@ -338,7 +341,8 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
     .cfgsw { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:9px 0; border-bottom:1px solid var(--line); }
     .cfgsw span.l { color:var(--ink-2); font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.13em; }
     .cfgsw .r { display:flex; align-items:center; gap:10px; font-size:13px; font-weight:700; }
-    .p-api .lbl2 { display:block; margin:16px 0 8px; font-size:10.5px; font-weight:900; color:var(--ink-2); letter-spacing:.2em; text-transform:uppercase; }
+    .cfgsw.locked .sw { opacity:.6; cursor:not-allowed; }
+    .p-api .lbl2, .p-order .lbl2 { display:block; margin:16px 0 8px; font-size:10.5px; font-weight:900; color:var(--ink-2); letter-spacing:.2em; text-transform:uppercase; }
     .p-api .btnstack { display:flex; flex-direction:column; gap:10px; }
     .p-api .btnstack button { margin-top:0; width:100%; }
     .p-api .btnstack button.minor { padding:12px 14px; }
@@ -452,6 +456,8 @@ function render(r) {
   set('swidstate', c.swidPresent ? (c.swidWellFormed ? 'Set' : 'Set, malformed') : 'Not set');
   renderTools(r.tools || []);
   renderOrder(r.order || { tiles: [], custom: false });
+  HOMEST.stored = c.homeStandings === true;
+  renderHomeSt();
   renderSession(c.sessionHours);
   noteRender(c.adminNote || null, c.noteSigs || ['- Site admin']);
   renderWeights((r.config || {}).tradeWeights || {});
@@ -521,6 +527,7 @@ function renderTools(tools) {
         r.tools.forEach(function (t) { vis[t.key] = t.visibility; });
         ORDER.tiles.forEach(function (t) { if (vis[t.key]) t.visibility = vis[t.key]; });
         renderOrder(ORDER);
+        renderHomeSt();
       }
     });
   });
@@ -573,6 +580,28 @@ document.getElementById('orderRows').addEventListener('click', async function (e
   note('msgOrder', r.ok ? 'Saved.' : (r.error || 'Could not save.'), r.ok ? 'ok' : 'err');
   if (r.ok && r.order) renderOrder(r.order, { key: key, dir: dir });
 });
+
+/* Season Statistics (plan D10, D31): the standings on the home page too. Forced on, and locked, while Season
+   Statistics is not Visible, so every member can still see the standings. */
+var HOMEST = { stored: false };
+function renderHomeSt() {
+  var host = document.getElementById('homeStRows');
+  if (!host) return;
+  var ss = (ORDER.tiles || []).filter(function (t) { return t.key === 'season-stats'; })[0];
+  var vis = ss ? ss.visibility : 'visible';
+  var locked = vis !== 'visible';
+  var on = locked || HOMEST.stored;
+  host.innerHTML = '<div class="cfgsw' + (locked ? ' locked' : '') + '"><span class="l">On the home page</span><span class="r">' + (on ? 'On' : 'Off') +
+    '<button class="sw" role="switch" type="button" aria-checked="' + on + '" aria-label="Standings on the home page" id="homeStSwitch"' + (locked ? ' aria-disabled="true"' : '') + '></button></span></div>' +
+    (locked ? '<p class="hint warnh">On while Season Statistics is ' + (vis === 'hidden' ? 'Hidden' : 'Admin-only') + ', so every member can still see the standings. It can be turned off once Season Statistics is Visible.</p>'
+      : '<p class="hint">The standings always appear on Season Statistics. On also shows the same table on the home page, below the matchup card.</p>');
+  document.getElementById('homeStSwitch').addEventListener('click', async function () {
+    if (locked) return;
+    var r = await call('/api/admin/home-standings', { on: !HOMEST.stored });
+    note('msgHomeSt', r.ok ? 'Saved.' : (r.error || 'Could not save.'), r.ok ? 'ok' : 'err');
+    if (r.ok) { HOMEST.stored = r.stored; renderHomeSt(); var b = document.getElementById('homeStSwitch'); if (b) b.focus({ preventScroll: true }); }
+  });
+}
 
 var SESS_STOPS = [1, 2, 4, 8, 12, 24, 72, 168, 720, 2160, 'infinite'];
 function sessWords(h) {
@@ -1044,7 +1073,7 @@ async function call(url, body, pwOverride) {
       ['03', 'Tools have three settings',
        'Visible to the league, admin-only, or hidden. Admin-only tools still appear on the home page with a lock, so the league can see they exist. A tool that arrived in this release is marked New here and in the order below.'],
       ['04', 'Home page order',
-       'Move a tile up or down and the home page follows at once. Reset puts the shipped order back. A tool that arrived in this release is marked New, so you can see where it landed; the home page\u2019s tiles never are.'],
+       'Move a tile up or down and the home page follows at once. Reset puts the shipped order back. A tool that arrived in this release is marked New, so you can see where it landed; the home page\u2019s tiles never are. Beneath the list, Standings on the home page shows the league table there as well as on Season Statistics; it stays on while Season Statistics is not Visible.'],
       ['05', 'Sign-in length',
        'The slider sets how long a member stays signed in before the League Password is asked for again, from one hour to infinite. It applies from the next sign-in. Changing the League Password signs everyone out.'],
       ['06', 'Note from the Site Admin',
