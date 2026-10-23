@@ -86,10 +86,19 @@ export async function siteApiPageRoute(request, env, cfg0, url, ctx) {
       text: JSON.stringify({ ok: false, error: { code: 'not_ready', message: 'The league’s data hasn’t been pulled yet.', docs: `${origin}/apps/site-api/#errors` } }) });
     const team = ep.team && /^\d+$/.test(q.get('team') || '') && snap.index.teams.includes(Number(q.get('team'))) ? q.get('team') : '';
     const csv = ep.csv && q.get('format') === 'csv';
+    // /season: a period it holds and, as CSV, which table; refused as the API refuses it while the tool is not visible.
+    const periods = snap.index.seasonPeriods || [];
+    const period = periods.includes(q.get('period')) ? q.get('period') : 'whole';
+    const table = q.get('table') === 'records' ? 'records' : 'standings';
+    if (ep.key === 'season' && (!visibleSections(cfg).has('seasonStats') || !periods.length)) {
+      return json({ ok: true, status: !periods.length ? 503 : 403, statusText: !periods.length ? 'Service Unavailable' : 'Forbidden', headers: [['content-type', 'application/json; charset=utf-8']],
+        text: JSON.stringify({ ok: false, error: !periods.length ? { code: 'not_ready', message: 'Season Statistics appears once the first week of the season has settled.', docs: `${origin}/apps/site-api/#errors` }
+          : { code: 'not_visible', message: 'Season Statistics isn’t visible to members, so its data is left out.', docs: `${origin}/apps/site-api/#errors` } }) });
+    }
     const sa = normaliseSiteApi(cfg.siteApi);
     const ring = await keyRing(cfg.sessionSecret, sa);
     const built = buildAnswer({ snap, cfg, epKey: ep.key, team, csv, logos: q.get('logos') === 'true', pretty: false, pace, games, quiet,
-      keyInfo: keyMeta(sa, ring, { state: 'current' }, now), origin });
+      keyInfo: keyMeta(sa, ring, { state: 'current' }, now), origin, period, table });
     const text = new TextDecoder().decode(built.body());
     const headers = Object.entries({ ...built.headers, 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'ETag, Retry-After, X-Stop, X-Suggested-Interval, X-Updated-At, X-Refresh-Every' })
       .map(([k, v]) => [k.toLowerCase(), v]);
@@ -158,7 +167,7 @@ export async function siteApiPageRoute(request, env, cfg0, url, ctx) {
     payload.schemaBytes = (snap.index.at['x:schema'] || [0, 0])[1];
     // Each endpoint's answer as it stands, measured from the snapshot (all teams; /full without logos).
     const partBytes = (names) => names.reduce((n, x) => n + ((snap.index.at[x] || [0, 0])[1]), 0);
-    payload.epSizes = Object.fromEntries(['full', 'scoreboard', 'standings', 'rosters', 'activity'].map((k) => {
+    payload.epSizes = Object.fromEntries(['full', 'scoreboard', 'standings', 'season', 'rosters', 'activity'].map((k) => {
       const ap = answerParts(k, { csv: false, team: '', logos: false, cfg, index: snap.index });
       return [k, partBytes(ap.parts) + 600];
     }));
@@ -167,6 +176,8 @@ export async function siteApiPageRoute(request, env, cfg0, url, ctx) {
       scoreboard: part('e:scoreboard'), rosterRows: part('e:rosters'), activity: part('e:activity'),
       standings: await sectionValue(snap, 'standings', cfg), schedule: part('s:schedule'), freeAgents: part('s:freeAgents'),
       headToHead: payload.visible.includes('headToHead') ? part('s:headToHead') : [],
+      season: payload.visible.includes('seasonStats') && snap.text('e:season:whole') ? JSON.parse(snap.text('e:season:whole')) : null,
+      seasonPeriods: payload.visible.includes('seasonStats') ? (snap.index.seasonPeriods || []) : [],
     };
   }
   return json(payload);
