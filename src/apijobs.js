@@ -5,6 +5,7 @@
  */
 export const JOBS = [
   ["sheets","Google Sheets","standings","Keep the standings in a sheet"],
+  ["sheets","Google Sheets","records","Keep the season’s records in a sheet"],
   ["sheets","Google Sheets","left","List who’s left to play"],
   ["sheets","Google Sheets","log","Log league activity as rows"],
   ["sheets","Google Sheets","email","A daily email of the standings (Apps Script)"],
@@ -13,6 +14,7 @@ export const JOBS = [
   ["sheets","Google Sheets","odds","Track the playoff odds week by week"],
   ["sheets","Google Sheets","dashboard","A season dashboard in Looker Studio"],
   ["excel","Excel","standings","Keep the standings in a sheet"],
+  ["excel","Excel","records","Keep the season’s records in a sheet"],
   ["excel","Excel","chart","Chart weekly points"],
   ["excel","Excel","left","List who’s left to play"],
   ["excel","Excel","freeagents","Rank the free agents"],
@@ -81,6 +83,9 @@ export const JOB_NAMES = {
   "standings-sheet": [
     "sheets.standings"
   ],
+  "records-sheet": [
+    "sheets.records"
+  ],
   "left-to-play": [
     "sheets.left"
   ],
@@ -104,6 +109,9 @@ export const JOB_NAMES = {
   ],
   "excel-standings": [
     "excel.standings"
+  ],
+  "excel-records": [
+    "excel.records"
   ],
   "excel-weekly": [
     "excel.chart"
