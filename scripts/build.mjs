@@ -20,6 +20,7 @@ import { generateSetupCode } from './generate-setup-code.mjs';
 import { LIMIT_JS } from '../src/pages/limitnotice.js';
 import { ERROR_JS } from '../src/pages/errorreport.js';
 import { APP_HEAD } from '../src/appicon.js';
+import { STANDINGS_JS } from '../src/standingstable.js';
 
 const TOOLS = [
   {
@@ -39,6 +40,14 @@ const TOOLS = [
     title: 'Trade Analyzer',
     entry: 'app/trade-analyzer/main.jsx',
     css: 'app/trade-analyzer/styles.css',
+  },
+  {
+    key: 'season-stats',
+    title: 'Season Statistics',
+    entry: 'app/season-stats/main.jsx',
+    css: 'app/season-stats/styles.css',
+    // The standings table is the home page's own renderer, run as plain script before the bundle.
+    head: () => `<script>${STANDINGS_JS.split('</script').join('<\\/script')}</script>`,
   },
   {
     key: 'hall-of-fame',
@@ -101,7 +110,7 @@ if(r&&decodeURIComponent(r[1])==='reduce')document.documentElement.classList.add
 </script>
 <script>${LIMIT_JS.split('</script').join('<\\/script')}</script>
 <script>${ERROR_JS.split('</script').join('<\\/script')}</script>
-</head>
+${tool.head ? tool.head() : ''}</head>
 <body>
 <div id="root"></div>
 <script src="./bundle.js" defer></script>
