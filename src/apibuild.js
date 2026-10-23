@@ -25,6 +25,9 @@ import { simOdds, FT_SUMMARY_KEY, FT_PIPELINE_STATUS_KEY, FT_ESPN_ODDS_KEY } fro
 import { logoObjectKey } from './logos.js';
 import { createEngine } from '../app/trade-analyzer/engine.js';
 import { loadConfig } from './config.js';
+import { seasonPeriod, seasonPeriodKeys, seasonRecordRows, seasonExtras } from './apiseason.js';
+/* Season Statistics' stored objects (src/seasonstep.js ssKey; repeated here so this module stays free of the step). */
+const ssKey = (season, rest) => `season-stats/${season}/${rest}`;
 
 export const SNAPSHOT_KEY = 'site-api/snapshot.bin';
 const MAGIC = 'EFTSNAP1';
@@ -245,7 +248,7 @@ export function shapeTeams(exportDoc, standingsRows) {
  * Standings by seed. `sim` is Fortune Teller's reading (simOdds()), or null to leave its odds out
  * (the tool not visible to members). After the regular season every team is clinched or eliminated.
  */
-export function shapeStandings(standingsDoc, sim) {
+export function shapeStandings(standingsDoc, sim, season = null) {
   const rows = ((standingsDoc && standingsDoc.rows) || []).slice().sort((a, b) => (a.rank || a.seed || 99) - (b.rank || b.seed || 99));
   const fin = sim && sim.final && sim.final.seasonOver ? sim.final.inByTeam : null;
   return rows.map((r) => {
@@ -259,6 +262,8 @@ export function shapeStandings(standingsDoc, sim) {
       pointsFor: r2(r.pointsFor), pointsAgainst: r2(r.pointsAgainst), streak: r.streak || null,
       playoffOdds: fin && fin[r.teamId] != null ? (fin[r.teamId] ? 1 : 0) : frac(r.playoffPct),
       simPlayoffOdds: s != null ? frac(s) : null, decided,
+      // Season Statistics' three columns (plan D15), additive: null until its Whole season has been built.
+      ...seasonExtras(season ? season[r.teamId] : null),
     };
   });
 }
@@ -622,9 +627,15 @@ export function shapeAll(src, { now = Date.now() } = {}) {
   const games = currentGames(liveDoc);
   const scoreboard = shapeScoreboard(liveDoc, games);
   const rosters = shapeRosters(exportDoc);
+  // Season Statistics' stored periods (src/seasonstep.js), read by the build; settled figures only (D33).
+  const ss = src.season || null;
+  const ssWhole = ss && ss.parts && ss.parts.whole ? ss.parts.whole : null;
+  const ssRows = ssWhole ? Object.fromEntries((ssWhole.standings || []).map((r) => [r.team, r])) : null;
+  const seasonPeriods = {};
+  if (ss && ss.index) for (const k of seasonPeriodKeys(ss.index)) if (ss.parts[k]) seasonPeriods[k] = seasonPeriod(ss.parts[k], ss.index);
   const fortune = shapeFortune({ ...(src.ft || {}), standings: shapeStandings(standingsDoc, null) });
-  const standings = shapeStandings(standingsDoc, src.ft && src.ft.sim);
-  const standingsNoSim = shapeStandings(standingsDoc, src.ft && src.ft.sim && src.ft.sim.final ? { final: src.ft.sim.final } : null);
+  const standings = shapeStandings(standingsDoc, src.ft && src.ft.sim, ssRows);
+  const standingsNoSim = shapeStandings(standingsDoc, src.ft && src.ft.sim && src.ft.sim.final ? { final: src.ft.sim.final } : null, ssRows);
   const act = shapeActivity(src.transaction_digest);
   const nfl = shapeNfl(src.bye_weeks, src.scoreboard_digest, exportDoc, src.scoreboard_digest && src.scoreboard_digest.week);
   const hof = src.league_history_digest && Array.isArray(src.league_history_digest.rows)
@@ -663,6 +674,7 @@ export function shapeAll(src, { now = Date.now() } = {}) {
     fortunePaths: fortune.fortunePaths,
     tradeAnalysis: shapeTradeAnalysis(src.trade_digest, src.tradeWeights),
     draftOrder: draftDoc ? shapeDraftOrder(draftDoc, names) : null,
+    seasonStats: seasonPeriods.whole || null,
   };
   const leftOut = {
     ...(fortune.hasSim ? {} : {
@@ -671,13 +683,14 @@ export function shapeAll(src, { now = Date.now() } = {}) {
       fortunePaths: 'Appears once Fortune Teller’s first simulation has run' + (fortune.fortuneTeller.opensAfterWeek ? ` (after week ${fortune.fortuneTeller.opensAfterWeek} settles).` : '.'),
     }),
     ...(fortune.hasSim && !fortune.hasPlaces ? { fortuneFinishes: 'Appears once Fortune Teller next builds or moves its simulation on a week.' } : {}),
+    ...(seasonPeriods.whole ? {} : { seasonStats: 'Appears once the first week of the season has settled.' }),
   };
   const detail = (draftDoc && draftDoc.draftDetail) || {};
   return {
     ready: true,
     leagueName: sections.league.name, season: sections.league.season, week, matchupPeriod, phase: sections.league.phase,
     teams: Object.keys(names).map(Number).sort((a, b) => a - b), names,
-    sections, standingsNoSim, rosterRows: rosters.base, activity: act.activity, leftOut,
+    sections, standingsNoSim, rosterRows: rosters.base, activity: act.activity, leftOut, seasonPeriods,
     windows: gameWindows(src.scoreboard_digest), draftLive: Boolean(detail.inProgress),
   };
 }
@@ -740,6 +753,10 @@ export function snapshotParts(shape) {
   put('e:scoreboard', shape.sections.scoreboard); csv('ec:scoreboard', shape.sections.scoreboard);
   put('e:rosters', shape.rosterRows); csv('ec:rosters', shape.rosterRows);
   put('e:activity', shape.activity); csv('ec:activity', shape.activity);
+  // /season: every stored period, whole, and its two tables as CSV.
+  for (const [k, p] of Object.entries(shape.seasonPeriods || {})) {
+    put('e:season:' + k, p); csv('ec:season:' + k + ':standings', p.standings); csv('ec:season:' + k + ':records', seasonRecordRows(p));
+  }
   // The description file, from this league's own data; its address is filled in when handed over.
   const sampleMeta = { endpoint: 'standings', apiVersion: 1, league: shape.leagueName, season: shape.season, week: shape.week,
     updatedAt: '2026-09-28T14:15:08Z', refreshEverySeconds: 300, pace: { askEverySeconds: 60, site: 'normal', note: 'Please ask at most once a minute.' },
@@ -749,7 +766,8 @@ export function snapshotParts(shape) {
     sections: { standings: { updatedAt: '2026-09-28T14:15:08Z', refreshEverySeconds: 300 } }, leftOut: [{ section: 'logos', why: 'Left out by default: add ?logos=true to include it.' }],
     conventions: ['Times are ISO 8601 in UTC.'] };
   parts.push(['x:schema', JSON.stringify(schemaDoc({ leagueName: shape.leagueName, values: shape.sections, about: sampleAbout, meta: sampleMeta,
-    rows: { scoreboard: shape.sections.scoreboard, standings: shape.sections.standings, rosters: shape.rosterRows, activity: shape.activity } }), null, 2) + '\n']);
+    rows: { scoreboard: shape.sections.scoreboard, standings: shape.sections.standings, rosters: shape.rosterRows, activity: shape.activity,
+      season: [shape.sections.seasonStats || {}] } }), null, 2) + '\n']);
   for (const id of shape.teams) {
     const sb = shape.sections.scoreboard.filter((m) => m.home.teamId === id || m.away.teamId === id);
     put('e:scoreboard:' + id, sb); csv('ec:scoreboard:' + id, sb);
@@ -807,7 +825,7 @@ export const SECTION_SOURCES = {
   nflScoreboard: ['scoreboard_digest'], injuries: ['injuries_digest'], news: ['nfl_news'], pointsAllowed: ['llm_export_digest'],
   live: ['live_scoring_digest'], timeline: ['timeline'], history: ['league_history_digest'], records: ['league_history_digest'],
   teamHistory: ['league_history_digest'], headToHead: ['h2h_full_digest'], fortuneTeller: ['ft'], fortuneOdds: ['ft'], fortuneFinishes: ['ft'],
-  fortuneGames: ['ft'], fortunePaths: ['ft'], tradeAnalysis: ['trade_digest'], draftOrder: ['draft_results'],
+  fortuneGames: ['ft'], fortunePaths: ['ft'], tradeAnalysis: ['trade_digest'], draftOrder: ['draft_results'], seasonStats: ['season'],
 };
 const LIVE_SOURCES = new Set(['live_scoring_digest', 'scoreboard_digest']);
 export const REFRESH_FLOOR_MS = 15 * 60000;
@@ -900,6 +918,17 @@ export async function buildSnapshot(env, mem, opts = {}) {
   let sim = null;
   try { sim = await simOdds(env); } catch { sim = null; }
   src.ft = { summary, pipeline, espnOdds, sim };
+  // Season Statistics: its index and every stored period, each read again only when it has changed.
+  try {
+    const ssSeason = Number((src.league_settings && src.league_settings.seasonId) || 0);
+    const ssIndex = ssSeason ? await readR2(ssKey(ssSeason, 'index.json')) : null;
+    if (ssIndex) {
+      const parts = {};
+      await Promise.all(seasonPeriodKeys(ssIndex).map(async (k) => { parts[k] = await readR2(ssKey(ssSeason, `stats/${k}.json`)); }));
+      src.season = { index: ssIndex, parts };
+      at.season = Date.parse(ssIndex.builtAt) || null;
+    }
+  } catch { src.season = null; }
   // The league's own weighting, for Trade Analyzer's breakdown.
   try { src.tradeWeights = (await loadConfig(env)).tradeWeights || {}; } catch { src.tradeWeights = {}; }
   at.ft = Math.max(0, ...[FT_SUMMARY_KEY, FT_PIPELINE_STATUS_KEY, FT_ESPN_ODDS_KEY].map((k) => (mem.docs.get(k) || {}).at || 0)) || null;
@@ -949,6 +978,7 @@ export async function buildSnapshot(env, mem, opts = {}) {
     leagueName: shape.leagueName || null, season: shape.season || null, week: shape.week || null, matchupPeriod: shape.matchupPeriod || null,
     phase: shape.phase || null, teams: shape.teams || [], names: shape.names || {}, windows: shape.windows || [], draftLive: Boolean(shape.draftLive),
     leftOut: shape.leftOut || {}, sections, read, refreshed, refreshesToday: mem.refreshes || 0,
+    seasonPeriods: Object.keys(shape.seasonPeriods || {}),
   };
   const parts = shape.ready ? snapshotParts(shape) : [];
   index.buildMs = Date.now() - t0;
