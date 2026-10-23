@@ -47,11 +47,11 @@ export function schemaDoc({ leagueName, values, rows, about, meta }) {
   const answers = {};
   for (const e of ENDPOINTS) {
     answers[e.key + 'Answer'] = { type: 'object', required: ['ok', 'data', 'meta'], properties: { ok: { const: true },
-      data: e.key === 'full' ? { $ref: '#/$defs/full' } : { type: 'array', items: { $ref: '#/$defs/' + e.key + 'Row' } }, meta: { $ref: '#/$defs/meta' } } };
+      data: e.key === 'full' ? { $ref: '#/$defs/full' } : e.key === 'season' ? { $ref: '#/$defs/seasonRow' } : { type: 'array', items: { $ref: '#/$defs/' + e.key + 'Row' } }, meta: { $ref: '#/$defs/meta' } } };
   }
   return {
     $schema: 'https://json-schema.org/draft/2020-12/schema', $id: API + '/schema.json', title: `${leagueName || 'League'}: Site API, version 1`,
-    description: 'Every answer of the five endpoints. Errors answer { ok: false, error }. Times are ISO 8601 in UTC; odds are fractions from 0 to 1; ids are ESPN’s own.',
+    description: 'Every answer of the six endpoints. Errors answer { ok: false, error }. Times are ISO 8601 in UTC; odds are fractions from 0 to 1; ids are ESPN’s own.',
     $ref: '#/$defs/any',
     $defs: { ...defs, any: { anyOf: ENDPOINTS.map((e) => ({ title: e.path, $ref: '#/$defs/' + e.key + 'Answer' })).concat([{ $ref: '#/$defs/errorAnswer' }]) },
       errorAnswer: { type: 'object', properties: { ok: { const: false }, error: { $ref: '#/$defs/error' } } }, ...answers },

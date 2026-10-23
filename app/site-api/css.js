@@ -754,7 +754,7 @@ html[data-theme="light"] .hacard { background:#fff; color:#212121; border:1px so
 .dlrow .ba { display:flex; gap:5px; justify-content:flex-end; flex-wrap:wrap; }
 .dlrow .ba .minibtn { min-height:28px; padding:5px 9px; }
 .dlrow.off .sn { color:var(--ink-3); text-decoration:line-through; text-decoration-thickness:1px; }
-.dlrow .wk { display:inline-flex; margin-top:5px; }
+.dlrow .wk { display:inline-flex; margin-top:5px; flex-wrap:wrap; max-width:100%; }
 .dlrow .wk.seg button { padding:3px 8px; min-height:24px; }
 .dlprev { grid-column:1 / -1; padding:10px 0 4px; min-width:0; }
 .dlprev .pg > div { min-width:0; }

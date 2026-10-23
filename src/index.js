@@ -33,7 +33,7 @@ import { shell, backAction, displayTitle, passwordField, esc, LOGO_FALLBACK_SVG,
   THEME_COOKIE, TEAM_COOKIE, MOTION_COOKIE, FAVICON_SVG} from './ui.js';
 import { adminGateRail, adminGateSection, ADMIN_GATE_CSS } from './admingate.js';
 import { TOOLS, LEAGUE_TOOLS, describeTools, applyVisibility, visibleTools, visibilityOf, VISIBILITY,
-  orderTiles, normaliseTileOrder, describeTileOrder, defaultTileOrder, SITE_CONFIG_TOOL } from './tools.js';
+  orderTiles, normaliseTileOrder, describeTileOrder, defaultTileOrder, SITE_CONFIG_TOOL, homeStandingsOf } from './tools.js';
 import {
   beginRequest, finishRequest, traceOf, note, markPage, noteLapsed, countException, countOp,
   sendTick, meteredEnv, isolateFacts, logStub, seasonAt, FIRST_LOG_SEASON, brakeNow, paceCheckIn, paceUsage, knowsSetUp,
@@ -50,6 +50,10 @@ import { BUILD_INFO } from './generated/build-info.js';
 import { runBatch, readJob, jobStatus } from './history.js';
 import { runPrimeBatch, primeStatus, missingDatasetKeys } from './prime.js';
 import { fetchPart } from './espn.js';
+import { fetchScoringPeriod, readSeasonIndex, readSeasonPart } from './seasonstep.js';
+import { seasonPeriod } from './apiseason.js';
+import { liveWeek as seasonLiveFrom } from './seasonlive.js';
+import { timelineFacts } from './seasonstats.js';
 import { buildLiveScoringDigest, teamLogoUrl } from './derive.js';
 import { putPart } from './store.js';
 import { timelineAppend, timelineRead } from './timeline.js';
@@ -70,7 +74,7 @@ import { started as startedKey, normaliseSiteApi, replaced as replacedKey, dueCh
 import { RELEASE_NOTE_ITEMS } from './release.js';
 import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r223';
+const BUILD_MARKER = 'r227';
 
 
 
@@ -196,6 +200,9 @@ export async function runMinute(rawEnv, { at = Date.now(), via = 'cron', cron = 
       result: { teams: (r.teams || []).map((t) => ({ teamId: t.teamId, name: t.name, state: t.state, status: t.status || null })) },
     } : { ran: false }));
     await timed('ft', () => fortuneTellerCheck(env), (r) => (r ? { ran: true, state: r.state || null } : { ran: false }));
+    // Season Statistics: one settled week pulled or re-checked, one week's timeline facts, and a rebuild when its
+    // sources changed, inside the dataset coordinator's 'season_stats' object (src/seasonstep.js).
+    await timed('season', () => seasonStatsTick(env, at), (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false }));
     // Week 6 (F2): the hourly reachability check, one dataset a minute (src/datacheck.js).
     await timed('check', async () => {
       const cfg = await loadConfig(env);
@@ -229,6 +236,16 @@ export async function runMinute(rawEnv, { at = Date.now(), via = 'cron', cron = 
 /** The league's number of playoff places, for the line under the last of them. */
 async function playoffPlaces(env, ctx) {
   try { const s = await readDigest(env, 'league_settings', ctx); const n = s && s.settings && s.settings.scheduleSettings && s.settings.scheduleSettings.playoffTeamCount; return Number(n) || null; } catch { return null; }
+}
+
+/** Ask Season Statistics' backend step to do this minute's share (src/seasonstep.js). */
+export async function seasonStatsTick(env, at = Date.now(), reason = 'minute') {
+  if (!env.COORDINATOR) return null;
+  const cfg = await loadConfig(env);
+  if (!isSetupFinished(cfg)) return null;
+  const stub = env.COORDINATOR.get(env.COORDINATOR.idFromName('season_stats'));
+  const r = await stub.fetch(`https://coordinator/season-stats?brake=${encodeURIComponent(brakeNow(at).brake)}&reason=${encodeURIComponent(reason)}`);
+  try { return await r.json(); } catch { return { ok: false, error: `status ${r.status}` }; }
 }
 
 async function fortuneTellerCheck(env) {
@@ -674,6 +691,7 @@ async function route(request, env, ctx) {
       dataBanner,
       // Links in the note go only to pages the league can open (a hidden tool's name stays plain words).
       adminNote: noteForBoard(cfg.adminNote, notePages(visibleTools(cfg))),
+      homeStandings: homeStandingsOf(cfg),
     }));
   }
 
@@ -688,7 +706,10 @@ async function route(request, env, ctx) {
     const siteBackendApi = key === 'site-backend' && path === '/apps/site-backend/api';
     // Site API's page route: under the tool's own path, so the unlock cookie reaches it; never cached.
     const siteApiPage = key === 'site-api' && path === '/apps/site-api/api';
+    // Season Statistics' figures: under the tool's own path, so an Admin-only tool's unlock cookie reaches it.
+    const seasonApi = key === 'season-stats' && path === '/apps/season-stats/api';
     if (vis === VISIBILITY.HIDDEN) {
+      if (seasonApi) return json({ ok: false, error: 'Season Statistics is switched off.' }, 403);
       if (siteBackendApi) return json({ ok: false, error: 'Site Backend is switched off.' }, 403);
       if (siteApiPage) return json({ ok: false, error: 'Site API is switched off.' }, 403, { 'cache-control': 'no-store' });
       return html(shell({
@@ -707,12 +728,14 @@ async function route(request, env, ctx) {
       if (!unlocked) {
         if (siteBackendApi) return json({ ok: false, error: 'locked', locked: true }, 403);
         if (siteApiPage) return json({ ok: false, error: 'locked', locked: true }, 401, { 'cache-control': 'no-store' });
+        if (seasonApi) return json({ ok: false, error: 'locked', locked: true }, 401, { 'cache-control': 'no-store' });
         if (isDocument) markPage(request, key, `${tool.name} (Admin Password prompt)`);
         return html(adminGatePage({ tool, theme, reduceMotion }), 200);
       }
     }
     if (siteBackendApi) return siteBackendRoute(request, env, cfg, url);
     if (siteApiPage) return siteApiPageRoute(request, env, cfg, url, ctx);
+    if (seasonApi) return seasonStatsRoute(request, env, cfg, url, ctx);
     if (isDocument) {
       markPage(request, key, tool.name);
       // A shared link being opened: its parameters say so, and nothing else about it is kept.
@@ -724,6 +747,84 @@ async function route(request, env, ctx) {
 
   if (env.ASSETS) return env.ASSETS.fetch(request);
   return new Response('not found', { status: 404 });
+}
+
+/* Season Statistics: a page read may ask for the sources and the step at most every five minutes per isolate. */
+const SEASON_POKE = { at: 0 };
+const SEASON_SOURCES = ['season_schedule', 'standings_digest', 'transaction_digest', 'player_weeks', 'league_history_digest'];
+
+/**
+ * One period of Season Statistics' stored figures, with the index (periods, calendar, teams) in the same answer,
+ * and Fortune Teller's Sim % laid over the current standings (never stored: it changes on its own timetable).
+ * Answers 304 to a matching If-None-Match. The figures are built by the backend step (src/seasonstep.js); a read
+ * that finds them older than five minutes refreshes the sources it depends on and asks the step behind the answer.
+ */
+async function seasonStatsRoute(request, env, cfg, url, ctx) {
+  const season = Number(cfg.season);
+  const index = await readSeasonIndex(env, season);
+  const now = Date.now();
+  if (now - SEASON_POKE.at > 5 * 60000 && refreshAllowed(env.BRAKE || 'normal')) {
+    SEASON_POKE.at = now;
+    const work = (async () => {
+      for (const k of SEASON_SOURCES) { try { await ensureDataset(env, k, null); } catch { /* the step reads what is stored */ } }
+      try { await seasonStatsTick(env, now, 'visit'); } catch { /* the minute's work tries again */ }
+    })();
+    if (ctx && ctx.waitUntil) ctx.waitUntil(work);
+  }
+  if (!index) {
+    return json({ ok: true, ready: false, season, settlesAt: await weekOneSettles(env, ctx) }, 200, { 'cache-control': 'no-store' });
+  }
+  const want = String(url.searchParams.get('period') || 'whole');
+  const known = (index.periods || []).find((p) => p.key === want) || (index.periods || [])[0];
+  const obj = known ? await readSeasonPart(env, season, known.key) : null;
+  const sim = known && (known.key === 'whole' || known.key === 'regular') ? await simOdds(env).catch(() => null) : null;
+  const simTag = sim && sim.byTeam ? Object.entries(sim.byTeam).map(([k, v]) => `${k}:${v}`).join(',') : '-';
+  // While games are on, the week so far for the page's live records (asked for with live=1, a live period only).
+  const live = known && known.live && url.searchParams.get('live') === '1' ? await seasonLiveWeek(env, ctx, cfg, index).catch(() => null) : null;
+  const liveTag = live && live.on ? fnvTag(JSON.stringify(live)) : '-';
+  const etag = `"ss-${index.builtAt}-${obj ? obj.etag : '-'}-${simTag.length}-${simTag.slice(0, 64)}-${liveTag}"`;
+  if (request.headers.get('if-none-match') === etag) return new Response(null, { status: 304, headers: { etag, 'cache-control': 'no-cache' } });
+  let part = null;
+  if (obj) { try { part = await obj.json(); } catch { part = null; } }
+  if (part && sim && sim.byTeam) for (const r of part.standings || []) r.simPct = sim.byTeam[r.team] ?? null;
+  return json({ ok: true, ready: Boolean(part), season, index, part, sim: sim ? { state: sim.state, ready: Boolean(sim.byTeam) } : null, live },
+    200, { etag, 'cache-control': 'no-cache' });
+}
+
+const fnvTag = (s) => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); };
+/* The week's timeline facts, read at most once a minute per isolate (one stored object, a few hundred rows; §8). */
+const SEASON_LIVE_TL = { at: 0, week: null, facts: {} };
+async function seasonLiveWeek(env, ctx, cfg, index) {
+  const digest = await readDigest(env, 'live_scoring_digest', ctx);
+  if (!digest || !(digest.games || []).some((g) => g && g.state === 'live')) return { on: false };
+  const week = Number(digest.matchupPeriod);
+  const now = Date.now();
+  if (SEASON_LIVE_TL.week !== week || now - SEASON_LIVE_TL.at > 60000) {
+    SEASON_LIVE_TL.at = now; SEASON_LIVE_TL.week = week;
+    try {
+      const read = await timelineRead(env, String(cfg.season), week);
+      const series = {};
+      for (const r of (read && read.rows) || []) for (const [id, v] of Object.entries(r.m || {})) (series[id] = series[id] || []).push([Date.parse(r.t), v[0], v[1], v[2]]);
+      const facts = {};
+      for (const [id, s] of Object.entries(series)) { const last = s[s.length - 1]; facts[id] = timelineFacts(s, last[1] >= last[2]); }
+      SEASON_LIVE_TL.facts = facts;
+    } catch { /* the live records read from the timeline simply wait */ }
+  }
+  return seasonLiveFrom(digest, SEASON_LIVE_TL.facts, (index && index.calendar && index.calendar.regWeeks) || 13);
+}
+
+/** The day week 1 settles (the Tuesday after its last game), from the season calendar; null when unknown. */
+async function weekOneSettles(env, ctx) {
+  try {
+    const cal = await readDigest(env, 'nfl_calendar', ctx);
+    const reg = (((cal && cal.leagues && cal.leagues[0] && cal.leagues[0].calendar) || []).find((c) => /regular/i.test(c.label || '')) || {}).entries || [];
+    const w1 = reg.find((e) => String(e.value) === '1');
+    if (!w1 || !w1.endDate) return null;
+    const d = new Date(w1.endDate);
+    while (d.getUTCDay() !== 2) d.setUTCDate(d.getUTCDate() + 1);
+    d.setUTCHours(16, 0, 0, 0);
+    return d.toISOString();
+  } catch { return null; }
 }
 
 /**
@@ -1346,6 +1447,17 @@ async function handleAdmin(request, env, cfg, path) {
     return json({ ok: true, hours: sessionHoursOf(saved) });
   }
 
+  if (path === '/api/admin/home-standings') {
+    // Season Statistics (plan D10, D31): the standings on the home page too. Locked on while the tool is not Visible.
+    if (typeof body.on !== 'boolean') return json({ ok: false, error: 'Send on: true or false.' }, 400);
+    if (visibilityOf(cfg, 'season-stats') !== VISIBILITY.VISIBLE) {
+      return json({ ok: false, locked: true, error: 'The standings stay on the home page while Season Statistics is not Visible.' }, 409);
+    }
+    const saved = await saveConfig(env, { homeStandings: body.on, stamps: { homeStandings: stamp() } });
+    note(request, 'admin', `Standings on the home page: ${body.on ? 'on' : 'off'}`, { page: 'config' });
+    return json({ ok: true, on: homeStandingsOf(saved), stored: saved.homeStandings === true });
+  }
+
   if (path === '/api/admin/tool-order') {
     // The home page's tile order. A full list of the tiles, each once; `reset` returns to the default.
     let next = null;
@@ -1472,8 +1584,7 @@ export async function liveWeekPayload(env, cfg, asked, ctx) {
     } catch { /* fall through and rebuild */ }
   }
 
-  const spec = PARAM_DATASETS.live_scoring_week;
-  const res = await fetchPart(cfg, { url: spec.url(cfg, week) }, { auth: true });
+  const res = await fetchScoringPeriod(cfg, week);
   if (!res.ok || !res.buffer) {
     return reply({ ok: false, error: `ESPN did not return week ${week}`, status: res.status }, 502);
   }
@@ -1589,13 +1700,26 @@ async function llmExportRoute(env, ctx, wantFresh = false) {
   // A copy or download waits for a stale export's rebuild; a page load is answered at once and rebuilds behind.
   const digest = await llmExportDigest(env, wantFresh ? null : ctx);
   const sim = await simOdds(env);
-  if (!wantFresh || !digest) return json(llmExportPayload(digest, sim));
+  const season = await seasonForExport(env);
+  if (!wantFresh || !digest) return json(llmExportPayload(digest, sim, season));
   const obj = await ensureDataset(env, 'live_scoring_digest', ctx);
   let live = null;
   if (obj) {
     try { live = await obj.json(); } catch { live = null; }
   }
-  return json(llmExportPayload(applyLiveScoring(digest, live), sim));
+  return json(llmExportPayload(applyLiveScoring(digest, live), sim, season));
+}
+
+/** Season Statistics' Whole season for the LLM export, shaped as Site API carries it; null while not built or not visible. */
+export async function seasonForExport(env) {
+  try {
+    const cfg = await loadConfig(env);
+    if (visibilityOf(cfg, 'season-stats') !== VISIBILITY.VISIBLE) return null;
+    const season = Number(cfg.season);
+    const [index, obj] = await Promise.all([readSeasonIndex(env, season), readSeasonPart(env, season, 'whole')]);
+    if (!index || !obj) return null;
+    return seasonPeriod(await obj.json(), index);
+  } catch { return null; }
 }
 
 /**
@@ -1915,7 +2039,53 @@ async function devBannerFacts(env) {
   try { const o = await env.DATA.get('dev/banner-force.json'); if (!o) return null; const f = await o.json(); return f && f.until > Date.now() ? f.facts : null; } catch { return null; }
 }
 
-export async function boardPayload(env, ctx, teamId) {
+/**
+ * The home page's standings table in the shape the shared renderer takes (src/standingstable.js): ESPN's standings
+ * as they stand, Fortune Teller's Sim %, and all-play, luck and power from Season Statistics' stored whole season
+ * (src/seasonstep.js) when it has been built. After the regular season every team is in or out by its final seed.
+ */
+async function homeTable(env, cfg, standings, sim, places) {
+  if (!standings) return { rows: [], teams: {}, places, empty: { title: 'Standings unavailable', note: 'They appear once the league is set up.' } };
+  /* Rows without team identity would print "Team 1", "Team 2", which reads as a league nobody named. */
+  if (!standings.identified) return { rows: [], teams: {}, places, empty: { title: 'Loading league data', note: 'Team names and records arrive with the next refresh.' } };
+  if (!standings.started) return { rows: [], teams: {}, places, empty: { title: 'Season has not started', note: 'Records and points appear after week one.' } };
+  let extra = {};
+  try {
+    const o = await readSeasonPart(env, Number(cfg.season), 'whole');
+    const part = o ? await o.json() : null;
+    for (const r of (part && part.standings) || []) extra[r.team] = r;
+  } catch { extra = {}; }
+  const fin = sim && sim.final && sim.final.seasonOver && sim.final.inByTeam ? sim.final.inByTeam : null;
+  const teams = {};
+  for (const r of standings.rows || []) teams[r.teamId] = { name: r.name, logo: r.logo || null, owner: r.owner || '' };
+  const simOf = (id) => (sim && sim.byTeam && sim.byTeam[id] != null ? sim.byTeam[id] : null);
+  const wholeRows = Object.values(extra);
+  /* Season Statistics' Whole season table when it has been built (plan G51: the home page shows the same table, so
+     after the regular season it counts postseason games too); ESPN's standings until then. */
+  if (wholeRows.length && wholeRows.every((r) => teams[r.team])) {
+    const rows = wholeRows.sort((a, b) => a.seed - b.seed).map((r) => ({ ...r,
+      playoffPct: fin && fin[r.team] != null ? (fin[r.team] ? 1 : 0) : r.playoffPct, simPct: simOf(r.team) }));
+    return { rows, teams, places, sim: Boolean(sim && sim.byTeam), simUpdating: Boolean(sim && sim.state === 'updating') };
+  }
+  const rows = (standings.rows || []).slice(0, 14).map((r) => {
+    const played = (r.wins || 0) + (r.losses || 0) + (r.ties || 0);
+    const m = /^([WL])(\d+)$/.exec(r.streak || '');
+    const x = extra[r.teamId] || {};
+    return {
+      team: r.teamId, seed: r.rank, w: r.wins || 0, l: r.losses || 0, t: r.ties || 0,
+      winPct: played ? ((r.wins || 0) + (r.ties || 0) * 0.5) / played : 0,
+      pf: r.pointsFor || 0, pa: r.pointsAgainst || 0, diff: (r.pointsFor || 0) - (r.pointsAgainst || 0),
+      ppg: x.ppg != null ? x.ppg : (played ? (r.pointsFor || 0) / played : 0),
+      streak: m ? { type: m[1], n: Number(m[2]) } : null,
+      playoffPct: fin && fin[r.teamId] != null ? (fin[r.teamId] ? 1 : 0) : (r.playoffPct == null ? null : r.playoffPct),
+      simPct: simOf(r.teamId),
+      allPlay: x.allPlay || null, luck: x.luck == null ? null : x.luck, power: x.power == null ? null : x.power,
+    };
+  });
+  return { rows, teams, places, sim: Boolean(sim && sim.byTeam), simUpdating: Boolean(sim && sim.state === 'updating') };
+}
+
+export async function boardPayload(env, ctx, teamId, { withTable = false } = {}) {
   // Rules and team identity ride along with the board poll rather than the
   // 15-second status poll: slow-moving data on the slow-moving endpoint.
   revalidate(env, 'league_settings', ctx);
@@ -1949,11 +2119,17 @@ export async function boardPayload(env, ctx, teamId) {
       : { started: false, identified: false, rows: [] },
     // Fortune Teller's simulated odds for the Sim % column, or why there are none yet.
     sim: await simOdds(env),
+    table: null,
     transactions: (transactions && transactions.identified)
       ? ((transactions && transactions.items) || []) : [],
     myTeam: null,
     injuries: [],
   };
+  {
+    // Only when the home page shows the standings (Season Statistics plan D10): otherwise nothing reads it.
+    const cfg = await loadConfig(env);
+    if (withTable || homeStandingsOf(cfg)) out.table = await homeTable(env, cfg, standings, out.sim, out.standings.places || 0);
+  }
 
   if (!teamId) return out;
 

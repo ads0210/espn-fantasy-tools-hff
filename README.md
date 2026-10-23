@@ -1,18 +1,19 @@
 <h1 align="center">ESPN Fantasy Tools</h1>
 
 <p align="center"><b>Your ESPN fantasy football league, with the tools ESPN doesn't have.</b><br>
-A private website for one league: live charts of every matchup, the league's record book, every way the rest of the
-season can go, a breakdown of every trade offer, and more. Free to run, and yours.</p>
+A private website for one league: live charts of every matchup, this season's records and standings, the league's
+record book, every way the rest of the season can go, a breakdown of every trade offer, and more. Free to run, and
+yours.</p>
 
 <p align="center">
   <img alt="Runs on Cloudflare's free tier" src="https://img.shields.io/badge/runs%20on-Cloudflare%20free%20tier-63FF4A?style=flat-square&labelColor=111713">
-  <img alt="Eight tools" src="https://img.shields.io/badge/tools-8-63FF4A?style=flat-square&labelColor=111713">
+  <img alt="Nine tools" src="https://img.shields.io/badge/tools-9-63FF4A?style=flat-square&labelColor=111713">
   <img alt="Works with any ESPN league" src="https://img.shields.io/badge/works%20with-any%20ESPN%20league-63FF4A?style=flat-square&labelColor=111713">
 </p>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/home-dark.webp">
-  <img alt="The home page: this week's matchups, the NFL games, your matchup card and the standings" src="docs/images/home-light.webp">
+  <img alt="The home page: this week's matchups, the NFL games, your matchup card and the tools" src="docs/images/home-light.webp">
 </picture>
 
 > [!IMPORTANT]
@@ -29,7 +30,7 @@ season can go, a breakdown of every trade offer, and more. Free to run, and your
 - [The home page](#the-home-page)
 - [On every page: help and settings](#on-every-page-help-and-settings)
 - [The tools](#the-tools)
-  - [Draft Helper](#draft-helper) · [Live Matchups](#live-matchups) · [Hall of Fame](#hall-of-fame) ·
+  - [Draft Helper](#draft-helper) · [Live Matchups](#live-matchups) · [Season Statistics](#season-statistics) · [Hall of Fame](#hall-of-fame) ·
     [Fortune Teller](#fortune-teller) · [Trade Analyzer](#trade-analyzer) · [LLM Data Export](#llm-data-export) ·
     [Site API](#site-api) · [Site Backend](#site-backend)
 - [Site Configuration](#site-configuration)
@@ -50,6 +51,7 @@ any ESPN fantasy football league: your scoring, your roster shape, your playoff 
 | --- | --- | --- | --- |
 | 📋 | [Draft Helper](#draft-helper) | Live draft board, roster needs and recommended targets | Visible |
 | 📈 | [Live Matchups](#live-matchups) | This week's scoreboard, lineups and live win probability | Visible |
+| 📊 | [Season Statistics](#season-statistics) | This season's standings and records, after any week | Visible |
 | 🏆 | [Hall of Fame](#hall-of-fame) | Champions, all-time standings and every team's record | Visible |
 | 🔮 | [Fortune Teller](#fortune-teller) | Every way the rest of the season can go, and where each leaves you | Visible |
 | 🤝 | [Trade Analyzer](#trade-analyzer) | Every offer on the table, broken down for both sides | Visible |
@@ -100,7 +102,7 @@ The site can sit on your phone's home screen like an app, named **League HQ**, a
 ## The home page
 
 The league at a glance. It follows **your team**: pick it once near the top, and the matchup card, the injury watch
-and your row in the standings all follow it. Every tool shares the same choice, so you only make it once.
+and (when the home page shows them) your row in the standings all follow it. Every tool shares the same choice, so you only make it once.
 
 **For members**
 
@@ -109,7 +111,7 @@ and your row in the standings all follow it. Every tool shares the same choice, 
 | **Matchups strip** | This week's fantasy matchups: live scores and projections, moving while games are on |
 | **NFL strip** | The NFL games behind them, with scores and kickoff times |
 | **Your matchup** | This week's score, projection and win chance for you and your opponent, with a countdown to the next kickoff. When a game matters, a banner says why: **Championship**, a playoff round, **Third Place Game**, **Must Win**, **Win and You're In**, **Most Critical Remaining Matchup**, **Top of the Table** |
-| **Standings** | The full table, sortable on any column: record, points for and against, streak, ESPN's **Playoff %**, and **Sim %** once [Fortune Teller](#fortune-teller) has run. A **Playoffs** line marks the last playoff place. After the regular season every team reads **Clinched** or **Eliminated** |
+| **Standings** | Only when whoever administers the site turns them on here (they always live on [Season Statistics](#season-statistics)). The same table: sortable on any column, with ESPN's **Playoff %**, **Sim %** once [Fortune Teller](#fortune-teller) has run, all-play, luck and the power ranking. Your own row is highlighted |
 | **Tools** | One tile per tool. A tool kept for admins shows a lock |
 | **Injury watch** | Injuries on your own roster, using whichever of ESPN's two reports is newer |
 | **League activity** | Every completed add, drop and trade, one line per transaction, and every trade offer with where it stands. Starts at the last seven days |
@@ -127,6 +129,9 @@ and your row in the standings all follow it. Every tool shares the same choice, 
 **For whoever administers the site**
 
 - Which tiles appear, and in what order, is set in Site Configuration (**Tools**, **Home page order**).
+- **Standings on the home page** (under **Home page order**) shows the standings table here as well as on Season
+  Statistics. It is off by default, and stays on while Season Statistics is not Visible, so members can always see the
+  standings somewhere.
 - The **data banner** can be dismissed for everyone with the Admin Password; it comes back only if a check fails three
   hours running again. Site Backend's **Data Layer** tab shows exactly which data is affected.
 - If an update needs data the site has never fetched, a banner asks you to pull it from Site Configuration.
@@ -199,6 +204,37 @@ the Admin Password), or **Hidden**. Whoever administers the site chooses, tool b
 
 - Visible by default. Scores refresh every 15 seconds during games, recorded by the site's once-a-minute work even when
   nobody has the page open.
+
+### Season Statistics
+
+*This season's standings and records, after any week.* The season as a record book: the standings, and around a
+hundred and twenty of this season's records, each with the team or player who holds it.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/season-stats-dark.webp">
+  <img alt="Season Statistics: the period rail, the standings and the first records" src="docs/images/season-stats-light.webp">
+</picture>
+
+**For members**
+
+- **Choose a period** on the rail: the whole season, the regular season, the postseason once it starts, or the season
+  **as it stood after any week** played.
+- **Standings**: the league table, sortable on any column, with **all-play** (your record had you played everyone every
+  week), **luck** and the **power ranking**. The small **i** under each heading says how a column is counted.
+- **Records** in sections: standings, scoring, lineups and projections, games, players, moves, history and fun. Each
+  section shows its headline records; the bar beneath opens the rest. A record held by several teams lists them all.
+  The **i** on a panel says how it is counted and who is next (both teams, for a matchup record).
+- **Matchup records** show both teams: the winner outlined in green and the other team in red, and the **i** names
+  them again. A tie, or a record with no side ahead (like the most frequent trade partners), marks neither.
+- **Record Holders**: a point for every good record a team holds, a point off for every bad one.
+- **While games are on**, records marked **Live** can change; the standings move only when a matchup ends.
+
+**For whoever administers the site**
+
+- Visible by default. Every figure is worked out by the site once a week settles (and again a week later, for ESPN's
+  stat corrections), so opening the page costs almost nothing.
+- Records about how a game unfolded (lead changes, comebacks, time spent leading) count only games the site recorded
+  as they were played; their note says from which week.
 
 ### Hall of Fame
 
@@ -295,6 +331,8 @@ chat assistant how to read it.
 
 - **Choose your team** and the file marks it; the prompt is written from your side.
 - **Full or compact**: compact keeps what a weekly decision needs at well under half the size.
+- **This season's records ride along** while [Season Statistics](#season-statistics) is visible: every team's all-play
+  record, luck and power ranking, and every record with who holds it (the compact file keeps the headline records).
 - **Copy or download**, then paste the prompt into a new chat and attach the file. Each copy or download is brought up
   to date first.
 
@@ -315,9 +353,9 @@ a page that shows how to use it on the tools people already have.
 **For members**
 
 - **The league's key** opens the API and nothing else on the site. It shows behind dots until you press **Show**.
-- **Five addresses** answer everything: the scoreboard, the standings, the rosters, league activity, and one for all
-  of it. **Try it** shows exactly what a program gets.
-- **Guides for sixteen platforms and seventy jobs**: Google Sheets, Excel, Python, JavaScript, PowerShell, a Mac or
+- **Six addresses** answer everything: the scoreboard, the standings, [Season Statistics](#season-statistics) for any
+  period, the rosters, league activity, and one for all of it. **Try it** shows exactly what a program gets.
+- **Guides for sixteen platforms and seventy-two jobs**: Google Sheets, Excel, Python, JavaScript, PowerShell, a Mac or
   Linux shell, iPhone and iPad, Android, Home Assistant, Discord or Slack, your calendar, **ntfy** phone alerts,
   Telegram, GroupMe, desk and TV displays, and dashboards and SQL. Close-game alerts, injury changes, notable drops,
   clinched and eliminated posts, weekly awards, a desk scoreboard, a bye-week planner and more. Each job has its steps,
@@ -366,7 +404,7 @@ on every change; nothing stays unlocked after you close the tab. Every panel sta
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/site-configuration-dark.webp">
-  <img alt="Site Configuration with Sign-in length and the note from the Site Admin open" src="docs/images/site-configuration-light.webp">
+  <img alt="Site Configuration with every panel shut" src="docs/images/site-configuration-light.webp">
 </picture>
 
 | Panel | What you can do |
@@ -375,7 +413,7 @@ on every change; nothing stays unlocked after you close the tab. Every panel sta
 | **ESPN cookies** | Replace them when league data stops loading. The site tests them against ESPN before saving |
 | **Passwords** | Change the League Password or the Admin Password. Changing the League Password signs everyone out and replaces the Site API key |
 | **Tools** | Set each tool to Visible, Admin-only or Hidden. At least one league tool always stays visible |
-| **Home page order** | Move tiles up or down; the home page follows at once |
+| **Home page order** | Move tiles up or down; the home page follows at once. Beneath the list, choose whether the home page shows the standings too |
 | **Sign-in length** | How long a member stays signed in, from one hour to infinite |
 | **Note from the Site Admin** | Write a note for everyone, with bold, italic, the site's colours and links to its pages, and a signature from your saved list. Each browser sees it once |
 | **Site API** | Switch the API on or off, replace the key, choose how often it is replaced, and whether it may travel in an address |
@@ -414,10 +452,12 @@ that copy at once, and brought up to date behind it if it was getting old.
 
 **What the site works out for itself.** Some of what you see exists nowhere on ESPN: how every score and win chance
 moved through each game, ESPN's weekly playoff odds (which ESPN cannot show for past weeks, so the site records them),
-Fortune Teller's exact odds, the Hall of Fame record book, and Trade Analyzer's breakdowns.
+Fortune Teller's exact odds, this season's records and all-play, luck and power on Season Statistics, the Hall of
+Fame record book, and Trade Analyzer's breakdowns.
 
 **What runs on its own.** Once a minute the site records live scores, moves Fortune Teller's work along, and checks
-itself; once an hour it checks that ESPN is still answering for every part of the league's data.
+itself; when a week settles it works out that week's records for Season Statistics; once an hour it checks that ESPN
+is still answering for every part of the league's data.
 
 **Staying free.** The whole site runs within Cloudflare's free allowance. It paces itself, and anything asking through
 Site API, to stay there: on a busy day its pages slow down, and only in an extreme would they rest until 00:00 UTC.

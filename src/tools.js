@@ -33,6 +33,16 @@ export const TOOLS = [
     href: '/apps/live-matchups/',
     defaultVisibility: VISIBILITY.VISIBLE,
   },
+  /* This season's standings and records, for the whole season or as it stood after any week. The standings table
+     lives here; the home page shows it too only when Site Configuration says so (homeStandings), or while this tool
+     is not Visible. */
+  {
+    key: 'season-stats',
+    name: 'Season Statistics',
+    description: 'This season\u2019s standings and records, after any week.',
+    href: '/apps/season-stats/',
+    defaultVisibility: VISIBILITY.VISIBLE,
+  },
   {
     key: 'hall-of-fame',
     name: 'Hall of Fame',
@@ -108,6 +118,15 @@ export function visibilityOf(cfg, key) {
   if (!tool) return null;
   const stored = (cfg.toolVisibility || {})[key];
   return stored || tool.defaultVisibility;
+}
+
+/**
+ * Whether the home page shows the standings table (Season Statistics plan D10, D31). The table lives on Season
+ * Statistics; Site Configuration's switch (config homeStandings, off by default) shows it on the home page too. While
+ * Season Statistics is not Visible the switch is forced on and locked, so every member can still see the standings.
+ */
+export function homeStandingsOf(cfg) {
+  return visibilityOf(cfg || {}, 'season-stats') !== VISIBILITY.VISIBLE || Boolean(cfg && cfg.homeStandings === true);
 }
 
 /**

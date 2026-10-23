@@ -6,6 +6,7 @@
  * the JSON Schema are all drawn from here, so none of them can describe something the tool does
  * not serve. A plain module: the Worker and the Site API page both import it.
  */
+import { seasonRecordRows } from './apiseason.js';
 
 /* The tools a section follows. A section is served only while its tool is visible to members. */
 export const SECTION_TOOL = {
@@ -13,7 +14,7 @@ export const SECTION_TOOL = {
   history: 'hall-of-fame', records: 'hall-of-fame', teamHistory: 'hall-of-fame', headToHead: 'hall-of-fame',
   fortuneTeller: 'fortune-teller', fortuneOdds: 'fortune-teller', fortuneFinishes: 'fortune-teller',
   fortuneGames: 'fortune-teller', fortunePaths: 'fortune-teller',
-  tradeAnalysis: 'trade-analyzer', draftOrder: 'draft-helper',
+  tradeAnalysis: 'trade-analyzer', draftOrder: 'draft-helper', seasonStats: 'season-stats',
 };
 
 /* Every section of /full, in the order an answer carries them (about first). `sec` is how often
@@ -24,7 +25,7 @@ export const SECTIONS = [
   { key: 'league', group: 'league', what: 'Name, season, week and phase, the scoring format and every scoring rule, lineup slots, roster size, position limits, playoff and seeding rules, waiver and trade rules, the trade deadline, the draft', refresh: '6 h', sec: 21600, csv: false },
   { key: 'teams', group: 'league', what: 'Every team: id, name, abbreviation, record, waiver priority, moves this season', refresh: '30 min', sec: 1800, csv: true },
   { key: 'rosters', group: 'league', what: 'Every rostered player (as /rosters), plus points by week, position rank, rest-of-season projection, % owned and how acquired', refresh: '{live} in games, else 5 min', sec: 300, live: true, csv: true, rowWord: 'a row per player' },
-  { key: 'standings', group: 'league', what: 'As /standings: seed, record, points for and against, streak, ESPN’s playoff odds and Fortune Teller’s', refresh: '5 min', sec: 300, csv: true },
+  { key: 'standings', group: 'league', what: 'As /standings: seed, record, points for and against, streak, ESPN’s playoff odds and Fortune Teller’s, all-play, luck and the power ranking', refresh: '5 min', sec: 300, csv: true },
   { key: 'schedule', group: 'league', what: 'Every matchup of the season: week, home and away team, scores, winner, state, postseason round', refresh: '30 min', sec: 1800, csv: true },
   { key: 'scoreboard', group: 'league', what: 'As /scoreboard: this week’s matchups as they stand', refresh: '{live} in games', sec: 60, live: true, csv: true },
   { key: 'players', group: 'league', what: 'The league’s player pool: id, name, position, NFL team, bye, ADP, rank, % owned, injury status, and the team that has him', refresh: '1 min', sec: 60, csv: true },
@@ -51,6 +52,7 @@ export const SECTIONS = [
   { key: 'fortuneGames', group: 'site', what: 'Every remaining regular-season game, with each side’s win chance and projected score as the simulation reads them', refresh: 'Weekly', sec: 604800, csv: true },
   { key: 'fortunePaths', group: 'site', what: 'For each team: its best path, its simplest path to the playoffs, and the path where every game goes to ESPN’s projected winner', refresh: 'Weekly', sec: 604800, csv: false },
   { key: 'tradeAnalysis', group: 'site', what: 'Each offer on the table broken down row by row for both sides, at the league’s weighting, with the balance and the verdict', refresh: '5 min', sec: 300, csv: true, rowWord: 'a row per offer per row' },
+  { key: 'seasonStats', group: 'site', what: 'Season Statistics for the whole season, as /season: the standings with all-play, luck and the power ranking, and every record with each holder', refresh: 'When a week settles', sec: 3600, csv: true, rowWord: 'a row per record holder' },
   { key: 'draftOrder', group: 'site', what: 'The draft’s shape: rounds, snake or linear, pick order, every slot with the team holding it, and the league’s roster shape', refresh: '1 min during a draft', sec: 86400, csv: true },
 ];
 
@@ -60,7 +62,7 @@ export function section(key) { return SECTIONS.find((s) => s.key === key) || nul
 /** A section's refresh figure as the reader receives it: the live parts follow the snapshot's rebuild. */
 export function refreshOf(s, quiet) { return s.refresh.split('{live}').join(quiet ? '15 s' : '1 min'); }
 
-/* The five endpoints. The refresh words and figures depend on whether games are on and whether the
+/* The six endpoints. The refresh words and figures depend on whether games are on and whether the
    site is quiet (st = { games, quiet }). */
 export const ENDPOINTS = [
   { key: 'scoreboard', path: '/scoreboard', team: true, csv: true, size: 'About 5 to 10 KB',
@@ -69,9 +71,13 @@ export const ENDPOINTS = [
     refreshWords: (st) => (st.games ? (st.quiet ? 'Every 15 seconds during games' : 'Every minute during games') : 'As the week changes'),
     refresh: (st) => (st.games ? (st.quiet ? 15 : 60) : 300) },
   { key: 'standings', path: '/standings', csv: true, size: 'About 3 KB',
-    sentence: 'Seed, record, points for and against, streak, ESPN’s playoff odds and Fortune Teller’s simulated odds, and clinched or eliminated once decided.',
+    sentence: 'Seed, record, points for and against, streak, ESPN’s playoff odds and Fortune Teller’s simulated odds, clinched or eliminated once decided, and Season Statistics’ all-play record, luck and power ranking.',
     madeFor: 'Spreadsheets and weekly bot posts',
     refreshWords: () => 'Every 5 minutes', refresh: () => 300 },
+  { key: 'season', path: '/season', csv: true, period: true, size: 'About 60 to 120 KB',
+    sentence: 'This season’s standings and every record for one period: ?period=whole (the default), regular, post, or the season as it stood after a week (w1, w2 and so on). As CSV, ?table=standings or ?table=records (a row per holder).',
+    madeFor: 'Weekly bot posts, a season sheet, analysis of the season so far',
+    refreshWords: () => 'When a week settles', refresh: () => 300 },
   { key: 'rosters', path: '/rosters', team: true, csv: true, size: 'About 60 to 90 KB',
     sentence: 'Every rostered player: fantasy team, slot, position, NFL team, this week’s opponent and game state, points and projection this week, season points and average, injury status, bye.',
     madeFor: 'Lineup checks, “who’s left to play” scripts, sheets',
@@ -82,7 +88,7 @@ export const ENDPOINTS = [
     madeFor: 'Bots and alerts: “a trade was offered”, “waivers ran”',
     refreshWords: () => 'Every 5 minutes', refresh: () => 300 },
   { key: 'full', path: '/full', csv: false, logos: true, size: 'About 0.8 to 1.2 MB of JSON; about 120 to 180 KB sent',
-    sentence: 'Everything: all thirty-one sections below, plus about, in one answer.',
+    sentence: 'Everything: all thirty-two sections below, plus about, in one answer.',
     madeFor: 'Scripts that keep their own copy, analysis, an assistant given one file',
     refreshWords: () => 'Each part as its section; the whole is rebuilt at most once a minute',
     refresh: (st) => (st.games ? 60 : 300) },
@@ -94,7 +100,7 @@ export function endpoint(key) { return ENDPOINTS.find((e) => e.key === key) || n
 export function paramsOf(key) {
   const ep = endpoint(key);
   if (!ep) return [];
-  return ['name', 'pretty'].concat(ep.csv ? ['format'] : [], ep.team ? ['team'] : [], ep.logos ? ['logos'] : []);
+  return ['name', 'pretty'].concat(ep.csv ? ['format'] : [], ep.team ? ['team'] : [], ep.logos ? ['logos'] : [], ep.period ? ['period', 'table'] : []);
 }
 
 export const CONVENTIONS = ['Times are ISO 8601 in UTC.', 'Odds are fractions from 0 to 1.', 'Ids are ESPN’s own.', 'A missing value is null.'];
@@ -138,6 +144,7 @@ export const CSV_ROWS = {
   history: (v) => (v && v.allTime) || [],
   draft: (v) => (v && v.picks) || [],
   draftOrder: (v) => (v && v.slots) || [],
+  seasonStats: (v) => seasonRecordRows(v),
   fortuneTeller: (v) => ((v && v.teams) || []).map((t) => ({ state: v.state, simulatedThroughWeek: v.simulatedThroughWeek, ...t })),
   headToHead: (v) => {
     const rows = [];
@@ -209,7 +216,7 @@ export const MEANING = {
   averagePointsAllowed: 'Average fantasy points allowed to the position', season: 'The season', finish: 'Final place', champion: 'true for the champion',
   winPct: 'Winning percentage, 0 to 1', pointsPerGame: 'Points per game', championships: 'Titles', runnerUp: 'Runner-up finishes',
   postseasonAppearances: 'Seasons in the postseason', bestFinish: 'Best final place', worstFinish: 'Worst final place', averageFinish: 'Average final place',
-  longestWinStreak: 'Longest winning run', longestLossStreak: 'Longest losing run', seasons: 'Seasons played', record: 'The record’s id', label: 'The record’s name',
+  longestWinStreak: 'Longest winning run', longestLossStreak: 'Longest losing run', seasons: 'Seasons played', record: 'The record: its id in Hall of Fame’s records, its name in Season Statistics’', label: 'The record’s name',
   value: 'The record’s value', tied: 'true when several teams share it', opponentTeamId: 'The other team, where there is one',
   teamA: 'The lower team id of the pair', teamB: 'The higher team id of the pair', teamAName: 'Team A’s name', teamBName: 'Team B’s name',
   winsA: 'Team A’s wins', winsB: 'Team B’s wins', pointsA: 'Team A’s points', pointsB: 'Team B’s points', postseason: 'true for a postseason game',
@@ -223,6 +230,13 @@ export const MEANING = {
   image: 'The logo as a small image inside the answer', builtAt: 'When this snapshot was built', apiVersion: 'The API’s version',
   updatedAt: 'When the data was last updated', refreshEverySeconds: 'How often the site refreshes it', pace: 'How often it is sensible to ask right now',
   leftOut: 'Sections not in this answer, and why', sections: 'Each section’s last update and refresh interval', side: 'home or away',
+  allPlay: 'The record had the team played every other team every week (Season Statistics)', luck: 'Wins above what its scores earned against the whole league (Season Statistics)',
+  power: 'Season Statistics’ power ranking, out of 100', pointsPerWeek: 'Points per scoring week', period: 'The stretch of the season counted: whole, regular, post or wN',
+  records: 'Every record for the period', holders: 'Each team or player holding the record; several when tied', holder: 'Who holds it: a team, or a player and his position',
+  section: 'The Season Statistics section it belongs to', about: 'How the record is counted', unit: 'What the value measures',
+  good: 'true for a record a team wants, false for one it doesn’t, null for neither', recordedFromWeek: 'For a record read from the score timeline: the first week recorded',
+  empty: 'Why no one holds it yet; null when someone does', freeAgent: 'true when the player is on no fantasy team', against: 'true when the record names the team on the receiving end',
+  detail: 'A short note beside the value', weeks: 'The first and last week of a stretch', text: 'The value as words, where a number alone would mislead', opponentName: 'The other team’s name',
 };
 export const NULLTYPE = { decided: 'text or null', simPlayoffOdds: 'number or null', injuryStatus: 'text or null', winnerTeamId: 'number or null',
   bid: 'number or null', postseasonRound: 'text or null', call: 'text or null', points: 'number or null', opponent: 'text or null',

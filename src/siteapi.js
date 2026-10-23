@@ -1,7 +1,7 @@
 /**
  * Site API: the /api/v1/ router.
  *
- * Five endpoints, opened by the league's key alone; cookies are never read. Answered first in line, before the
+ * Six endpoints, opened by the league's key alone; cookies are never read. Answered first in line, before the
  * League Password gate, with the site's settings held 60 seconds per isolate. Every answer is a slice of the
  * prebuilt snapshot plus a small meta block; nothing is built on a request. Each program gets one round of
  * requests per suggested interval, kept by its pace record; a request sooner is refused with too_soon.
@@ -170,7 +170,7 @@ export function visibleSections(cfg) {
   }
   return out;
 }
-const TOOL_NAMES = { 'live-matchups': 'Live Matchups', 'hall-of-fame': 'Hall of Fame', 'fortune-teller': 'Fortune Teller', 'trade-analyzer': 'Trade Analyzer', 'draft-helper': 'Draft Helper' };
+const TOOL_NAMES = { 'season-stats': 'Season Statistics', 'live-matchups': 'Live Matchups', 'hall-of-fame': 'Hall of Fame', 'fortune-teller': 'Fortune Teller', 'trade-analyzer': 'Trade Analyzer', 'draft-helper': 'Draft Helper' };
 
 /** Every section's reason for being left out of this answer, in order. */
 export function leftOutList(cfg, index, { logos = false } = {}) {
@@ -220,7 +220,7 @@ export function aboutBlock(index, { pace, games, quiet, keyInfo, cfg, logos }) {
 }
 
 /** Which snapshot parts an endpoint's answer is made of, and when its data was last updated. */
-export function answerParts(epKey, { csv, team, logos, cfg, index }) {
+export function answerParts(epKey, { csv, team, logos, cfg, index, period = 'whole', table = 'standings' }) {
   const vis = visibleSections(cfg);
   const sim = vis.has('fortuneTeller') ? '' : '~nosim';
   const sec = (k) => ((index.sections || {})[k] || {}).updatedAt || null;
@@ -229,6 +229,7 @@ export function answerParts(epKey, { csv, team, logos, cfg, index }) {
   if (epKey === 'scoreboard') return { parts: [(csv ? 'ec:scoreboard' : 'e:scoreboard') + (team ? ':' + team : '')], updatedAt: latest('scoreboard') };
   if (epKey === 'rosters') return { parts: [(csv ? 'ec:rosters' : 'e:rosters') + (team ? ':' + team : '')], updatedAt: latest('rosters') };
   if (epKey === 'activity') return { parts: [csv ? 'ec:activity' : 'e:activity'], updatedAt: latest('transactions', 'trades') };
+  if (epKey === 'season') return { parts: [csv ? `ec:season:${period}:${table}` : `e:season:${period}`], updatedAt: latest('seasonStats') };
   // /full: every section its tools allow, in registry order.
   const keys = SECTIONS.filter((s) => s.key !== 'about' && vis.has(s.key) && (s.key !== 'logos' || logos)).map((s) => s.key);
   return { parts: keys.map((k) => (k === 'standings' ? 's:standings' + sim : 's:' + k)), keys, updatedAt: index.builtAt };
@@ -246,8 +247,8 @@ function concatBytes(chunks) {
  * The body of an answer from snapshot slices: the data as stored, meta (and about) made for this request.
  * Nothing is parsed unless ?pretty=true asks for it.
  */
-export function answerBody(snap, epKey, { csv, team, logos, cfg, meta, about, pretty }) {
-  const { parts, keys } = answerParts(epKey, { csv, team, logos, cfg, index: snap.index });
+export function answerBody(snap, epKey, { csv, team, logos, cfg, meta, about, pretty, period, table }) {
+  const { parts, keys } = answerParts(epKey, { csv, team, logos, cfg, index: snap.index, period, table });
   if (csv) return snap.bytes(parts[0]) || enc.encode('');
   let data;
   if (epKey === 'full') {
@@ -255,7 +256,7 @@ export function answerBody(snap, epKey, { csv, team, logos, cfg, meta, about, pr
     keys.forEach((k, i) => { const b = snap.bytes(parts[i]); if (b) { chunks.push(enc.encode(',"' + k + '":')); chunks.push(b); } });
     chunks.push(enc.encode('}'));
     data = concatBytes(chunks);
-  } else data = snap.bytes(parts[0]) || enc.encode('[]');
+  } else data = snap.bytes(parts[0]) || enc.encode(epKey === 'season' ? '{}' : '[]');
   const body = concatBytes([enc.encode('{"ok":true,"data":'), data, enc.encode(',"meta":' + JSON.stringify(meta) + '}')]);
   if (!pretty) return body;
   return enc.encode(JSON.stringify(JSON.parse(new TextDecoder().decode(body)), null, 2) + '\n');
@@ -274,19 +275,20 @@ function etagOf(snap, epKey, opts, extra) {
  * One answer, exactly as a program receives it: its headers and (made on demand) its body. The API and the
  * page's Try it both come here, so Try it shows what a script gets without using a script's window.
  */
-export function buildAnswer({ snap, cfg, epKey, team = '', csv = false, logos = false, pretty = false, pace, games, quiet, keyInfo, origin }) {
+export function buildAnswer({ snap, cfg, epKey, team = '', csv = false, logos = false, pretty = false, pace, games, quiet, keyInfo, origin, period = 'whole', table = 'standings' }) {
   const ep = endpoint(epKey);
-  const opts = { csv, team, logos, cfg };
+  const opts = { csv, team, logos, cfg, period, table };
   const { updatedAt } = answerParts(epKey, { ...opts, index: snap.index });
   const refreshEvery = ep.refresh({ games, quiet });
   const meta = {
     endpoint: epKey, apiVersion: 1, league: snap.index.leagueName, season: snap.index.season, week: snap.index.week,
+    ...(epKey === 'season' ? { period } : {}),
     updatedAt, refreshEverySeconds: refreshEvery,
     pace: { askEverySeconds: pace.header, site: pace.level, note: pace.note },
     docs: `${origin}/apps/site-api/#${epKey}`,
     key: keyInfo,
   };
-  const etag = etagOf(snap, epKey, opts, `${pace.header}|${keyInfo.endsIn}|${keyInfo.warning ? 'w' : ''}|${pretty ? 'p' : ''}|${csv ? 'c' : ''}`);
+  const etag = etagOf(snap, epKey, opts, `${period}|${table}|${pace.header}|${keyInfo.endsIn}|${keyInfo.warning ? 'w' : ''}|${pretty ? 'p' : ''}|${csv ? 'c' : ''}`);
   const headers = {
     'Content-Type': csv ? 'text/csv; charset=utf-8' : 'application/json; charset=utf-8',
     'X-Suggested-Interval': String(pace.header),
@@ -360,7 +362,7 @@ export async function handleSiteApi(request, env, ctx, { now = Date.now() } = {}
       'Access-Control-Allow-Headers': 'Authorization, If-None-Match, X-Script-Name', 'Access-Control-Max-Age': '86400' }) });
   }
   if (method !== 'GET' && method !== 'HEAD') return fail(cr, 405, 'method_not_allowed', 'The API only reads.', {}, { Allow: 'GET, HEAD, OPTIONS' });
-  if (!m) return fail(cr, 404, 'not_found', 'There’s no endpoint here. The five are /full, /scoreboard, /standings, /rosters and /activity.');
+  if (!m) return fail(cr, 404, 'not_found', 'There’s no endpoint here. The six are /full, /scoreboard, /standings, /season, /rosters and /activity.');
 
   let cfg;
   try { cfg = await apiSettings(env, now); } catch { return fail(cr, 500, 'server_error', 'Something went wrong on the site. Try again shortly.'); }
@@ -457,9 +459,22 @@ export async function handleSiteApi(request, env, ctx, { now = Date.now() } = {}
   }
 
   const csv = cr.csv;
+  // /season: Season Statistics' own data, served only while the tool is visible to members, for a period it holds.
+  let period = 'whole', table = 'standings';
+  if (m.ep.key === 'season') {
+    if (visibilityOf(cfg, 'season-stats') !== VISIBILITY.VISIBLE) return fail(cr, 403, 'not_visible', 'Season Statistics isn’t visible to members, so its data is left out.');
+    const have = snap.index.seasonPeriods || [];
+    if (!have.length) return fail(cr, 503, 'not_ready', 'Season Statistics appears once the first week of the season has settled.');
+    period = url.searchParams.get('period') || 'whole';
+    if (!have.includes(period)) return fail(cr, 400, 'bad_request', `period must be one of ${have.join(', ')}.`);
+    const tq = url.searchParams.get('table');
+    if (tq && !csv) return fail(cr, 400, 'bad_request', 'table chooses a CSV table: add format=csv, or leave table out for JSON.');
+    if (tq && tq !== 'standings' && tq !== 'records') return fail(cr, 400, 'bad_request', 'table must be standings or records.');
+    table = tq || 'standings';
+  }
   const logos = logosQ === 'true';
   const keyInfo = keyMeta(sa, ring, match, now);
-  const built = buildAnswer({ snap, cfg, epKey: m.ep.key, team, csv, logos, pretty: pretty === 'true', pace, games, quiet, keyInfo, origin: cr.origin });
+  const built = buildAnswer({ snap, cfg, epKey: m.ep.key, team, csv, logos, pretty: pretty === 'true', pace, games, quiet, keyInfo, origin: cr.origin, period, table });
   const headers = baseHeaders(built.headers);
   const etag = headers.ETag;
   counted({ api: true, kind, key: match.state === 'grace' ? 'old' : 'current', ep: m.ep.key, name });

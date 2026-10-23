@@ -24,8 +24,382 @@ import Instructions from "../shared/Instructions.jsx";
  * full-width basis and takes its own line.
  */
 
-const UI_FONT = "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+export const UI_FONT = "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 const THEME_COOKIE = "eft_theme";
+
+/* Hall of Fame's own rules: the record panels, rows and sections. Season Statistics uses them as they are
+   (app/season-stats), so they are exported rather than copied. */
+export const HOF_CSS = `
+        html[data-theme="dark"] {
+          /* Gold is a site token now; the other two medals are this tool's. */
+          --silver:#C8D2D6; --silver-glow:rgba(200,210,214,.24);
+          --bronze:#CD8A4D; --bronze-glow:rgba(205,138,77,.24);
+        }
+        html[data-theme="light"] {
+          --silver:#8A97A0; --silver-glow:rgba(138,151,160,.18);
+          --bronze:#A85E2A; --bronze-glow:rgba(168,94,42,.18);
+        }
+        * { box-sizing:border-box; }
+        button { -webkit-tap-highlight-color:transparent; font-family:inherit; }
+        .wrap { display:flex; flex-direction:column; }
+
+        /* The established tool header, identical to Draft Helper's. */
+        .toolhead { display:flex; align-items:center; gap:18px; padding:0 0 14px;
+                    border-bottom:1px solid var(--line); }
+        .toolmark { flex:none; width:min(46%,340px); }
+        .toolmark, .homelink { display:block; text-decoration:none; color:inherit; }
+        .toolid { flex:1; min-width:0; text-align:right; }
+        .toolid .eyebrow { margin-bottom:4px; justify-content:flex-end; }
+        .toolid .eyebrow::after { display:none; }
+        .toolleague { font-size:clamp(15px,2.4vw,22px); font-weight:900; letter-spacing:-.02em;
+          overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+          background:linear-gradient(96deg,var(--ink) 30%,var(--accent) 130%);
+          -webkit-background-clip:text; background-clip:text;
+          color:transparent; -webkit-text-fill-color:transparent; }
+        .toolctl { flex:none; display:flex; gap:4px; position:relative; }
+        .toolctl .settings { top:38px; }
+        @media (max-width:700px) {
+          .toolhead { flex-wrap:wrap; gap:10px; }
+          .toolmark { width:calc(100% - 74px); }
+          .toolid { width:100%; text-align:left; order:3; }
+          .toolid .eyebrow { justify-content:flex-start; }
+        }
+        .toolmark:hover .mark .m2 { fill:var(--accent); }
+
+        /* The full spectrum, compressed to the width of whatever it is painting.
+           background-size:100% means the ramp starts and ends at the glyphs'
+           own edges, so a four-character value shows the same sweep a long one
+           does instead of landing on a single flat colour. */
+        /* The ink end holds for the first quarter before it turns, so every
+           value visibly travels white to green instead of reading as flat green
+           with a pale corner. */
+        .gradv { background-image:linear-gradient(100deg, var(--ink) 0%, var(--ink) 24%,
+            var(--accent-2) 64%, var(--accent) 100%);
+          background-size:100% 100%; background-repeat:no-repeat;
+          -webkit-background-clip:text; background-clip:text;
+          color:transparent; -webkit-text-fill-color:transparent;
+          display:inline-block; }
+
+        /* Section headers sit in the gap they create: equal air above and
+           below, so a title belongs to the space between two sections rather
+           than appearing attached to the block beneath it. */
+        .sechead { display:flex; align-items:center; justify-content:center; gap:14px;
+          margin:clamp(34px,5vw,62px) 0; }
+        .sechead::before, .sechead::after { content:""; width:9px; height:9px;
+          background:var(--accent); transform:rotate(45deg); flex:none; }
+        .sechead .t { font-size:clamp(17px,2.6vw,25px); font-weight:900; letter-spacing:.19em;
+          text-transform:uppercase; line-height:1;
+          background:linear-gradient(94deg,var(--ink) 10%,var(--accent) 150%);
+          -webkit-background-clip:text; background-clip:text;
+          color:transparent; -webkit-text-fill-color:transparent; }
+        .stgrouptitle { display:flex; align-items:center; justify-content:center; gap:10px;
+          margin:clamp(24px,3.4vw,40px) 0; font-size:clamp(12px,1.5vw,15px); font-weight:900;
+          letter-spacing:.17em; text-transform:uppercase; line-height:1; }
+        .stgrouptitle span { background:linear-gradient(94deg,var(--ink) 10%,var(--accent) 150%);
+          -webkit-background-clip:text; background-clip:text;
+          color:transparent; -webkit-text-fill-color:transparent; }
+        .stgrouptitle::before, .stgrouptitle::after { content:""; width:6px; height:6px;
+          background:var(--accent); transform:rotate(45deg); flex:none; }
+
+        /* --- scrollbar the pointer owns ------------------------------------ */
+        .scrollwrap { position:relative; }
+        /* The scroller itself is defined in src/ui.js, shared with the home
+           page so both tables behave the same. Only the offsets this tool adds
+           on top of it live here. */
+
+        /* --- rows that centre their orphans -------------------------------- */
+        .rowgrid { display:flex; flex-wrap:wrap; gap:11px; justify-content:center;
+          align-items:stretch; }
+        .rowgrid > * { flex:0 0 auto; }
+
+        /* --- one panel anatomy --------------------------------------------- */
+        .tile { position:relative; flex:0 0 236px; max-width:236px; min-width:0;
+          background:var(--panel-2);
+          border:1px solid var(--line); padding:15px 14px; text-align:center;
+          display:flex; flex-direction:column; min-height:172px; }
+        .tlabel { font-size:10px; font-weight:900; letter-spacing:.1em; text-transform:uppercase;
+          color:var(--ink-3); flex:none; padding:0 18px; line-height:1.35; }
+        /* Column, not row. As a row the placement line became a sibling beside
+           the value, and .tvalue's full width pushed both out of the panel —
+           the placement belongs underneath the number it describes. */
+        .tbody { flex:1; display:flex; flex-direction:column; align-items:center;
+          justify-content:center; padding:8px 0 0; min-width:0; width:100%; }
+        .tvalwrap { flex:1; display:flex; align-items:center; justify-content:center;
+          width:100%; min-height:0; }
+        .tvalue { font-size:clamp(30px,4.6vw,46px); font-weight:900; letter-spacing:-.035em;
+          line-height:1; width:100%; font-variant-numeric:tabular-nums; }
+        .tvalue.med { font-size:clamp(23px,3.2vw,33px); letter-spacing:-.028em; }
+        .tvalue.small { font-size:clamp(17px,2.1vw,22px); letter-spacing:-.015em; line-height:1.15; }
+        /* A panel never grows to fit an identity strip. The strip is clipped to the
+           panel and tickers instead — most panels will ticker, which is intended. */
+        .tfootnames { flex:none; display:flex; justify-content:center; gap:5px;
+          min-width:0; max-width:100%; overflow:hidden; }
+        .tname { display:flex; align-items:center; gap:5px; font-size:10.5px; font-weight:800;
+          color:var(--ink-2); background:var(--inset); border:1px solid var(--line-2);
+          padding:2px 7px 2px 2px; max-width:100%; }
+        .tname .lgo { width:16px; height:16px; }
+        .tname i { font-style:normal; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .tinfo { position:absolute; top:9px; right:9px; width:19px; height:19px; padding:0;
+          background:none; border:1px solid var(--line-2); color:var(--ink-3); cursor:pointer;
+          display:flex; align-items:center; justify-content:center; border-radius:50%;
+          font-size:10px; font-weight:900; line-height:1; z-index:3;
+          transition:color .16s ease, border-color .16s ease; }
+        .tinfo:hover, .tinfo[aria-expanded="true"] { color:var(--accent); border-color:var(--accent); }
+        .tnote { position:absolute; top:32px; right:9px; left:9px; z-index:4;
+          background:var(--panel); border:1px solid var(--accent); padding:9px 10px;
+          font-size:10.5px; line-height:1.45; color:var(--ink-2); text-align:left;
+          box-shadow:0 8px 22px rgba(0,0,0,.34); }
+
+        /* --- tables -------------------------------------------------------- */
+        /* The table itself is defined in src/ui.js, so this tool and the home
+           page draw the same thing rather than two that drift apart. */
+        .inactivetag { font-size:9.5px; color:var(--ink-3); font-weight:700; }
+        table.gamelog { font-size:11.5px; }
+        .pfchip { font-size:8.5px; font-weight:900; letter-spacing:.06em; text-transform:uppercase;
+          color:var(--signal); border:1px solid var(--signal); padding:2px 7px; white-space:nowrap; }
+        .wl { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px;
+          font-size:10px; font-weight:900; border:1px solid currentColor; }
+        .wl.w { color:var(--accent); } .wl.l { color:var(--flag); }
+
+        /* --- champions: one row, newest first, scrolled not wrapped -------- */
+        /* max-content so a long run of seasons scrolls, min-width so a short one
+           still fills the frame and can be centred in it. A league three seasons
+           old was pinned to the left edge with the rest of the row empty. */
+        /* Centred when the seasons fit, scrollable when they do not.
+           Plain centre alignment in a scroll container puts the overflow on
+           both sides, and the leading edge is then unreachable: the first card,
+           which is the season in progress, was clipped with no way to scroll
+           back to it. Safe alignment drops to the start the moment it would
+           overflow, so the row is centred while it fits and complete when it
+           does not. The unprefixed value stays as a fallback for anything that
+           does not understand the safe keyword. */
+        .champrow { display:flex; gap:12px; padding-bottom:2px;
+          width:max-content; min-width:100%;
+          justify-content:center; justify-content:safe center; }
+        .champcard { flex:0 0 208px; background:var(--panel); border:1px solid var(--line);
+          padding:16px 14px; position:relative; text-align:center; display:flex;
+          flex-direction:column; min-height:212px; }
+        .champcard::before { content:""; position:absolute; left:-1px; right:-1px; top:-1px; height:2px;
+          background:linear-gradient(90deg, var(--gold) 0%, transparent 75%); }
+        .champyear { font-size:10px; font-weight:900; letter-spacing:.16em; color:var(--ink-3);
+          text-transform:uppercase; flex:none; }
+        .champbody { flex:1; display:flex; flex-direction:column; align-items:center;
+          justify-content:center; padding:10px 0; }
+        .champlogo { width:54px; height:54px; margin-bottom:10px; }
+        .champname { font-size:clamp(13px,1.4vw,15.5px); font-weight:900; letter-spacing:-.015em;
+          line-height:1.15; }
+        .champowner { font-size:10.5px; color:var(--ink-2); font-weight:700; flex:none; }
+        .chplace { width:100%; padding:14px 8px; }
+        .chplace b { font-size:9.5px; }
+
+        /* --- team records -------------------------------------------------- */
+        .teamgrid { align-items:flex-start; }
+        .teamcard { position:relative; flex:0 0 202px; background:var(--panel);
+          border:1px solid var(--line); cursor:pointer; text-align:center; color:inherit;
+          font:inherit; transition:border-color .2s ease; overflow:hidden; }
+        .teamcard:not(.expanded) { min-height:278px; }
+        .teamcard:hover { border-color:var(--accent-deep); }
+        .teamcard.expanded { flex:0 0 100%; cursor:default; border-color:var(--accent-deep); }
+        .cardinner { padding:18px 16px; display:flex; flex-direction:column; min-height:inherit; }
+        .tc-head { flex:none; display:flex; flex-direction:column; align-items:center; gap:9px; }
+        .tc-head .lgo { width:50px; height:50px; }
+        .tc-name { font-size:clamp(12.5px,1.35vw,14.5px); font-weight:900; letter-spacing:-.015em;
+          line-height:1.18; }
+        .tc-mid { flex:none; display:flex; flex-direction:column; align-items:center;
+          justify-content:center; padding:14px 0 0; }
+        .tc-pct { font-size:clamp(30px,3.6vw,40px); font-weight:900; letter-spacing:-.035em;
+          line-height:1; font-variant-numeric:tabular-nums; }
+        .tc-line { font-size:10px; color:var(--ink-3); font-weight:800; letter-spacing:.1em;
+          text-transform:uppercase; margin-top:6px; }
+        /* The tray takes the whole remaining column and centres itself in it,
+           so medals — or the best-finish line standing in for them — sit
+           optically between the record line and the bottom of the card. */
+        .tc-badges { flex:1; display:flex; flex-wrap:wrap; justify-content:center;
+          align-items:center; align-content:center; gap:7px; min-height:44px; padding:10px 0 2px; }
+        .bestfin { font-size:10.5px; font-weight:800; color:var(--ink-3); letter-spacing:.04em;
+          line-height:1.3; }
+        .bestfin b { display:block; font-weight:900; font-size:12.5px; margin-top:3px;
+          background:linear-gradient(104deg, var(--ink) 0%, var(--accent-2) 50%, var(--accent) 100%);
+          -webkit-background-clip:text; background-clip:text;
+          color:transparent; -webkit-text-fill-color:transparent; }
+
+        .medal { position:relative; display:flex; align-items:center; justify-content:center;
+          width:30px; height:30px; border-radius:50%; font-size:10px; font-weight:900;
+          flex:none; letter-spacing:-.02em; }
+        /* Struck relief plus a diagonal sheen that sweeps across the face. */
+        .medal::after { content:""; position:absolute; inset:0; border-radius:50%;
+          box-shadow:inset 0 1px 2px rgba(255,255,255,.62), inset 0 -2px 5px rgba(0,0,0,.34),
+            inset 0 0 0 1px rgba(255,255,255,.22);
+          background:linear-gradient(115deg, transparent 32%, rgba(255,255,255,.62) 47%,
+            transparent 62%);
+          background-size:260% 260%; animation:medalsheen 4.6s ease-in-out infinite; }
+        @keyframes medalsheen {
+          0%,62% { background-position:130% 0; }
+          100% { background-position:-40% 0; }
+        }
+        /* A faint ring that breathes outward, so a tray of medals has depth
+           rather than reading as flat dots. */
+        .medal > span::after { content:""; position:absolute; inset:-6px; border-radius:50%;
+          border:1px solid currentColor; opacity:0; animation:medalring 3.4s ease-out infinite; }
+        @keyframes medalring {
+          0% { opacity:.5; transform:scale(.82); }
+          70%,100% { opacity:0; transform:scale(1.18); }
+        }
+        .medal > span { position:relative; z-index:1; }
+        .medal.gold > span::after { color:var(--gold); }
+        .medal.silver > span::after { color:var(--silver); }
+        .medal.bronze > span::after { color:var(--bronze); }
+        .medal.gold { background:radial-gradient(circle at 34% 28%, #FFF3B0, var(--gold) 62%, #C99A18);
+          color:#3A2A00; animation:glowGold 3.4s ease-in-out infinite; }
+        .medal.silver { background:radial-gradient(circle at 34% 28%, #FFFFFF, var(--silver) 62%, #8B979B);
+          color:#22292B; animation:glowSilver 3.4s ease-in-out infinite .4s; }
+        .medal.bronze { background:radial-gradient(circle at 34% 28%, #F0C49A, var(--bronze) 62%, #8E5527);
+          color:#2E1806; animation:glowBronze 3.4s ease-in-out infinite .8s; }
+        @keyframes glowGold { 0%,100%{box-shadow:0 0 7px 1px var(--gold-glow)} 50%{box-shadow:0 0 15px 4px var(--gold-glow)} }
+        @keyframes glowSilver { 0%,100%{box-shadow:0 0 7px 1px var(--silver-glow)} 50%{box-shadow:0 0 15px 4px var(--silver-glow)} }
+        @keyframes glowBronze { 0%,100%{box-shadow:0 0 7px 1px var(--bronze-glow)} 50%{box-shadow:0 0 15px 4px var(--bronze-glow)} }
+        html.stillness .medal::after,
+        html.stillness .medal > span::after,
+        html.stillness .medal.gold, html.stillness .medal.silver, html.stillness .medal.bronze {
+          animation:none; }
+
+        .teamdetail { overflow:hidden; height:0; }
+        .teamdetail-inner { padding-top:2px; margin-top:16px; border-top:1px solid var(--line); }
+
+        .oppcard { position:relative; flex:0 0 186px; background:var(--panel-2);
+          border:1px solid var(--line); cursor:pointer; text-align:center; color:inherit;
+          font:inherit; overflow:hidden; transition:border-color .2s ease; }
+        .oppcard:not(.expanded) { min-height:196px; }
+        .oppcard:hover { border-color:var(--accent-deep); }
+        .oppcard.expanded { flex:0 0 100%; cursor:default; border-color:var(--accent-deep); }
+        .oppinner { padding:14px 12px; display:flex; flex-direction:column; min-height:inherit; }
+        .opp-head { flex:none; display:flex; flex-direction:column; align-items:center; gap:7px; }
+        .opp-head .lgo { width:32px; height:32px; }
+        .opp-name { font-size:11.5px; font-weight:900; line-height:1.15; }
+        .opp-mid { flex:1; display:flex; flex-direction:column; align-items:center;
+          justify-content:center; padding:10px 0; }
+        .opp-pct { font-size:clamp(22px,2.7vw,29px); font-weight:900; letter-spacing:-.035em;
+          line-height:1; font-variant-numeric:tabular-nums; }
+        .opp-sub { font-size:9px; color:var(--ink-3); font-weight:800; letter-spacing:.12em;
+          text-transform:uppercase; margin-top:5px; }
+        .opp-foot { flex:none; font-size:10px; color:var(--ink-2); font-weight:800;
+          letter-spacing:.08em; min-height:16px; }
+        .oppplace { width:100%; padding:12px 6px; }
+        .oppplace b { font-size:9px; }
+        .oppdetail { overflow:hidden; height:0; }
+        .oppdetail-inner { padding-top:2px; margin-top:14px; border-top:1px solid var(--line); }
+
+
+
+        /* --- phase selector for tables ------------------------------------- */
+        .phasetabs { display:flex; justify-content:center; gap:0; margin:0 0 16px;
+          flex-wrap:wrap; }
+        /* The selector belongs to the header above it, not the table below. */
+        .sechead + .phasetabs { margin-top:calc(-1 * clamp(18px,3vw,34px)); }
+        .phasetab { background:var(--panel-2); border:1px solid var(--line-2);
+          color:var(--ink-3); font-family:inherit; font-size:9.5px; font-weight:900;
+          letter-spacing:.13em; text-transform:uppercase; padding:8px 15px; cursor:pointer;
+          margin-left:-1px; transition:color .16s ease, border-color .16s ease,
+          background .16s ease; }
+        .phasetab:first-child { margin-left:0; }
+        .phasetab:hover:not(:disabled) { color:var(--accent); border-color:var(--accent-deep); }
+        .phasetab.on { color:var(--field); background:var(--accent); border-color:var(--accent);
+          position:relative; z-index:1; }
+        .phasetab:disabled { opacity:.4; cursor:not-allowed; }
+        /* --- placement beneath a value ------------------------------------- */
+        /* A fixed band, centred in the space under the value. Fixed rather than
+           natural height so a long "T-2nd (1st: …)" line cannot shove the
+           value upward — the value sits at the same height on every panel. */
+        .rankline { flex:none; display:flex; align-items:center; justify-content:center;
+          height:38px; overflow:hidden; font-size:9.5px; font-weight:800;
+          letter-spacing:.04em; color:var(--ink-3); line-height:1.3; padding:0 4px;
+          text-align:center; width:100%; }
+        .rankline .first { color:var(--gold); font-weight:900; letter-spacing:.12em;
+          text-transform:uppercase; font-size:11.5px;
+          text-shadow:0 0 10px var(--gold-glow); }
+        .ranklead { display:inline; color:var(--ink-3); font-weight:700; }
+
+        /* --- team identity strips ------------------------------------------ */
+        .tname i { font-style:normal; display:flex; flex-direction:column; min-width:0;
+          align-items:flex-start; line-height:1.2; }
+        .tname i b { font-size:10.5px; font-weight:900; white-space:nowrap; }
+        .tname i em { font-style:normal; font-size:9px; font-weight:700; color:var(--ink-3);
+          white-space:nowrap; margin-top:1px; }
+        .tname { padding:3px 8px 3px 3px; align-items:center; }
+
+        /* A strip wider than its panel becomes a ticker rather than wrapping,
+           truncating or stacking. Duplicated once and translated by exactly
+           half, so the loop has no discoverable seam. */
+        .tickerbox { overflow:hidden; position:relative; flex-wrap:nowrap;
+          justify-content:center; width:100%; }
+        .tickerbox.running { justify-content:flex-start; }
+        .tickerbox.running .tickerrow { animation:hofticker 18s linear infinite; }
+        .tickerrow { display:flex; gap:5px; flex:none; padding-right:5px; }
+        @keyframes hofticker { from { transform:translateX(0); } to { transform:translateX(-100%); } }
+        html.stillness .tickerbox.running .tickerrow { animation:none; }
+
+        /* "vs" is a chip of its own, inline with the two it separates. */
+        .vsgap { border:0; background:none; color:var(--ink-3); padding:0 2px; }
+        .vschip { padding:4px 10px; color:var(--accent); font-size:9px; font-weight:900;
+          letter-spacing:.16em; text-transform:uppercase; background:var(--panel);
+          border-color:var(--accent-deep); align-self:stretch; align-items:center; }
+
+        /* --- owner name under a card's team name --------------------------- */
+        .cardowner { display:block; font-style:normal; font-size:9.5px; font-weight:700;
+          color:var(--ink-3); margin-top:3px; letter-spacing:.04em; }
+
+        /* --- the expand affordance, bottom centre --------------------------
+           The arrow itself is two borders on an empty box, rotated — the same
+           construction every other tool on the site uses, so a chevron here
+           reads identically to one in Live Matchups. Without this rule the
+           element still positioned and coloured correctly and drew nothing at
+           all, which is exactly how it shipped: an invisible affordance on a
+           card whose whole interaction depends on looking clickable. */
+        .chev { width:9px; height:9px; border-right:2px solid currentColor;
+          border-bottom:2px solid currentColor; transform:rotate(45deg);
+          transition:transform .2s ease, border-color .2s ease, color .2s ease; }
+        .bottomchev { position:absolute; left:50%; bottom:8px; margin-left:-5px;
+          width:9px; height:9px; color:var(--accent-deep); opacity:.85; z-index:2; }
+        .teamcard:hover .bottomchev, .oppcard:hover .bottomchev { color:var(--accent); opacity:1; }
+        [aria-expanded="true"] > .cardinner > .bottomchev,
+        [aria-expanded="true"] > .oppinner > .bottomchev { transform:rotate(225deg); }
+        .cardinner, .oppinner { position:relative; }
+        /* The chevron keeps its own band whether the card is open or shut.
+           Reserving it only while collapsed meant an expanded team card ran its
+           head-to-head cards straight through its own chevron, so two chevrons
+           and a card edge landed on top of each other. Direct children only, so
+           an opp card nested inside an open team card cannot inherit it. */
+        .teamcard > .cardinner { padding-bottom:26px; }
+        .oppcard > .oppinner { padding-bottom:24px; }
+
+        .toolfoot { margin-top:10px; padding:10px 0 4px; text-align:center; border-top:1px solid var(--line); }
+        .toolfoot .gh { display:inline-flex; align-items:center; gap:7px; color:var(--ink-3);
+          font-size:10px; text-transform:uppercase; letter-spacing:.16em; font-weight:900;
+          text-decoration:none; }
+        .toolfoot .gh::before { content:""; width:5px; height:5px; background:currentColor; transform:rotate(45deg); }
+        .toolfoot .gh:hover { color:var(--accent); }
+
+        /* Never a single column. The basis is a percentage rather than a pixel
+           width so it cannot exceed the row and force a wrap to one card per
+           line — which is what was still happening at some widths. */
+        @media (max-width:860px) {
+          .rowgrid { gap:8px; }
+          .tile { flex:0 0 calc(50% - 4px); max-width:calc(50% - 4px); min-height:158px; }
+          .teamcard:not(.expanded) { flex:0 0 calc(50% - 4px); max-width:calc(50% - 4px); }
+          .oppcard:not(.expanded) { flex:0 0 calc(50% - 4px); max-width:calc(50% - 4px); }
+          .champcard { flex:0 0 172px; }
+          .tvalue { font-size:clamp(22px,6.4vw,32px); }
+          .tvalue.med { font-size:clamp(18px,5vw,24px); }
+          .tvalue.small { font-size:clamp(14px,3.6vw,18px); }
+          .sechead { margin:30px 0; }
+        }
+        @media (max-width:420px) {
+          .tile { min-height:150px; padding:12px 9px; }
+          .cardinner { padding:14px 10px; }
+          .oppinner { padding:12px 8px; }
+        }
+`;
+
 
 /* One rate governs the whole expand/collapse motion. Slower than a disclosure
    because a card is also travelling and resizing, not just growing. */
@@ -127,7 +501,7 @@ function RankNote({ rank, format }) {
  * continuously in one line instead of growing the panel to fit. It is not
  * interactive — it carries identity, not controls.
  */
-function TeamStrip({ teams, vs }) {
+export function TeamStrip({ teams, vs }) {
   const boxRef = useRef(null);
   const rowRef = useRef(null);
   const [ticker, setTicker] = useState(false);
@@ -164,7 +538,7 @@ function TeamStrip({ teams, vs }) {
   }, [teams, vs]);
 
   const chip = (t, i) => (
-    <span className="tname" key={`${t.teamId}-${i}`}>
+    <span className={t.cls ? `tname ${t.cls}` : "tname"} key={`${t.teamId}-${i}`}>
       <TeamLogo src={t.logo} className="lgo" alt="" />
       <i>
         <b>{t.name}</b>
@@ -234,13 +608,13 @@ function Tile({ label, value, note, names, size, vs, ranks, rankKey, rankFormat 
   );
 }
 
-function SecHead({ children }) {
+export function SecHead({ children }) {
   return <div className="sechead"><span className="t">{children}</span></div>;
 }
 function GroupTitle({ children }) {
   return <div className="stgrouptitle"><span>{children}</span></div>;
 }
-function Placeholder({ title, note }) {
+export function Placeholder({ title, note }) {
   return <div className="placeholder"><b>{title}</b>{note && <span>{note}</span>}</div>;
 }
 function TeamName({ row }) {
@@ -1301,374 +1675,7 @@ export default function HallOfFame() {
       <style>{`
         ${PALETTES}
         ${BASE_CSS}
-        html[data-theme="dark"] {
-          /* Gold is a site token now; the other two medals are this tool's. */
-          --silver:#C8D2D6; --silver-glow:rgba(200,210,214,.24);
-          --bronze:#CD8A4D; --bronze-glow:rgba(205,138,77,.24);
-        }
-        html[data-theme="light"] {
-          --silver:#8A97A0; --silver-glow:rgba(138,151,160,.18);
-          --bronze:#A85E2A; --bronze-glow:rgba(168,94,42,.18);
-        }
-        * { box-sizing:border-box; }
-        button { -webkit-tap-highlight-color:transparent; font-family:inherit; }
-        .wrap { display:flex; flex-direction:column; }
-
-        /* The established tool header, identical to Draft Helper's. */
-        .toolhead { display:flex; align-items:center; gap:18px; padding:0 0 14px;
-                    border-bottom:1px solid var(--line); }
-        .toolmark { flex:none; width:min(46%,340px); }
-        .toolmark, .homelink { display:block; text-decoration:none; color:inherit; }
-        .toolid { flex:1; min-width:0; text-align:right; }
-        .toolid .eyebrow { margin-bottom:4px; justify-content:flex-end; }
-        .toolid .eyebrow::after { display:none; }
-        .toolleague { font-size:clamp(15px,2.4vw,22px); font-weight:900; letter-spacing:-.02em;
-          overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-          background:linear-gradient(96deg,var(--ink) 30%,var(--accent) 130%);
-          -webkit-background-clip:text; background-clip:text;
-          color:transparent; -webkit-text-fill-color:transparent; }
-        .toolctl { flex:none; display:flex; gap:4px; position:relative; }
-        .toolctl .settings { top:38px; }
-        @media (max-width:700px) {
-          .toolhead { flex-wrap:wrap; gap:10px; }
-          .toolmark { width:calc(100% - 74px); }
-          .toolid { width:100%; text-align:left; order:3; }
-          .toolid .eyebrow { justify-content:flex-start; }
-        }
-        .toolmark:hover .mark .m2 { fill:var(--accent); }
-
-        /* The full spectrum, compressed to the width of whatever it is painting.
-           background-size:100% means the ramp starts and ends at the glyphs'
-           own edges, so a four-character value shows the same sweep a long one
-           does instead of landing on a single flat colour. */
-        /* The ink end holds for the first quarter before it turns, so every
-           value visibly travels white to green instead of reading as flat green
-           with a pale corner. */
-        .gradv { background-image:linear-gradient(100deg, var(--ink) 0%, var(--ink) 24%,
-            var(--accent-2) 64%, var(--accent) 100%);
-          background-size:100% 100%; background-repeat:no-repeat;
-          -webkit-background-clip:text; background-clip:text;
-          color:transparent; -webkit-text-fill-color:transparent;
-          display:inline-block; }
-
-        /* Section headers sit in the gap they create: equal air above and
-           below, so a title belongs to the space between two sections rather
-           than appearing attached to the block beneath it. */
-        .sechead { display:flex; align-items:center; justify-content:center; gap:14px;
-          margin:clamp(34px,5vw,62px) 0; }
-        .sechead::before, .sechead::after { content:""; width:9px; height:9px;
-          background:var(--accent); transform:rotate(45deg); flex:none; }
-        .sechead .t { font-size:clamp(17px,2.6vw,25px); font-weight:900; letter-spacing:.19em;
-          text-transform:uppercase; line-height:1;
-          background:linear-gradient(94deg,var(--ink) 10%,var(--accent) 150%);
-          -webkit-background-clip:text; background-clip:text;
-          color:transparent; -webkit-text-fill-color:transparent; }
-        .stgrouptitle { display:flex; align-items:center; justify-content:center; gap:10px;
-          margin:clamp(24px,3.4vw,40px) 0; font-size:clamp(12px,1.5vw,15px); font-weight:900;
-          letter-spacing:.17em; text-transform:uppercase; line-height:1; }
-        .stgrouptitle span { background:linear-gradient(94deg,var(--ink) 10%,var(--accent) 150%);
-          -webkit-background-clip:text; background-clip:text;
-          color:transparent; -webkit-text-fill-color:transparent; }
-        .stgrouptitle::before, .stgrouptitle::after { content:""; width:6px; height:6px;
-          background:var(--accent); transform:rotate(45deg); flex:none; }
-
-        /* --- scrollbar the pointer owns ------------------------------------ */
-        .scrollwrap { position:relative; }
-        /* The scroller itself is defined in src/ui.js, shared with the home
-           page so both tables behave the same. Only the offsets this tool adds
-           on top of it live here. */
-
-        /* --- rows that centre their orphans -------------------------------- */
-        .rowgrid { display:flex; flex-wrap:wrap; gap:11px; justify-content:center;
-          align-items:stretch; }
-        .rowgrid > * { flex:0 0 auto; }
-
-        /* --- one panel anatomy --------------------------------------------- */
-        .tile { position:relative; flex:0 0 236px; max-width:236px; min-width:0;
-          background:var(--panel-2);
-          border:1px solid var(--line); padding:15px 14px; text-align:center;
-          display:flex; flex-direction:column; min-height:172px; }
-        .tlabel { font-size:10px; font-weight:900; letter-spacing:.1em; text-transform:uppercase;
-          color:var(--ink-3); flex:none; padding:0 18px; line-height:1.35; }
-        /* Column, not row. As a row the placement line became a sibling beside
-           the value, and .tvalue's full width pushed both out of the panel —
-           the placement belongs underneath the number it describes. */
-        .tbody { flex:1; display:flex; flex-direction:column; align-items:center;
-          justify-content:center; padding:8px 0 0; min-width:0; width:100%; }
-        .tvalwrap { flex:1; display:flex; align-items:center; justify-content:center;
-          width:100%; min-height:0; }
-        .tvalue { font-size:clamp(30px,4.6vw,46px); font-weight:900; letter-spacing:-.035em;
-          line-height:1; width:100%; font-variant-numeric:tabular-nums; }
-        .tvalue.med { font-size:clamp(23px,3.2vw,33px); letter-spacing:-.028em; }
-        .tvalue.small { font-size:clamp(17px,2.1vw,22px); letter-spacing:-.015em; line-height:1.15; }
-        /* A panel never grows to fit an identity strip. The strip is clipped to the
-           panel and tickers instead — most panels will ticker, which is intended. */
-        .tfootnames { flex:none; display:flex; justify-content:center; gap:5px;
-          min-width:0; max-width:100%; overflow:hidden; }
-        .tname { display:flex; align-items:center; gap:5px; font-size:10.5px; font-weight:800;
-          color:var(--ink-2); background:var(--inset); border:1px solid var(--line-2);
-          padding:2px 7px 2px 2px; max-width:100%; }
-        .tname .lgo { width:16px; height:16px; }
-        .tname i { font-style:normal; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .tinfo { position:absolute; top:9px; right:9px; width:19px; height:19px; padding:0;
-          background:none; border:1px solid var(--line-2); color:var(--ink-3); cursor:pointer;
-          display:flex; align-items:center; justify-content:center; border-radius:50%;
-          font-size:10px; font-weight:900; line-height:1; z-index:3;
-          transition:color .16s ease, border-color .16s ease; }
-        .tinfo:hover, .tinfo[aria-expanded="true"] { color:var(--accent); border-color:var(--accent); }
-        .tnote { position:absolute; top:32px; right:9px; left:9px; z-index:4;
-          background:var(--panel); border:1px solid var(--accent); padding:9px 10px;
-          font-size:10.5px; line-height:1.45; color:var(--ink-2); text-align:left;
-          box-shadow:0 8px 22px rgba(0,0,0,.34); }
-
-        /* --- tables -------------------------------------------------------- */
-        /* The table itself is defined in src/ui.js, so this tool and the home
-           page draw the same thing rather than two that drift apart. */
-        .inactivetag { font-size:9.5px; color:var(--ink-3); font-weight:700; }
-        table.gamelog { font-size:11.5px; }
-        .pfchip { font-size:8.5px; font-weight:900; letter-spacing:.06em; text-transform:uppercase;
-          color:var(--signal); border:1px solid var(--signal); padding:2px 7px; white-space:nowrap; }
-        .wl { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px;
-          font-size:10px; font-weight:900; border:1px solid currentColor; }
-        .wl.w { color:var(--accent); } .wl.l { color:var(--flag); }
-
-        /* --- champions: one row, newest first, scrolled not wrapped -------- */
-        /* max-content so a long run of seasons scrolls, min-width so a short one
-           still fills the frame and can be centred in it. A league three seasons
-           old was pinned to the left edge with the rest of the row empty. */
-        /* Centred when the seasons fit, scrollable when they do not.
-           Plain centre alignment in a scroll container puts the overflow on
-           both sides, and the leading edge is then unreachable: the first card,
-           which is the season in progress, was clipped with no way to scroll
-           back to it. Safe alignment drops to the start the moment it would
-           overflow, so the row is centred while it fits and complete when it
-           does not. The unprefixed value stays as a fallback for anything that
-           does not understand the safe keyword. */
-        .champrow { display:flex; gap:12px; padding-bottom:2px;
-          width:max-content; min-width:100%;
-          justify-content:center; justify-content:safe center; }
-        .champcard { flex:0 0 208px; background:var(--panel); border:1px solid var(--line);
-          padding:16px 14px; position:relative; text-align:center; display:flex;
-          flex-direction:column; min-height:212px; }
-        .champcard::before { content:""; position:absolute; left:-1px; right:-1px; top:-1px; height:2px;
-          background:linear-gradient(90deg, var(--gold) 0%, transparent 75%); }
-        .champyear { font-size:10px; font-weight:900; letter-spacing:.16em; color:var(--ink-3);
-          text-transform:uppercase; flex:none; }
-        .champbody { flex:1; display:flex; flex-direction:column; align-items:center;
-          justify-content:center; padding:10px 0; }
-        .champlogo { width:54px; height:54px; margin-bottom:10px; }
-        .champname { font-size:clamp(13px,1.4vw,15.5px); font-weight:900; letter-spacing:-.015em;
-          line-height:1.15; }
-        .champowner { font-size:10.5px; color:var(--ink-2); font-weight:700; flex:none; }
-        .chplace { width:100%; padding:14px 8px; }
-        .chplace b { font-size:9.5px; }
-
-        /* --- team records -------------------------------------------------- */
-        .teamgrid { align-items:flex-start; }
-        .teamcard { position:relative; flex:0 0 202px; background:var(--panel);
-          border:1px solid var(--line); cursor:pointer; text-align:center; color:inherit;
-          font:inherit; transition:border-color .2s ease; overflow:hidden; }
-        .teamcard:not(.expanded) { min-height:278px; }
-        .teamcard:hover { border-color:var(--accent-deep); }
-        .teamcard.expanded { flex:0 0 100%; cursor:default; border-color:var(--accent-deep); }
-        .cardinner { padding:18px 16px; display:flex; flex-direction:column; min-height:inherit; }
-        .tc-head { flex:none; display:flex; flex-direction:column; align-items:center; gap:9px; }
-        .tc-head .lgo { width:50px; height:50px; }
-        .tc-name { font-size:clamp(12.5px,1.35vw,14.5px); font-weight:900; letter-spacing:-.015em;
-          line-height:1.18; }
-        .tc-mid { flex:none; display:flex; flex-direction:column; align-items:center;
-          justify-content:center; padding:14px 0 0; }
-        .tc-pct { font-size:clamp(30px,3.6vw,40px); font-weight:900; letter-spacing:-.035em;
-          line-height:1; font-variant-numeric:tabular-nums; }
-        .tc-line { font-size:10px; color:var(--ink-3); font-weight:800; letter-spacing:.1em;
-          text-transform:uppercase; margin-top:6px; }
-        /* The tray takes the whole remaining column and centres itself in it,
-           so medals — or the best-finish line standing in for them — sit
-           optically between the record line and the bottom of the card. */
-        .tc-badges { flex:1; display:flex; flex-wrap:wrap; justify-content:center;
-          align-items:center; align-content:center; gap:7px; min-height:44px; padding:10px 0 2px; }
-        .bestfin { font-size:10.5px; font-weight:800; color:var(--ink-3); letter-spacing:.04em;
-          line-height:1.3; }
-        .bestfin b { display:block; font-weight:900; font-size:12.5px; margin-top:3px;
-          background:linear-gradient(104deg, var(--ink) 0%, var(--accent-2) 50%, var(--accent) 100%);
-          -webkit-background-clip:text; background-clip:text;
-          color:transparent; -webkit-text-fill-color:transparent; }
-
-        .medal { position:relative; display:flex; align-items:center; justify-content:center;
-          width:30px; height:30px; border-radius:50%; font-size:10px; font-weight:900;
-          flex:none; letter-spacing:-.02em; }
-        /* Struck relief plus a diagonal sheen that sweeps across the face. */
-        .medal::after { content:""; position:absolute; inset:0; border-radius:50%;
-          box-shadow:inset 0 1px 2px rgba(255,255,255,.62), inset 0 -2px 5px rgba(0,0,0,.34),
-            inset 0 0 0 1px rgba(255,255,255,.22);
-          background:linear-gradient(115deg, transparent 32%, rgba(255,255,255,.62) 47%,
-            transparent 62%);
-          background-size:260% 260%; animation:medalsheen 4.6s ease-in-out infinite; }
-        @keyframes medalsheen {
-          0%,62% { background-position:130% 0; }
-          100% { background-position:-40% 0; }
-        }
-        /* A faint ring that breathes outward, so a tray of medals has depth
-           rather than reading as flat dots. */
-        .medal > span::after { content:""; position:absolute; inset:-6px; border-radius:50%;
-          border:1px solid currentColor; opacity:0; animation:medalring 3.4s ease-out infinite; }
-        @keyframes medalring {
-          0% { opacity:.5; transform:scale(.82); }
-          70%,100% { opacity:0; transform:scale(1.18); }
-        }
-        .medal > span { position:relative; z-index:1; }
-        .medal.gold > span::after { color:var(--gold); }
-        .medal.silver > span::after { color:var(--silver); }
-        .medal.bronze > span::after { color:var(--bronze); }
-        .medal.gold { background:radial-gradient(circle at 34% 28%, #FFF3B0, var(--gold) 62%, #C99A18);
-          color:#3A2A00; animation:glowGold 3.4s ease-in-out infinite; }
-        .medal.silver { background:radial-gradient(circle at 34% 28%, #FFFFFF, var(--silver) 62%, #8B979B);
-          color:#22292B; animation:glowSilver 3.4s ease-in-out infinite .4s; }
-        .medal.bronze { background:radial-gradient(circle at 34% 28%, #F0C49A, var(--bronze) 62%, #8E5527);
-          color:#2E1806; animation:glowBronze 3.4s ease-in-out infinite .8s; }
-        @keyframes glowGold { 0%,100%{box-shadow:0 0 7px 1px var(--gold-glow)} 50%{box-shadow:0 0 15px 4px var(--gold-glow)} }
-        @keyframes glowSilver { 0%,100%{box-shadow:0 0 7px 1px var(--silver-glow)} 50%{box-shadow:0 0 15px 4px var(--silver-glow)} }
-        @keyframes glowBronze { 0%,100%{box-shadow:0 0 7px 1px var(--bronze-glow)} 50%{box-shadow:0 0 15px 4px var(--bronze-glow)} }
-        html.stillness .medal::after,
-        html.stillness .medal > span::after,
-        html.stillness .medal.gold, html.stillness .medal.silver, html.stillness .medal.bronze {
-          animation:none; }
-
-        .teamdetail { overflow:hidden; height:0; }
-        .teamdetail-inner { padding-top:2px; margin-top:16px; border-top:1px solid var(--line); }
-
-        .oppcard { position:relative; flex:0 0 186px; background:var(--panel-2);
-          border:1px solid var(--line); cursor:pointer; text-align:center; color:inherit;
-          font:inherit; overflow:hidden; transition:border-color .2s ease; }
-        .oppcard:not(.expanded) { min-height:196px; }
-        .oppcard:hover { border-color:var(--accent-deep); }
-        .oppcard.expanded { flex:0 0 100%; cursor:default; border-color:var(--accent-deep); }
-        .oppinner { padding:14px 12px; display:flex; flex-direction:column; min-height:inherit; }
-        .opp-head { flex:none; display:flex; flex-direction:column; align-items:center; gap:7px; }
-        .opp-head .lgo { width:32px; height:32px; }
-        .opp-name { font-size:11.5px; font-weight:900; line-height:1.15; }
-        .opp-mid { flex:1; display:flex; flex-direction:column; align-items:center;
-          justify-content:center; padding:10px 0; }
-        .opp-pct { font-size:clamp(22px,2.7vw,29px); font-weight:900; letter-spacing:-.035em;
-          line-height:1; font-variant-numeric:tabular-nums; }
-        .opp-sub { font-size:9px; color:var(--ink-3); font-weight:800; letter-spacing:.12em;
-          text-transform:uppercase; margin-top:5px; }
-        .opp-foot { flex:none; font-size:10px; color:var(--ink-2); font-weight:800;
-          letter-spacing:.08em; min-height:16px; }
-        .oppplace { width:100%; padding:12px 6px; }
-        .oppplace b { font-size:9px; }
-        .oppdetail { overflow:hidden; height:0; }
-        .oppdetail-inner { padding-top:2px; margin-top:14px; border-top:1px solid var(--line); }
-
-
-
-        /* --- phase selector for tables ------------------------------------- */
-        .phasetabs { display:flex; justify-content:center; gap:0; margin:0 0 16px;
-          flex-wrap:wrap; }
-        /* The selector belongs to the header above it, not the table below. */
-        .sechead + .phasetabs { margin-top:calc(-1 * clamp(18px,3vw,34px)); }
-        .phasetab { background:var(--panel-2); border:1px solid var(--line-2);
-          color:var(--ink-3); font-family:inherit; font-size:9.5px; font-weight:900;
-          letter-spacing:.13em; text-transform:uppercase; padding:8px 15px; cursor:pointer;
-          margin-left:-1px; transition:color .16s ease, border-color .16s ease,
-          background .16s ease; }
-        .phasetab:first-child { margin-left:0; }
-        .phasetab:hover:not(:disabled) { color:var(--accent); border-color:var(--accent-deep); }
-        .phasetab.on { color:var(--field); background:var(--accent); border-color:var(--accent);
-          position:relative; z-index:1; }
-        .phasetab:disabled { opacity:.4; cursor:not-allowed; }
-        /* --- placement beneath a value ------------------------------------- */
-        /* A fixed band, centred in the space under the value. Fixed rather than
-           natural height so a long "T-2nd (1st: …)" line cannot shove the
-           value upward — the value sits at the same height on every panel. */
-        .rankline { flex:none; display:flex; align-items:center; justify-content:center;
-          height:38px; overflow:hidden; font-size:9.5px; font-weight:800;
-          letter-spacing:.04em; color:var(--ink-3); line-height:1.3; padding:0 4px;
-          text-align:center; width:100%; }
-        .rankline .first { color:var(--gold); font-weight:900; letter-spacing:.12em;
-          text-transform:uppercase; font-size:11.5px;
-          text-shadow:0 0 10px var(--gold-glow); }
-        .ranklead { display:inline; color:var(--ink-3); font-weight:700; }
-
-        /* --- team identity strips ------------------------------------------ */
-        .tname i { font-style:normal; display:flex; flex-direction:column; min-width:0;
-          align-items:flex-start; line-height:1.2; }
-        .tname i b { font-size:10.5px; font-weight:900; white-space:nowrap; }
-        .tname i em { font-style:normal; font-size:9px; font-weight:700; color:var(--ink-3);
-          white-space:nowrap; margin-top:1px; }
-        .tname { padding:3px 8px 3px 3px; align-items:center; }
-
-        /* A strip wider than its panel becomes a ticker rather than wrapping,
-           truncating or stacking. Duplicated once and translated by exactly
-           half, so the loop has no discoverable seam. */
-        .tickerbox { overflow:hidden; position:relative; flex-wrap:nowrap;
-          justify-content:center; width:100%; }
-        .tickerbox.running { justify-content:flex-start; }
-        .tickerbox.running .tickerrow { animation:hofticker 18s linear infinite; }
-        .tickerrow { display:flex; gap:5px; flex:none; padding-right:5px; }
-        @keyframes hofticker { from { transform:translateX(0); } to { transform:translateX(-100%); } }
-        html.stillness .tickerbox.running .tickerrow { animation:none; }
-
-        /* "vs" is a chip of its own, inline with the two it separates. */
-        .vsgap { border:0; background:none; color:var(--ink-3); padding:0 2px; }
-        .vschip { padding:4px 10px; color:var(--accent); font-size:9px; font-weight:900;
-          letter-spacing:.16em; text-transform:uppercase; background:var(--panel);
-          border-color:var(--accent-deep); align-self:stretch; align-items:center; }
-
-        /* --- owner name under a card's team name --------------------------- */
-        .cardowner { display:block; font-style:normal; font-size:9.5px; font-weight:700;
-          color:var(--ink-3); margin-top:3px; letter-spacing:.04em; }
-
-        /* --- the expand affordance, bottom centre --------------------------
-           The arrow itself is two borders on an empty box, rotated — the same
-           construction every other tool on the site uses, so a chevron here
-           reads identically to one in Live Matchups. Without this rule the
-           element still positioned and coloured correctly and drew nothing at
-           all, which is exactly how it shipped: an invisible affordance on a
-           card whose whole interaction depends on looking clickable. */
-        .chev { width:9px; height:9px; border-right:2px solid currentColor;
-          border-bottom:2px solid currentColor; transform:rotate(45deg);
-          transition:transform .2s ease, border-color .2s ease, color .2s ease; }
-        .bottomchev { position:absolute; left:50%; bottom:8px; margin-left:-5px;
-          width:9px; height:9px; color:var(--accent-deep); opacity:.85; z-index:2; }
-        .teamcard:hover .bottomchev, .oppcard:hover .bottomchev { color:var(--accent); opacity:1; }
-        [aria-expanded="true"] > .cardinner > .bottomchev,
-        [aria-expanded="true"] > .oppinner > .bottomchev { transform:rotate(225deg); }
-        .cardinner, .oppinner { position:relative; }
-        /* The chevron keeps its own band whether the card is open or shut.
-           Reserving it only while collapsed meant an expanded team card ran its
-           head-to-head cards straight through its own chevron, so two chevrons
-           and a card edge landed on top of each other. Direct children only, so
-           an opp card nested inside an open team card cannot inherit it. */
-        .teamcard > .cardinner { padding-bottom:26px; }
-        .oppcard > .oppinner { padding-bottom:24px; }
-
-        .toolfoot { margin-top:10px; padding:10px 0 4px; text-align:center; border-top:1px solid var(--line); }
-        .toolfoot .gh { display:inline-flex; align-items:center; gap:7px; color:var(--ink-3);
-          font-size:10px; text-transform:uppercase; letter-spacing:.16em; font-weight:900;
-          text-decoration:none; }
-        .toolfoot .gh::before { content:""; width:5px; height:5px; background:currentColor; transform:rotate(45deg); }
-        .toolfoot .gh:hover { color:var(--accent); }
-
-        /* Never a single column. The basis is a percentage rather than a pixel
-           width so it cannot exceed the row and force a wrap to one card per
-           line — which is what was still happening at some widths. */
-        @media (max-width:860px) {
-          .rowgrid { gap:8px; }
-          .tile { flex:0 0 calc(50% - 4px); max-width:calc(50% - 4px); min-height:158px; }
-          .teamcard:not(.expanded) { flex:0 0 calc(50% - 4px); max-width:calc(50% - 4px); }
-          .oppcard:not(.expanded) { flex:0 0 calc(50% - 4px); max-width:calc(50% - 4px); }
-          .champcard { flex:0 0 172px; }
-          .tvalue { font-size:clamp(22px,6.4vw,32px); }
-          .tvalue.med { font-size:clamp(18px,5vw,24px); }
-          .tvalue.small { font-size:clamp(14px,3.6vw,18px); }
-          .sechead { margin:30px 0; }
-        }
-        @media (max-width:420px) {
-          .tile { min-height:150px; padding:12px 9px; }
-          .cardinner { padding:14px 10px; }
-          .oppinner { padding:12px 8px; }
-        }
+${HOF_CSS}
       `}</style>
 
       <div className="wrap">

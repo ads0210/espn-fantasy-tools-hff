@@ -46,6 +46,10 @@ export function compactExport(doc) {
         out.league = rest;
         break;
       }
+      case 'seasonStats':
+        // The standings' three columns and the headline records only.
+        out.seasonStats = { ...v, records: v.records.filter((r) => r.headline) };
+        break;
       case 'teams':
         out.teams = v.map(({ seasonMoves, roster, ...t }) => ({ ...t, roster: roster.map(slimPlayer) }));
         break;

@@ -1,7 +1,7 @@
 /**
  * Site API: the platform guides.
  *
- * Sixteen platforms and 70 jobs (week 6 added five platforms and 33 jobs, in jobs6.js): each job's steps, its code with the league's address, key and team filled in,
+ * Sixteen platforms and 72 jobs (week 6 added five platforms and 33 jobs, in jobs6.js; Season Statistics two): each job's steps, its code with the league's address, key and team filled in,
  * a picture of it working, and how it stops. Every example keeps the pace and stops itself: it waits the pace
  * the site gives (or runs on a schedule slower than the slowest pace), pauses on pace_changed and stops for
  * good on too_fast, in whatever way its platform allows.
@@ -17,6 +17,7 @@
  */
 /* eslint-disable */
 import { addWeek6Jobs } from './jobs6.js';
+import { seasonRecordRows } from '../../src/apiseason.js';
 export function makeGuides(env) {
   var API = env.API, D = env.D, S = env.S, LEAGUE = env.LEAGUE, WEEK = env.WEEK, DAY = 86400000, MIN = 60000;
   var esc = env.esc, iso = env.iso, stamp = env.stamp, dayOf = env.dayOf, timeOf = env.timeOf, dateOf = env.dateOf, durWords = env.durWords;
@@ -50,6 +51,8 @@ export function makeGuides(env) {
     var path = ep.indexOf('.csv') > 0 ? ep : ep;
     return API + '/' + path + (parts.length ? '?' + parts.join('&') : '');
   }
+  /* Season Statistics' records table as /season?format=csv&table=records gives it, for the pictures. */
+  function seasonRows() { return D.season ? seasonRecordRows(D.season) : []; }
   function gctx() {
     var t = S.guideTeam;
     return { K: keyInExamples(), T: t, TN: teamName(t), p: pace() };
@@ -145,7 +148,7 @@ export function makeGuides(env) {
           steps: ['Open a new Google Sheet and click cell <b>A1</b>.',
             'Paste the formula below. The key travels in the address here, because <code>IMPORTDATA</code> can’t send a header.',
             'Press Enter. The standings appear with a header row. Sheets refreshes the import about once an hour, and when the sheet is opened, which is almost always less often than the site allows.',
-            'Select the <b>playoffOdds</b> and <b>simPlayoffOdds</b> columns and choose Format → Number → Percent.',
+            'Select the <b>playoffOdds</b> and <b>simPlayoffOdds</b> columns and choose Format → Number → Percent. The last columns are Season Statistics’ all-play record, luck and power ranking.',
             'Keep the sheet private: anyone who can open it can read the key in the formula.'],
           file: 'Cell A1', lang: 'formula',
           code: function (c) { return '=IMPORTDATA("' + U('standings.csv', { key: c.K, name: 'standings-sheet' }) + '")'; },
@@ -156,6 +159,20 @@ export function makeGuides(env) {
             return LOOK.sheet('=IMPORTDATA("…/standings.csv?key=eft_…")', rows, 'Refreshed by Sheets about hourly. If the site ever refuses, cell A1 shows the site’s message in place of the table until the next refresh.');
           },
           stop: 'A formula can’t read an error or switch itself off, and Sheets shows only <code>#N/A</code> for a refusal. So the site answers Google Sheets differently: a refusal arrives as one cell of text, <code>Site API: …</code>, with the reason, in place of the table. Sheets tries again at its next refresh, about an hour later. To stop it for good, delete the formula.' },
+        { key: 'records', title: 'Keep the season’s records in a sheet', have: 'Every one of this season’s records from Season Statistics, with who holds it, on a tab of its own.',
+          keyInAddress: true,
+          steps: ['Add a tab to your sheet and click cell <b>A1</b>.',
+            'Paste the formula below. It asks <code>/season</code> for its records table: one row per holder, so a tied record has a row for each team sharing it.',
+            'Press Enter. Sheets refreshes it about once an hour; the records only change when a week settles.',
+            'For the season as it stood after a week, add <code>&amp;period=w6</code> (any week played) to the address; <code>period=regular</code> or <code>post</code> for those parts of the season.',
+            'Keep the sheet private: anyone who can open it can read the key in the formula.'],
+          file: 'Cell A1', lang: 'formula',
+          code: function (c) { return '=IMPORTDATA("' + U('season.csv', { table: 'records', key: c.K, name: 'records-sheet' }) + '")'; },
+          look: function () {
+            var rows = [['id', 'record', 'holder', 'value', 'week']].concat(seasonRows().slice(0, 6).map(function (r) { return [r.id, r.record, r.holder, r.value, r.week == null ? '' : r.week]; }));
+            return LOOK.sheet('=IMPORTDATA("…/season.csv?table=records&key=eft_…")', rows, seasonRows().length ? 'A row per holder, refreshed by Sheets about hourly.' : 'Season Statistics fills this in once the first week settles.');
+          },
+          stop: 'As for the standings: a refusal arrives as one cell of text, <code>Site API: …</code>, until the next hourly refresh. Deleting the formula stops it for good. While Season Statistics isn’t visible to members, the cell says so instead.' },
         { key: 'left', title: 'List who’s left to play', have: 'Your starters whose games haven’t kicked off, as a short list that updates itself.',
           keyInAddress: true,
           steps: ['In any empty cell of your sheet, paste the formula below. Your team is already filled in (<code>team=%T%</code>).',
@@ -233,15 +250,17 @@ export function makeGuides(env) {
               "  if (!body.ok) {\n    if (body.error.stop === 'exit') stop();          // too_fast: switch the schedule off for good\n" +
               "    MailApp.sendEmail(me, 'Site API: no standings today', body.error.message);\n    return;\n  }\n" +
               "  const pct = (x) => (x == null ? '' : (Math.round(x * 1000 + 1e-6) / 10).toFixed(1) + '%');\n" +
+              "  const ap = (a) => (a ? `${a.wins}-${a.losses}${a.ties ? '-' + a.ties : ''}` : '');\n" +
               "  const rows = body.data.map((t) => `<tr><td>${t.seed}</td><td>${t.team}</td>` +\n" +
-              "    `<td>${t.wins}-${t.losses}${t.ties ? '-' + t.ties : ''}</td><td>${t.pointsFor}</td><td>${pct(t.playoffOdds)}</td></tr>`);\n" +
+              "    `<td>${t.wins}-${t.losses}${t.ties ? '-' + t.ties : ''}</td><td>${t.pointsFor}</td><td>${pct(t.playoffOdds)}</td>` +\n" +
+              "    `<td>${ap(t.allPlay)}</td><td>${t.luck ?? ''}</td><td>${t.power ?? ''}</td></tr>`);\n" +
               "  MailApp.sendEmail({ to: me, subject: `${body.meta.league}: standings, week ${body.meta.week}`,\n" +
-              "    htmlBody: '<table><tr><th>#</th><th>Team</th><th>Record</th><th>PF</th><th>Playoff %</th></tr>' + rows.join('') + '</table>' });\n}\n";
+              "    htmlBody: '<table><tr><th>#</th><th>Team</th><th>Record</th><th>PF</th><th>Playoff %</th><th>All-play</th><th>Luck</th><th>Power</th></tr>' + rows.join('') + '</table>' });\n}\n";
           },
           look: function () {
             var s = standingsNow();
-            return '<div class="looks"><div class="mail"><div class="mh"><b>' + esc(LEAGUE) + ': standings, week ' + WEEK + '</b><br>to me · 8:02 AM</div><table><tr><th>#</th><th>Team</th><th>Record</th><th>PF</th><th>Playoff %</th></tr>' +
-              s.slice(0, 7).map(function (t) { return '<tr><td>' + t.seed + '</td><td>' + esc(t.team) + '</td><td>' + t.wins + '-' + t.losses + '</td><td>' + t.pointsFor + '</td><td>' + pct1(t.playoffOdds) + '</td></tr>'; }).join('') +
+            return '<div class="looks"><div class="mail"><div class="mh"><b>' + esc(LEAGUE) + ': standings, week ' + WEEK + '</b><br>to me · 8:02 AM</div><table><tr><th>#</th><th>Team</th><th>Record</th><th>PF</th><th>Playoff %</th><th>All-play</th><th>Luck</th><th>Power</th></tr>' +
+              s.slice(0, 7).map(function (t) { return '<tr><td>' + t.seed + '</td><td>' + esc(t.team) + '</td><td>' + t.wins + '-' + t.losses + '</td><td>' + t.pointsFor + '</td><td>' + pct1(t.playoffOdds) + '</td><td>' + (t.allPlay ? t.allPlay.wins + '-' + t.allPlay.losses : '') + '</td><td>' + (t.luck == null ? '' : t.luck) + '</td><td>' + (t.power == null ? '' : t.power) + '</td></tr>'; }).join('') +
               '</table></div></div>';
           },
           stop: 'On <code>too_fast</code> it deletes its own schedule and emails you why. Any other refusal is emailed too, and tomorrow’s run tries again.' },
@@ -269,7 +288,8 @@ export function makeGuides(env) {
               '    Typed = Table.TransformColumnTypes(Promoted, {\n' +
               '        {"seed", Int64.Type}, {"wins", Int64.Type}, {"losses", Int64.Type}, {"ties", Int64.Type},\n' +
               '        {"pointsFor", type number}, {"pointsAgainst", type number},\n' +
-              '        {"playoffOdds", Percentage.Type}, {"simPlayoffOdds", Percentage.Type}})\nin\n    Typed\n';
+              '        {"playoffOdds", Percentage.Type}, {"simPlayoffOdds", Percentage.Type},\n' +
+              '        {"allPlay.wins", Int64.Type}, {"allPlay.losses", Int64.Type}, {"luck", type number}, {"power", type number}})\nin\n    Typed\n';
           },
           look: function () {
             var rows = [['seed', 'team', 'wins', 'losses', 'pointsFor', 'playoffOdds']].concat(standingsNow().slice(0, 6).map(function (r) {
@@ -278,6 +298,27 @@ export function makeGuides(env) {
             return LOOK.sheet('Standings (query) · refreshed every 15 minutes', rows, 'Percentages arrive as fractions and Excel shows them as percent.');
           },
           stop: 'Excel can’t switch itself off. A refused refresh fails and shows the site’s message; the table keeps its last good rows. Excel may hide the site’s headers, so the query reads the message from the answer itself. Every 15 minutes is never more often than the site asks for, even on its busiest day.' },
+        { key: 'records', title: 'Keep the season’s records in a sheet', have: 'Every one of this season’s records from Season Statistics, with who holds it, as a table that refreshes when the file opens.',
+          steps: ['Create a Blank Query as in the first job and paste the query below. It asks <code>/season</code> for its records table: one row per holder.',
+            'Name it <b>Records</b> and choose <b>Close &amp; Load</b>.',
+            'In the query’s properties tick <b>Refresh data when opening the file</b>: the records change only when a week settles.',
+            'For the season as it stood after a week, add <code>&amp;period=w6</code> (any week played) to the address.'],
+          file: 'Power Query · Advanced Editor', lang: 'm',
+          code: function (c) {
+            return '// This season\'s records, one row per holder. Refresh when the file opens.\nlet\n' +
+              '    Response = Web.Contents("' + U('season.csv', { table: 'records', name: 'excel-records' }) + '", [\n' +
+              '        Headers = [Authorization = "Bearer ' + c.K + '"],\n' +
+              '        ManualStatusHandling = {400, 401, 403, 404, 429, 500, 503}]),\n' +
+              '    Checked = if Value.Metadata(Response)[Response.Status] = 200 then Response\n' +
+              '        else error Error.Record("Site API", Text.FromBinary(Response)),\n' +
+              '    Rows = Table.PromoteHeaders(Csv.Document(Checked, [Encoding = 65001, QuoteStyle = QuoteStyle.Csv]), [PromoteAllScalars = true]),\n' +
+              '    Shown = Table.SelectColumns(Rows, {"section", "record", "holder", "team", "value", "week"})\nin\n    Shown\n';
+          },
+          look: function () {
+            var rows = [['section', 'record', 'holder', 'value', 'week']].concat(seasonRows().slice(0, 6).map(function (r) { return [r.section, r.record, r.holder, r.value, r.week == null ? '' : r.week]; }));
+            return LOOK.sheet('Records (query) · refreshed when the file opens', rows, 'A tied record has a row for each holder.');
+          },
+          stop: 'It asks only when the file opens, so it never asks too often. A refusal shows the site’s message in place of the refresh, and the table keeps its last rows.' },
         { key: 'chart', title: 'Chart weekly points', have: 'A line chart of every team’s points week by week.',
           steps: ['Create a Blank Query as in the first job and paste the query below. It asks for <code>/full</code> once and turns the schedule into a table of points by team and week.',
             'Close &amp; Load, then select the table and choose <b>Insert → Line with Markers</b>.',
@@ -502,7 +543,7 @@ export function makeGuides(env) {
           extra: { file: 'crontab -e', lang: 'sh', text: '15 6 * * * /home/you/league/save-league.sh' },
           look: function () { var d = Date.now(); return LOOK.term([['pr', '$ ./save-league.sh'], 'Saved ./league-' + iso(d).slice(0, 10) + '.json', ['pr', '$ ls'], 'league-' + iso(d - DAY).slice(0, 10) + '.json  league-' + iso(d).slice(0, 10) + '.json  save-league.sh']); },
           stop: STOPFILE('script') + ' A refusal of a CSV or any answer also says which kind it is in the <code>X-Stop</code> header, which is what this script reads.' },
-        { key: 'csv', title: 'Keep a standings CSV current', have: 'A <code>standings.csv</code> file that other tools can read, never more than 20 minutes old.',
+        { key: 'csv', title: 'Keep a standings CSV current', have: 'A <code>standings.csv</code> file that other tools can read, never more than 20 minutes old, with Season Statistics’ all-play, luck and power columns.',
           steps: ['Save the script below as <code>standings.sh</code> and <code>chmod +x</code> it.',
             'Add it to cron every 20 minutes: <code>*/20 * * * * /home/you/league/standings.sh</code>.',
             'It sends the last <code>ETag</code> back, so when nothing has changed the site answers <code>304</code> with no body at all.'],
@@ -705,7 +746,7 @@ export function makeGuides(env) {
   var PLAT_KIND = { sheets: 'Spreadsheet', excel: 'Spreadsheet', python: 'Script', node: 'Script', powershell: 'Script · Windows',
     shell: 'Script · macOS and Linux', iphone: 'Phone', android: 'Phone', ha: 'Smart home', chat: 'Chat bot' };
   var RUNS = {
-    'sheets.standings': 'About hourly, by Sheets', 'sheets.left': 'About hourly, by Sheets', 'sheets.log': 'Every 30 minutes', 'sheets.email': 'Daily at about 8',
+    'sheets.standings': 'About hourly, by Sheets', 'sheets.records': 'About hourly, by Sheets', 'excel.records': 'When the file opens', 'sheets.left': 'About hourly, by Sheets', 'sheets.log': 'Every 30 minutes', 'sheets.email': 'Daily at about 8',
     'excel.standings': 'Every 15 minutes', 'excel.chart': 'When the file opens', 'excel.left': 'Every 15 minutes',
     'python.score': 'At the site’s pace', 'python.bot': 'Every 20 minutes', 'python.save': 'Once a day', 'python.chart': 'When you run it',
     'node.score': 'At the site’s pace', 'node.bot': 'Every 20 minutes', 'node.save': 'Once a day',
@@ -1046,7 +1087,8 @@ export function makeGuides(env) {
           'games = weeks[week]\ngap = lambda m: abs(m["home"]["points"] - m["away"]["points"])\n' +
           'lines = []\nfor m in games:\n    w, l = sorted((m["home"], m["away"]), key=lambda s: -s["points"])\n    lines.append(f"**{w[\'team\']}** {w[\'points\']:.2f} – {l[\'points\']:.2f} {l[\'team\']}")\n' +
           'top = max((s for m in games for s in (m["home"], m["away"])), key=lambda s: s["points"])\nclose, rout = min(games, key=gap), max(games, key=gap)\n' +
-          'table = "\\n".join(f"{t[\'seed\']}. {t[\'team\']} ({t[\'wins\']}-{t[\'losses\']})" for t in league["standings"])\n' +
+          'luck = lambda t: f", luck {t[\'luck\']:+.2f}" if t.get("luck") is not None else ""   # Season Statistics\' luck, once it is built\n' +
+          'table = "\\n".join(f"{t[\'seed\']}. {t[\'team\']} ({t[\'wins\']}-{t[\'losses\']}{luck(t)})" for t in league["standings"])\n' +
           'text = (f"🏈 **Week {week} results**\\n" + "\\n".join(lines) +\n' +
           '        f"\\n\\nTop score: {top[\'team\']}, {top[\'points\']:.2f}"\n' +
           '        f"\\nClosest: {close[\'home\'][\'team\']} v {close[\'away\'][\'team\']}, by {gap(close):.2f}"\n' +

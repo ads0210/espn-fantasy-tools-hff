@@ -151,6 +151,17 @@ const freeFormFilter = (season) =>
     },
   });
 
+/* Season Statistics' leaderboards: the 400 players with the most points this season, rostered or not, each with
+   every week's points (D23). */
+const leadersFilter = (season) =>
+  JSON.stringify({
+    players: {
+      limit: 400,
+      sortAppliedStatTotal: { sortAsc: false, sortPriority: 1, value: `00${season}` },
+      filterStatsForTopScoringPeriodIds: { value: 18, additionalValue: [`00${season}`] },
+    },
+  });
+
 /** Convenience: a dataset that is one single call. */
 const one = (url, headers) => () => [{ part: 'main', url, headers }];
 
@@ -315,6 +326,8 @@ export const DATASETS = [
     parts: (cfg) => [
       { part: 'rostered', url: `${leagueBase(cfg)}?view=kona_player_info`, headers: { 'X-Fantasy-Filter': rosteredFormFilter(cfg.season) } },
       { part: 'free', url: `${leagueBase(cfg)}?view=kona_player_info`, headers: { 'X-Fantasy-Filter': freeFormFilter(cfg.season) } },
+      // Season Statistics (D23): every player by season points, free agents included, with weekly points.
+      { part: 'leaders', url: `${leagueBase(cfg)}?view=kona_player_info`, headers: { 'X-Fantasy-Filter': leadersFilter(cfg.season) } },
     ],
     expect: 'players',
     notes: 'Feeds the Trade Analyzer. Past weeks come from ESPN whenever asked, so a site set up mid-season has them all.',
