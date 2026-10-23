@@ -16,7 +16,7 @@
  * minute (or a restart part-way through one) never run it twice. What each minute did, which clock did it and how
  * late it began travel with the minute's tick to the site log, which Site Backend reads.
  *
- * Whether the clock or the cron does the work is the deployment's choice (BACKEND_CLOCK = "on"); see clockIsOn().
+ * The clock does the work wherever it is bound, unless the deployment sets BACKEND_CLOCK = "off"; see clockIsOn().
  */
 import { runMinute } from './index.js';
 
