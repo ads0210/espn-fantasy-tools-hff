@@ -757,9 +757,9 @@ async function doBody(src, ctx) {
 const DO_WORDS = { 5: 'five', 6: 'six', 7: 'seven' };
 /** How many Durable Object classes the Durable Objects panel lists: five always, plus the two a deployment may bind. */
 export function doClassCount(env) { return 5 + (env && env.SOURCE_PACE ? 1 : 0) + (env && env.CLOCK ? 1 : 0); }
-/** The backend clock's row: in use where the deployment switches it on, otherwise bound and idle (the cron works). */
+/** The backend clock's row: in use unless the deployment switches it off, then bound and idle (the cron works). */
 export function clockUse(env, cs) {
-  const on = String((env && env.BACKEND_CLOCK) || '').toLowerCase() === 'on';
+  const on = String((env && env.BACKEND_CLOCK) || '').toLowerCase() !== 'off';
   return { on, s: !on ? 'idle' : cs && cs.fallback ? 'warn' : 'ok', holds: on ? 'the last minute it kept, and its alarm' : 'bound but not in use: the cron does the minute\'s work' };
 }
 
