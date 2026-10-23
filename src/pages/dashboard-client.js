@@ -354,256 +354,27 @@ function renderCard(t, identified) {
    is a glance rather than an archive. The wider ranges are one click away. */
 var TX = [], RANGE = 7;
 
-/* Which way each column reads when you first click it. Ranking columns count
-   down — the best is the biggest — while a name reads alphabetically. */
-var ST_COLS = [
-  { key: 'rank',         label: 'Seed',     dir: 1 },
-  { key: 'name',         label: 'Team',     dir: 1,  cls: 'col-team' },
-  { key: 'record',       label: 'Record',   dir: -1 },
-  { key: 'winPct',       label: 'Win%',     dir: -1 },
-  { key: 'pointsFor',    label: 'PF',       dir: -1 },
-  { key: 'pointsAgainst',label: 'PA',       dir: -1 },
-  { key: 'diff',         label: 'Diff',     dir: -1 },
-  { key: 'ppg',          label: 'PPG',      dir: -1 },
-  { key: 'streak',       label: 'Strk',     dir: -1 },
-  { key: 'playoffPct',   label: 'Playoff%', dir: -1 },
-  { key: 'simPct',       label: 'Sim%',     dir: -1 }
-];
-/* Sim % appears only once a real simulation has run; until then the column is not there at all. */
-function stCols() { return stSim && stSim.byTeam ? ST_COLS : ST_COLS.filter(function (c) { return c.key !== 'simPct'; }); }
 /* Fortune Teller's simulated odds, or why there are none yet; set by every status poll. */
 var stSim = null;
-var stSort = { key: 'rank', dir: 1 };
 
-function stDerived(r) {
-  var played = (r.wins || 0) + (r.losses || 0) + (r.ties || 0);
-  return {
-    played: played,
-    winPct: played ? ((r.wins || 0) + (r.ties || 0) * 0.5) / played : 0,
-    // This season only: points scored divided by games played.
-    ppg: played ? (r.pointsFor || 0) / played : 0,
-    record: (r.wins || 0) * 1000 - (r.losses || 0) + (r.ties || 0) * 0.5
-  };
-}
-
-function stValue(r, key) {
-  var d = stDerived(r);
-  if (key === 'record') return d.record;
-  if (key === 'winPct') return d.winPct;
-  if (key === 'ppg') return d.ppg;
-  if (key === 'diff') return (r.pointsFor || 0) - (r.pointsAgainst || 0);
-  if (key === 'name') return String(r.name || '').toLowerCase();
-  if (key === 'streak') {
-    // A win streak sorts above a losing one, longest first within each.
-    var m = /^([WL])(\d+)$/.exec(r.streak || '');
-    if (!m) return -999;
-    return (m[1] === 'W' ? 1 : -1) * Number(m[2]);
-  }
-  if (key === 'playoffPct') { var fin = stFinal(r); return fin != null ? fin : (r.playoffPct == null ? -1 : r.playoffPct); }
-  if (key === 'simPct') { var sv = stSim && stSim.byTeam ? stSim.byTeam[r.teamId] : null; return sv == null ? -1 : sv; }
-  return r[key] == null ? -1 : r[key];
-}
-
-function stMedal(rank) {
-  if (rank === 1) return '<span class="medal g" title="First">1</span>';
-  if (rank === 2) return '<span class="medal s" title="Second">2</span>';
-  if (rank === 3) return '<span class="medal b" title="Third">3</span>';
-  return String(rank);
-}
-
-/* After the regular season every team is in or out: its final seed decides, not ESPN's last figure. */
-function stFinal(r) { var f = stSim && stSim.final; return f && f.seasonOver && f.inByTeam && f.inByTeam[r.teamId] != null ? (f.inByTeam[r.teamId] ? 1 : 0) : null; }
-
-/* One rounding for a percentage everywhere on the site: half up, at one decimal. Multiplying and
-   then calling toFixed rounds whatever the float happens to hold, so 0.3815 read 38.1% here and
-   38.2% on Fortune Teller. The same rule lives in Fortune Teller's pct() and Site Backend's. */
+/* One rounding for a percentage everywhere on the site: half up, at one decimal. The same rule lives in Fortune
+   Teller's pct(), Site Backend's and the standings table's (src/standingstable.js). */
 function pct1(x) { return (Math.round(x * 1000 + 1e-6) / 10).toFixed(1) + '%'; }
 
-function stOdds(r) {
-  var fin = stFinal(r);
-  if (fin != null) return fin ? '<span class="stflag in">Clinched</span>' : '<span class="stflag out">Eliminated</span>';
-  if (r.playoffPct == null) return '<span class="dim">&mdash;</span>';
-  /* At the extremes the number has stopped being a probability. Printing
-     "100%" invites a reader to wonder what the other nothing per cent is. */
-  if (r.playoffPct >= 0.9995) return '<span class="stflag in">Clinched</span>';
-  if (r.playoffPct <= 0.0005) return '<span class="stflag out">Eliminated</span>';
-  return '<span class="stpct">' + pct1(r.playoffPct) + '</span>';
-}
-
-/* Sim %: the same markers as Playoff % at the extremes; before the simulation has run, the
-   reason it has not, and while a week is being folded in, last week's figure, dimmed. */
-function stSimCell(r) {
-  var s = stSim, v = s && s.byTeam ? s.byTeam[r.teamId] : null;
-  if (v == null) return '<span class="dim">&mdash;</span>';
-  var cell = v >= 0.9995 ? '<span class="stflag in">Clinched</span>'
-    : v <= 0.0005 ? '<span class="stflag out">Eliminated</span>'
-    : '<span class="stpct">' + pct1(v) + '</span>';
-  return s.state === 'updating' ? '<span class="stupd" title="Updating for the week just played">' + cell + '</span>' : cell;
-}
-
-/**
- * The same scroller Hall of Fame uses, in the vanilla the dashboard is written
- * in. The bar is drawn rather than borrowed from the platform, because the
- * native one is an overlay that hides itself when idle — so a table with more
- * to the right looked like a table that ended there.
- */
-function wireScrollBox(host) {
-  var wrap = host.querySelector('.scrollwrap');
-  if (!wrap) return;
-  var real = wrap.querySelector('.scrollreal');
-  var bar = wrap.querySelector('.sbar');
-  var thumb = wrap.querySelector('.sbar-thumb');
-  if (!real || !bar || !thumb) return;
-  var drag = null, frame = 0;
-
-  function layout() {
-    var cw = real.clientWidth, sw = real.scrollWidth;
-    if (sw <= cw + 1) { bar.hidden = true; return; }
-    bar.hidden = false;
-    var barW = bar.clientWidth || cw;
-    var tw = Math.max(32, Math.round(barW * (cw / sw)));
-    thumb.style.width = tw + 'px';
-    var max = sw - cw;
-    thumb.style.transform = 'translateX(' +
-      (max > 0 ? (real.scrollLeft / max) * (barW - tw) : 0) + 'px)';
-  }
-  /* Deferred a frame: layout() writes to the element being observed, so
-     calling it straight from the observer re-enters it. */
-  function schedule() {
-    if (frame) return;
-    frame = requestAnimationFrame(function () { frame = 0; layout(); });
-  }
-
-  real.addEventListener('scroll', layout);
-  window.addEventListener('resize', schedule);
-  if (typeof ResizeObserver === 'function') {
-    try { new ResizeObserver(schedule).observe(real); } catch (e) { /* not fatal */ }
-  }
-
-  thumb.addEventListener('pointerdown', function (e) {
-    drag = { x: e.clientX, left: real.scrollLeft, tw: thumb.offsetWidth, barW: bar.clientWidth };
-    bar.classList.add('dragging');
-    try { thumb.setPointerCapture(e.pointerId); } catch (err) { /* not fatal */ }
-    e.preventDefault(); e.stopPropagation();
-  });
-  thumb.addEventListener('pointermove', function (e) {
-    if (!drag) return;
-    var travel = Math.max(1, drag.barW - drag.tw);
-    real.scrollLeft = drag.left +
-      ((e.clientX - drag.x) / travel) * (real.scrollWidth - real.clientWidth);
-    layout();
-    e.preventDefault();
-  });
-  function release(e) {
-    if (!drag) return;
-    drag = null;
-    bar.classList.remove('dragging');
-    try { thumb.releasePointerCapture(e.pointerId); } catch (err) { /* not fatal */ }
-  }
-  thumb.addEventListener('pointerup', release);
-  thumb.addEventListener('pointercancel', release);
-  bar.addEventListener('pointerdown', function (e) {
-    if (e.target === thumb) return;
-    var r = bar.getBoundingClientRect();
-    var frac = (e.clientX - r.left) / Math.max(1, r.width);
-    real.scrollLeft = frac * (real.scrollWidth - real.clientWidth);
-    layout();
-  });
-
-  layout();
-  // A web font or a late logo can change the width after first paint.
-  setTimeout(layout, 120);
-}
-
-function renderStandings(st) {
+/* The standings: the league's one table (src/standingstable.js, Season Statistics' too), with the chosen team's row
+   highlighted here only (Season Statistics plan D69). Absent when Site Configuration keeps the standings to
+   Season Statistics. */
+var stTable = null;
+function renderStandings(t) {
   var host = document.getElementById('standings');
-  if (!st || !st.rows.length) {
-    host.innerHTML = '<div class="placeholder"><b>Standings unavailable</b>' +
-      '<span>They appear once the league is set up.</span></div>';
+  if (!host) return;
+  if (t) stTable = t;
+  t = stTable;
+  if (!t || !window.EFTStandings) {
+    host.innerHTML = '<div class="placeholder"><b>Standings unavailable</b><span>They appear once the league is set up.</span></div>';
     return;
   }
-  /* Rows exist but carry no team identity yet. Rendering them would print
-     "Team 1", "Team 2" — which reads as a league nobody named rather than as
-     data still on its way. */
-  if (st.identified === false) {
-    host.innerHTML = '<div class="placeholder"><b>Loading league data</b>' +
-      '<span>Team names and records arrive with the next refresh.</span></div>';
-    return;
-  }
-  if (!st.started) {
-    host.innerHTML = '<div class="placeholder"><b>Season has not started</b>' +
-      '<span>Records and points appear after week one.</span></div>';
-    return;
-  }
-  var mine = teamValue() ? Number(teamValue()) : null;
-
-  var rows = st.rows.slice().sort(function (a, b) {
-    var av = stValue(a, stSort.key), bv = stValue(b, stSort.key);
-    if (av < bv) return -1 * stSort.dir;
-    if (av > bv) return 1 * stSort.dir;
-    return (a.rank || 0) - (b.rank || 0);
-  });
-
-  var cols = stCols();
-  if (!cols.some(function (c) { return c.key === stSort.key; })) stSort = { key: 'rank', dir: 1 };
-  var head = cols.map(function (c) {
-    var on = stSort.key === c.key;
-    var aria = on ? (stSort.dir === 1 ? 'ascending' : 'descending') : 'none';
-    return '<th class="' + (c.cls || '') + '" aria-sort="' + aria + '" data-sort="' + c.key + '">' +
-      '<span class="lbl">' + esc(c.label) + '</span>' +
-      '<span class="arrow">' + (on && stSort.dir === 1 ? '\u25B2' : '\u25BC') + '</span></th>';
-  }).join('');
-
-  var body = rows.map(function (r) {
-    var d = stDerived(r);
-    var diff = (r.pointsFor || 0) - (r.pointsAgainst || 0);
-    return '<tr class="' + (r.teamId === mine ? 'me' : '') + '">' +
-      '<td class="c-rank">' + stMedal(r.rank) + '</td>' +
-      '<td class="col-team"><div class="stname">' + logo(r.logo, r.name, 'tklogo') +
-        '<div class="stnamewrap"><b>' + esc(r.name) + '</b>' +
-        (r.owner ? '<em>' + esc(r.owner) + '</em>' : '') + '</div></div></td>' +
-      '<td class="c-key">' + r.wins + '-' + r.losses + '-' + (r.ties || 0) + '</td>' +
-      '<td class="c-key">' + (d.winPct * 100).toFixed(1) + '%</td>' +
-      '<td class="c-num">' + pts2(r.pointsFor) + '</td>' +
-      '<td class="c-num">' + pts2(r.pointsAgainst) + '</td>' +
-      '<td class="' + (diff >= 0 ? 'c-pos' : 'c-neg') + '">' +
-        (diff >= 0 ? '+' : '\u2212') + pts2(Math.abs(diff)) + '</td>' +
-      '<td class="c-num">' + pts2(d.ppg) + '</td>' +
-      '<td class="' + (!r.streak ? 'c-muted' : (r.streak.charAt(0) === 'W' ? 'c-pos' : 'c-neg')) + '">' +
-        esc(r.streak || '\u2014') + '</td>' +
-      '<td class="c-num">' + stOdds(r) + '</td>' +
-      (stSim && stSim.byTeam ? '<td class="c-num">' + stSimCell(r) + '</td>' : '') + '</tr>' +
-      /* The line under the last playoff place, in standings order only: sorted any other way it would mark nothing. */
-      (stSort.key === 'rank' && stSort.dir === 1 && st.places && r.rank === st.places && st.places < rows.length
-        ? '<tr class="porow" aria-hidden="true"><td colspan="' + cols.length + '"><span><i></i>Playoffs</span></td></tr>' : '');
-  }).join('');
-
-  /* Sorting replaces the rows, never the scrolling element: rebuilding the
-     scroller would reset the horizontal position on every click, and the reader
-     would be thrown back to the left edge each time they sorted. */
-  var table = host.querySelector('.scrollreal table.stbl');
-  if (table) {
-    table.innerHTML = '<thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody>';
-  } else {
-    host.innerHTML = '<div class="scrollwrap">' +
-      '<div class="sbar" hidden><div class="sbar-thumb"></div></div>' +
-      '<div class="scrollreal"><table class="datatable stbl">' +
-      '<thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody></table></div></div>';
-    wireScrollBox(host);
-  }
-
-  var ths = host.querySelectorAll('.datatable th');
-  for (var i = 0; i < ths.length; i++) {
-    ths[i].addEventListener('click', function () {
-      var key = this.getAttribute('data-sort');
-      var col = null;
-      for (var k = 0; k < ST_COLS.length; k++) if (ST_COLS[k].key === key) col = ST_COLS[k];
-      if (!col) return;
-      if (stSort.key === key) stSort.dir = -stSort.dir;
-      else { stSort.key = key; stSort.dir = col.dir; }
-      renderStandings(st);
-    });
-  }
+  window.EFTStandings.render(host, Object.assign({}, t, { mine: teamValue() ? Number(teamValue()) : null }));
 }
 
 function renderInjuries(list, hasTeam) {
@@ -716,7 +487,7 @@ document.getElementById('ranges').addEventListener('click', function (e) {
 function paintBoard(d) {
   if (!d) return;
   stSim = d.sim || null;
-  renderStandings(d.standings);
+  renderStandings(d.table);
   renderCard(d.myTeam, d.identified);
   renderInjuries(d.injuries || [], !!d.myTeam);
   TX = d.transactions || [];
