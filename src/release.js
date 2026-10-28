@@ -13,16 +13,16 @@
  * updated, which is the honest thing to say about a build whose changes nobody
  * outside the repo would notice.
  */
-/* Season Statistics (v1.227 or later): the user's own list, approved 22 October 2026, spell-check only. It leaves
-   out how to show the standings on the home page again (plan D31's draft line); the user's wording stands.
-   It replaces the week-6 list (v1.223). */
+/* Matchup Insights: drafted at the user's request and approved by the user as written (25 October 2026). It
+   replaces the Season Statistics list (v1.227, also shown for v1.228). */
 export const RELEASE_NOTE_ITEMS = [
-  'New tool: Season Statistics. This season\u2019s standings and around a hundred and twenty of its records, from the '
-  + 'highest weekly score to the luckiest team, each with the team or player holding it. Choose the whole season, the '
-  + 'regular season, the postseason, or the season as it stood after any week.',
-  'The standings now live on Season Statistics, with each team\u2019s all-play record, luck and power ranking now included.',
-  'LLM Data Export and Site API now carry this season\u2019s standings columns and records, and Site API has two new '
-  + 'jobs for keeping the season\u2019s records in a sheet.',
+  'New tool: Matchup Insights. Every game of the week as a matchup card, with what makes it worth watching: what is at '
+  + 'stake, the rivalry, form, injuries, records within reach, ESPN\u2019s projection, what is happening live and how it '
+  + 'all turned out. Predictions are judged once a game is final, and every week played stays.',
+  'The banner across your matchup card on the home page now comes from Matchup Insights: a postseason game, Must Win, '
+  + 'Win and You\u2019re In, or the most important fact about your game, and it changes as the game goes on.',
+  'Site Configuration has a new Home page display panel, with switches for the matchup banners and for the standings.',
+  'LLM Data Export and Site API now carry each week\u2019s insights.',
   'Various bug fixes and performance improvements.',
 ];
 
@@ -35,5 +35,5 @@ export const RELEASE_NOTE_ITEMS = [
  * production package's Step 0): the list is reviewed with the notes, and like them it is cleared or rewritten for the
  * next release. Keys are those in src/tools.js; a test holds every one to a registered tool.
  */
-/* Season Statistics' release: the new tool carries the tag (the week-6 release had none). */
-export const NEW_TOOLS = ['season-stats'];
+/* Matchup Insights' release: the new tool carries the tag. */
+export const NEW_TOOLS = ['matchup-insights'];
