@@ -25,6 +25,7 @@ import { SHARE_PARAMS } from './readers.js';
 import { normaliseSiteApi } from './apikey.js';
 import { SITE_API_PANELS } from './sbapi.js';
 import { ssKey, RECHECK_AFTER_MS } from './seasonstep.js';
+import { miKey } from './insightstep.js';
 import { homeStandingsOf } from './tools.js';
 import {
   C, B, worst, hourOf, utcMidnight, median, ttlText, upstream, countEvents, eventsSince, groupEvents, latestEvents, sumReq,
@@ -35,6 +36,7 @@ import { feedRows, ftSev, gameWindow, agoText, fmtB, fmtPaths, fmtHours, aboutHo
 const P = (id, title, def) => ({ id, title, ...def });
 /* Season Statistics' stored state, index and weeks, read as stored (src/seasonstep.js). */
 const ssJson = async (src, ctx, rest) => src.r2json(ssKey(Number(ctx.cfg.season), rest));
+const miJson = async (src, ctx, rest) => src.r2json(miKey(Number(ctx.cfg.season), rest));
 const DAY = 86400000;
 /** A trade's status in the words the home page's league activity uses (a proposal pulled by its proposer is withdrawn). */
 export const TRADE_STATUS = { completed: 'Completed', on_the_table: 'On the table', pending_approval: 'Pending approval', rejected: 'Rejected', cancelled: 'Withdrawn', expired: 'Expired' };
@@ -553,6 +555,50 @@ const OWN = {
           return [B.kv([['Periods', C.txt((ix.periods || []).map((p) => p.label).join(', '))], ['Last built', C.time(ix.builtAt)],
             ['Last build', C.txt(`${lb.built || 0} part${lb.built === 1 ? '' : 's'} in ${lb.ms || 0} ms`)], ['Still to build', C.n(ix.pending || 0)]]),
             B.note('Whole season, Regular season and Postseason are rebuilt whenever anything they read changes; each After week view is built once and again only if a week it covers is corrected.')];
+        },
+      }),
+    ],
+  },
+
+  'matchup-insights': {
+    settings: async (src, ctx) => [['Matchup banners on the home page', C.txt(ctx.cfg.homeBanners === false ? 'off' : 'on', 'Site Configuration\u2019s Home page display')]],
+    panels: [
+      P('m-weeks', 'Weeks built', {
+        sum: async (src, ctx) => { const st = await miJson(src, ctx, 'state.json'); const n = st ? Object.keys(st.weeks || {}).length : 0; return [null, st ? `${n} week${n === 1 ? '' : 's'} stored` : 'none yet']; },
+        body: async (src, ctx) => {
+          const st = await miJson(src, ctx, 'state.json');
+          const rows = Object.entries((st && st.weeks) || {}).sort((a, b) => a[0] - b[0]);
+          if (!rows.length) return [B.empty('No week has been built yet. The first is built the minute after the site has a schedule and Season Statistics has read a week.')];
+          return [B.table([['Week', 'n'], ['Kind'], ['Games', 'n'], ['Rows', 'n'], ['Built']], rows.map(([w, x]) => B.row([C.n(w), C.txt(x.kind === 'current' ? 'this week' : 'played'), C.n(x.games || 0), C.n(x.rows || 0), C.time(x.at)]))),
+            B.note('A played week is rebuilt from settled data when what it reads changes (the schedule, Season Statistics, the league\u2019s history). This week is rebuilt at most every five minutes, and once a minute while games are on.')];
+        },
+      }),
+      P('m-now', 'This week', {
+        live: true,
+        sum: async (src, ctx) => { const ix = await miJson(src, ctx, 'index.json'); return [null, ix && ix.current ? `week ${ix.current}` : 'not built yet']; },
+        body: async (src, ctx) => {
+          const ix = await miJson(src, ctx, 'index.json');
+          if (!ix || !ix.current) return [B.empty('This week has not been built yet.')];
+          const [doc, live] = await Promise.all([miJson(src, ctx, `w${ix.current}.json`), miJson(src, ctx, `w${ix.current}.live.json`)]);
+          if (!doc) return [B.empty('This week has not been built yet.')];
+          const T = ix.teams || {};
+          return [B.table([['Game'], ['State'], ['Rows', 'n'], ['Frozen', 'n'], ['Live rows', 'n']], doc.games.map((g) => B.row([
+            C.txt(`${(T[g.home] || {}).name || g.home} v ${(T[g.away] || {}).name || g.away}`), C.txt(g.state), C.n(g.rows.length), C.n(g.rows.filter((r) => r.frozen).length),
+            C.n(live && live.on && live.games && live.games[g.id] ? live.games[g.id].length : 0)]))),
+            B.kv([['Built', C.time(doc.builtAt)], ['Across the league', C.n(doc.league.length)], ['Live rows written', live ? C.time(live.builtAt) : C.txt('not while no game is on')]]),
+            B.note('Rows written before kickoff freeze at each team\u2019s first kickoff; Live rows are rewritten each minute and never kept.')];
+        },
+      }),
+      P('m-banners', 'Home banners', {
+        sum: async (src, ctx) => { const b = await miJson(src, ctx, 'banners.json'); const n = b ? Object.values(b.byTeam || {}).filter(Boolean).length : 0; return [null, b ? `${n} team${n === 1 ? '' : 's'} with a banner` : 'none yet']; },
+        body: async (src, ctx) => {
+          const [b, ix] = await Promise.all([miJson(src, ctx, 'banners.json'), miJson(src, ctx, 'index.json')]);
+          if (!b) return [B.empty('No banner has been worked out yet.')];
+          const T = (ix && ix.teams) || {};
+          return [B.table([['Team'], ['Banner'], ['From']], Object.entries(b.byTeam || {}).map(([id, x]) => B.row([C.txt((T[id] || {}).name || id), C.txt(x ? x.label : 'none'),
+            C.txt(x ? (x.tier === 1 ? 'the postseason game' : x.tier === 2 ? 'Fortune Teller' : `a weight ${x.row ? x.row.weight : ''} row`) : '\u2014')]))),
+            B.kv([['Week', C.n(b.week)], ['Worked out', C.time(b.builtAt)]]),
+            B.note('One banner a team: a postseason game\u2019s round, then Must Win or Win and You\u2019re In, then the team\u2019s weightiest row of weight 7 or more (of 10) for the game\u2019s phase.')];
         },
       }),
     ],
