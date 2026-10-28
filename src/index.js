@@ -14,7 +14,7 @@ export { FortuneTellerDO } from './ftdo.js';
 import { FT_ACTIVE_KEY } from './ftdo.js';
 import { DATASETS, getDataset, planBatches, PARAM_DATASETS, TTL } from './datasets.js';
 import { sweepRetired } from './retired.js';
-import { cardFacts, cardBanner } from './banners.js';
+import { cardFacts, cardBanner, insightBanner } from './banners.js';
 import { checkDue, bannerFacts, dismiss as dismissDataBanner } from './datacheck.js';
 import { usedBy } from './sbcore.js';
 import { loadConfig, saveConfig, describeConfig, isConfigured, isSetupFinished, canCallEspn, workersOriginOf } from './config.js';
@@ -50,7 +50,9 @@ import { BUILD_INFO } from './generated/build-info.js';
 import { runBatch, readJob, jobStatus } from './history.js';
 import { runPrimeBatch, primeStatus, missingDatasetKeys } from './prime.js';
 import { fetchPart } from './espn.js';
-import { fetchScoringPeriod, readSeasonIndex, readSeasonPart } from './seasonstep.js';
+import { fetchScoringPeriod, readSeasonIndex, readSeasonPart, ssKey } from './seasonstep.js';
+import { readInsightIndex, readInsightWeek, readInsightLive, readInsightBanners } from './insightstep.js';
+import { insightWeek } from './apiinsights.js';
 import { seasonPeriod } from './apiseason.js';
 import { liveWeek as seasonLiveFrom } from './seasonlive.js';
 import { timelineFacts } from './seasonstats.js';
@@ -74,7 +76,7 @@ import { started as startedKey, normaliseSiteApi, replaced as replacedKey, dueCh
 import { RELEASE_NOTE_ITEMS } from './release.js';
 import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r228';
+const BUILD_MARKER = 'r241';
 
 
 
@@ -208,6 +210,13 @@ export async function runMinute(rawEnv, { at = Date.now(), via = 'cron', cron = 
     // Season Statistics: one settled week pulled or re-checked, one week's timeline facts, and a rebuild when its
     // sources changed, inside the dataset coordinator's 'season_stats' object (src/seasonstep.js).
     await timed('season', () => seasonStatsTick(env, at), (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false }));
+    // Matchup Insights: a played week rebuilt, this week's rows, Live rows while games are on and the home banners,
+    // inside the dataset coordinator's 'matchup_insights' object (src/insightstep.js). Every 15 minutes the one
+    // small source no page keeps fresh (positional ratings) is brought up to date first.
+    await timed('insights', async () => {
+      if (new Date(at).getUTCMinutes() % 15 === 3) { try { const c = await loadConfig(env); if (isSetupFinished(c)) await ensureDataset(env, 'positional_ratings', null); } catch { /* read as stored */ } }
+      return insightsTick(env, at);
+    }, (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false }));
     // Week 6 (F2): the hourly reachability check, one dataset a minute (src/datacheck.js).
     await timed('check', async () => {
       const cfg = await loadConfig(env);
@@ -250,6 +259,16 @@ export async function seasonStatsTick(env, at = Date.now(), reason = 'minute') {
   if (!isSetupFinished(cfg)) return null;
   const stub = env.COORDINATOR.get(env.COORDINATOR.idFromName('season_stats'));
   const r = await stub.fetch(`https://coordinator/season-stats?brake=${encodeURIComponent(brakeNow(at).brake)}&reason=${encodeURIComponent(reason)}`);
+  try { return await r.json(); } catch { return { ok: false, error: `status ${r.status}` }; }
+}
+
+/** Ask Matchup Insights' backend step to do this minute's share (src/insightstep.js). */
+export async function insightsTick(env, at = Date.now(), reason = 'minute') {
+  if (!env.COORDINATOR) return null;
+  const cfg = await loadConfig(env);
+  if (!isSetupFinished(cfg)) return null;
+  const stub = env.COORDINATOR.get(env.COORDINATOR.idFromName('matchup_insights'));
+  const r = await stub.fetch(`https://coordinator/insights?brake=${encodeURIComponent(brakeNow(at).brake)}&reason=${encodeURIComponent(reason)}`);
   try { return await r.json(); } catch { return { ok: false, error: `status ${r.status}` }; }
 }
 
@@ -713,8 +732,11 @@ async function route(request, env, ctx) {
     const siteApiPage = key === 'site-api' && path === '/apps/site-api/api';
     // Season Statistics' figures: under the tool's own path, so an Admin-only tool's unlock cookie reaches it.
     const seasonApi = key === 'season-stats' && path === '/apps/season-stats/api';
+    // Matchup Insights' rows: likewise under the tool's own path.
+    const insightsApi = key === 'matchup-insights' && path === '/apps/matchup-insights/api';
     if (vis === VISIBILITY.HIDDEN) {
       if (seasonApi) return json({ ok: false, error: 'Season Statistics is switched off.' }, 403);
+      if (insightsApi) return json({ ok: false, error: 'Matchup Insights is switched off.' }, 403);
       if (siteBackendApi) return json({ ok: false, error: 'Site Backend is switched off.' }, 403);
       if (siteApiPage) return json({ ok: false, error: 'Site API is switched off.' }, 403, { 'cache-control': 'no-store' });
       return html(shell({
@@ -734,6 +756,7 @@ async function route(request, env, ctx) {
         if (siteBackendApi) return json({ ok: false, error: 'locked', locked: true }, 403);
         if (siteApiPage) return json({ ok: false, error: 'locked', locked: true }, 401, { 'cache-control': 'no-store' });
         if (seasonApi) return json({ ok: false, error: 'locked', locked: true }, 401, { 'cache-control': 'no-store' });
+        if (insightsApi) return json({ ok: false, error: 'locked', locked: true }, 401, { 'cache-control': 'no-store' });
         if (isDocument) markPage(request, key, `${tool.name} (Admin Password prompt)`);
         return html(adminGatePage({ tool, theme, reduceMotion }), 200);
       }
@@ -741,6 +764,7 @@ async function route(request, env, ctx) {
     if (siteBackendApi) return siteBackendRoute(request, env, cfg, url);
     if (siteApiPage) return siteApiPageRoute(request, env, cfg, url, ctx);
     if (seasonApi) return seasonStatsRoute(request, env, cfg, url, ctx);
+    if (insightsApi) return insightsRoute(request, env, cfg, url, ctx);
     if (isDocument) {
       markPage(request, key, tool.name);
       // A shared link being opened: its parameters say so, and nothing else about it is kept.
@@ -793,6 +817,80 @@ async function seasonStatsRoute(request, env, cfg, url, ctx) {
   if (obj) { try { part = await obj.json(); } catch { part = null; } }
   if (part && sim && sim.byTeam) for (const r of part.standings || []) r.simPct = sim.byTeam[r.team] ?? null;
   return json({ ok: true, ready: Boolean(part), season, index, part, sim: sim ? { state: sim.state, ready: Boolean(sim.byTeam) } : null, live },
+    200, { etag, 'cache-control': 'no-cache' });
+}
+
+/* Matchup Insights: a page read may ask for the sources and the step at most every five minutes per isolate. */
+const INSIGHT_POKE = { at: 0 };
+const INSIGHT_SOURCES = ['season_schedule', 'standings_digest', 'transaction_digest', 'injuries_digest', 'depth_digest', 'bye_weeks', 'h2h_full_digest', 'league_history_digest', 'positional_ratings'];
+/** Live rows older than this are from a game that has since ended (the step stops rewriting them). */
+const INSIGHT_LIVE_MAX_MS = 3 * 60000;
+
+/**
+ * One week of Matchup Insights' stored rows (this week when none is asked for), with the index (weeks, teams) and
+ * each team's record before that week for the cards. This week's cards take the live digest's scores, and its games
+ * the Live rows while they are on. Answers 304 to a matching If-None-Match. Built by the backend step
+ * (src/insightstep.js); a read older than five minutes refreshes the sources and asks the step behind the answer.
+ */
+async function insightsRoute(request, env, cfg, url, ctx) {
+  const season = Number(cfg.season);
+  const index = await readInsightIndex(env, season);
+  const now = Date.now();
+  if (now - INSIGHT_POKE.at > 5 * 60000 && refreshAllowed(env.BRAKE || 'normal')) {
+    INSIGHT_POKE.at = now;
+    const work = (async () => {
+      for (const k of INSIGHT_SOURCES) { try { await ensureDataset(env, k, null); } catch { /* the step reads what is stored */ } }
+      try { await insightsTick(env, now, 'visit'); } catch { /* the minute's work tries again */ }
+    })();
+    if (ctx && ctx.waitUntil) ctx.waitUntil(work);
+  }
+  if (!index || !(index.weeks || []).length) return json({ ok: true, ready: false, season }, 200, { 'cache-control': 'no-store' });
+  const asked = Number(url.searchParams.get('week'));
+  const known = (index.weeks || []).find((w) => w.week === asked) || (index.weeks || []).find((w) => w.week === index.current) || index.weeks[index.weeks.length - 1];
+  const obj = await readInsightWeek(env, season, known.week);
+  if (!obj) return json({ ok: true, ready: false, season, index }, 200, { 'cache-control': 'no-store' });
+  const isCurrent = known.week === index.current && known.kind === 'current';
+  const digest = isCurrent ? await readDigest(env, 'live_scoring_digest', ctx).catch(() => null) : null;
+  const live = isCurrent ? await readInsightLive(env, season, known.week).catch(() => null) : null;
+  const liveOn = Boolean(live && live.on && now - Date.parse(live.builtAt) < INSIGHT_LIVE_MAX_MS);
+  const dg = digest && Number(digest.matchupPeriod) === known.week ? digest : null;
+  const scoreTag = dg ? fnvTag((dg.games || []).map((g) => `${g.id}:${g.state}:${g.home && g.home.points}:${g.away && g.away.points}:${g.home && g.home.winProb}`).join('|')) : '-';
+  const etag = `"mi-${index.builtAt}-${obj.etag}-${liveOn ? live.builtAt : '-'}-${scoreTag}"`;
+  if (request.headers.get('if-none-match') === etag) return new Response(null, { status: 304, headers: { etag, 'cache-control': 'no-cache' } });
+  let doc = null;
+  try { doc = await obj.json(); } catch { doc = null; }
+  if (!doc) return json({ ok: true, ready: false, season, index }, 200, { 'cache-control': 'no-store' });
+  if (dg) {
+    const by = Object.fromEntries((dg.games || []).map((g) => [g.id, g]));
+    for (const g of doc.games) {
+      const d = by[g.id];
+      if (!d) continue;
+      g.state = d.state === 'final' ? 'final' : d.state === 'live' ? 'live' : 'pre';
+      g.hp = d.home.points; g.ap = d.away.points; g.hproj = d.home.projected; g.aproj = d.away.projected; g.hwp = d.home.winProb;
+      if (d.firstKickoff) g.firstKickoff = d.firstKickoff;
+    }
+    doc.asOf = dg.generatedAt || doc.builtAt;
+    // Games on means an NFL game with one of the week's starters is being played right now, not just that the week has begun.
+    doc.playing = (dg.games || []).some((g) => ['home', 'away'].some((k) => ((g[k] && g[k].starters) || []).some((p) => p.gameStatus === 'live')));
+  }
+  if (liveOn) {
+    for (const g of doc.games) if (live.games[g.id]) g.rows = [...g.rows, ...live.games[g.id]];
+    doc.league = [...doc.league, ...(live.league || [])];
+  }
+  // Each team's record for the cards: before this week while its game is to come or on (Season Statistics' "after
+  // week N - 1"); with the result counted once its game is over (round 8): a played week reads "after week N", this
+  // week's finished games the standings the insights step counted (doc.after), before ESPN settles the week.
+  let records = {};
+  try {
+    const past = doc.kind === 'past';
+    const at = past ? known.week : known.week - 1;
+    const o = at >= 1 ? await env.DATA.get(ssKey(season, `stats/w${at}.json`)) : null;
+    const part = o ? await o.json() : null;
+    records = Object.fromEntries(((part && part.standings) || []).map((r) => [r.team, { w: r.w, l: r.l, t: r.t, seed: r.seed, pf: r.pf }]));
+    if (!past) for (const g of doc.games) if (g.state === 'final') for (const id of [g.home, g.away]) if (doc.after && doc.after[id]) records[id] = doc.after[id];
+  } catch { records = {}; }
+  const sim = await simOdds(env).catch(() => null);
+  return json({ ok: true, ready: true, season, index, week: doc, records, ftOpensAfter: sim && sim.opensAfterWeek != null ? sim.opensAfterWeek : null },
     200, { etag, 'cache-control': 'no-cache' });
 }
 
@@ -1463,6 +1561,14 @@ async function handleAdmin(request, env, cfg, path) {
     return json({ ok: true, on: homeStandingsOf(saved), stored: saved.homeStandings === true });
   }
 
+  if (path === '/api/admin/home-banners') {
+    // Matchup Insights (plan D39): the matchup card's banner on the home page, on by default, for every member.
+    if (typeof body.on !== 'boolean') return json({ ok: false, error: 'Send on: true or false.' }, 400);
+    const saved = await saveConfig(env, { homeBanners: body.on, stamps: { homeBanners: stamp() } });
+    note(request, 'admin', `Matchup banners on the home page: ${body.on ? 'on' : 'off'}`, { page: 'config' });
+    return json({ ok: true, on: saved.homeBanners !== false });
+  }
+
   if (path === '/api/admin/tool-order') {
     // The home page's tile order. A full list of the tiles, each once; `reset` returns to the default.
     let next = null;
@@ -1706,13 +1812,14 @@ async function llmExportRoute(env, ctx, wantFresh = false) {
   const digest = await llmExportDigest(env, wantFresh ? null : ctx);
   const sim = await simOdds(env);
   const season = await seasonForExport(env);
-  if (!wantFresh || !digest) return json(llmExportPayload(digest, sim, season));
+  const insights = await insightsForExport(env);
+  if (!wantFresh || !digest) return json(llmExportPayload(digest, sim, season, insights));
   const obj = await ensureDataset(env, 'live_scoring_digest', ctx);
   let live = null;
   if (obj) {
     try { live = await obj.json(); } catch { live = null; }
   }
-  return json(llmExportPayload(applyLiveScoring(digest, live), sim, season));
+  return json(llmExportPayload(applyLiveScoring(digest, live), sim, season, insights));
 }
 
 /** Season Statistics' Whole season for the LLM export, shaped as Site API carries it; null while not built or not visible. */
@@ -1724,6 +1831,22 @@ export async function seasonForExport(env) {
     const [index, obj] = await Promise.all([readSeasonIndex(env, season), readSeasonPart(env, season, 'whole')]);
     if (!index || !obj) return null;
     return seasonPeriod(await obj.json(), index);
+  } catch { return null; }
+}
+
+/** Matchup Insights' current week for the LLM export, shaped as Site API carries it; null while not built or not visible. */
+export async function insightsForExport(env) {
+  try {
+    const cfg = await loadConfig(env);
+    if (visibilityOf(cfg, 'matchup-insights') !== VISIBILITY.VISIBLE) return null;
+    const season = Number(cfg.season);
+    const index = await readInsightIndex(env, season);
+    if (!index || !index.current) return null;
+    const obj = await readInsightWeek(env, season, index.current);
+    if (!obj) return null;
+    const live = await readInsightLive(env, season, index.current).catch(() => null);
+    const names = Object.fromEntries(Object.entries(index.teams || {}).map(([id, t]) => [id, t.name]));
+    return insightWeek(await obj.json(), names, live && live.on && Date.now() - Date.parse(live.builtAt) < 3 * 60000 ? live : null);
   } catch { return null; }
 }
 
@@ -2037,6 +2160,22 @@ async function dashboardBoard(env, ctx, url) {
   return json(await boardPayload(env, ctx, url.searchParams.get('team')));
 }
 
+/* Matchup Insights' banners for this week, read at most every 30 s per isolate and storage binding (one small object). */
+const INSIGHT_BANNER_MEMO = new WeakMap();
+async function insightBannersFor(env, cfg) {
+  const hit = INSIGHT_BANNER_MEMO.get(env.DATA);
+  if (hit && Date.now() - hit.at < 30000) return hit.value;
+  const value = await readInsightBanners(env, Number(cfg.season)).catch(() => null);
+  if (value) INSIGHT_BANNER_MEMO.set(env.DATA, { at: Date.now(), value });   // a miss is asked again next time
+  return value;
+}
+/** Team names by id from the standings digest, for the banner's one line of words. */
+function teamNames(standings) {
+  const out = {};
+  for (const r of (standings && standings.rows) || []) out[r.teamId] = r.name;
+  return out;
+}
+
 /* Dev only (production has no DEV_TOKEN): the dev layer's banner route (src/dev.js) forces the card's banner facts for a while, so every banner
    can be looked at live. */
 async function devBannerFacts(env) {
@@ -2130,9 +2269,9 @@ export async function boardPayload(env, ctx, teamId, { withTable = false } = {})
     myTeam: null,
     injuries: [],
   };
+  const cfg = await loadConfig(env);
   {
     // Only when the home page shows the standings (Season Statistics plan D10): otherwise nothing reads it.
-    const cfg = await loadConfig(env);
     if (withTable || homeStandingsOf(cfg)) out.table = await homeTable(env, cfg, standings, out.sim, out.standings.places || 0);
   }
 
@@ -2266,9 +2405,12 @@ export async function boardPayload(env, ctx, teamId, { withTable = false } = {})
       period: matchup.game.period,
       /* Week 6 (N6): why this matchup matters, one banner at a time (src/banners.js). Fortune Teller's part is the
          finding stored with its latest update, never counted here. */
+      /* Matchup Insights (D30, D36-D43, D57): one row of the team's game, worked out by the backend step and stored
+         for the week (src/insightstep.js): the postseason game, then Must Win / Win and You're In, then its weightiest
+         row of weight 7 or more (of 10, round 8). Site Configuration can switch it off (homeBanners); it works whatever the tool's state. */
       banner: (await devBannerFacts(env)) ? cardBanner(await devBannerFacts(env))
-        : cardBanner(cardFacts({ round: matchup.game.round || null, finding: out.sim && out.sim.nextByTeam ? out.sim.nextByTeam[id] : null,
-          week: matchup.game.period, myRank: row ? row.rank : null, oppRank: oppRow ? oppRow.rank : null, started: Boolean(standings && standings.started) })),
+        : cfg.homeBanners === false ? null
+        : insightBanner(await insightBannersFor(env, cfg), id, matchup.game.period, teamNames(standings)),
     } : null,
   };
 
