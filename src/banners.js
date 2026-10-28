@@ -3,6 +3,8 @@
 // finding stored at build time (app/fortune-teller/findings.js), never computed on a request. A plain module, tested
 // by behaviour; the board payload carries what it returns and the dashboard client draws it.
 
+import { afterName } from './insights.js';
+
 export const BANNERS = {
   championship: { label: 'Championship', tone: 'gold', glyph: 'trophy' },
   third: { label: 'Third Place Game', tone: 'bronze', glyph: 'medal' },
@@ -74,6 +76,20 @@ export const GLYPHS = {
   target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2"/>',
   crown: '<path d="M3 8l4 4 5-7 5 7 4-4-2 11H5z"/>',
 };
+/* Matchup Insights' categories (D40): a banner from a row with no glyph of its own takes its category's. */
+Object.assign(GLYPHS, {
+  stakes: '<path d="M12 3l9 9-9 9-9-9z M12 8v5 M12 16v.5"/>',
+  race: '<path d="M5 21V4 M5 4h11l-2 3.5 2 3.5H5"/>',
+  rivalry: '<path d="M4 4l9 9 M20 4l-9 9 M7 15l-3 3 2 2 3-3 M17 15l3 3-2 2-3-3"/>',
+  form: '<path d="M12 3c1 3 5 5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 0-3-1-5 1-8.5z"/>',
+  players: '<path d="M8 3l-4 3 2 4 2-1v12h8V9l2 1 2-4-4-3c-1 1.5-2.5 2-4 2s-3-.5-4-2z"/>',
+  avail: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M12 8v8 M8 12h8"/>',
+  records: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
+  proj: '<path d="M3 20h18 M5 16l4-5 4 3 6-8 M15 6h4v4"/>',
+  live: '<path d="M3 12h4l2-6 4 12 2-6h6"/>',
+  moves: '<path d="M4 8h14l-3-3 M20 16H6l3 3"/>',
+  after: '<path d="M5 21V4 M5 4h14v9H5 M9 4v9 M13 4v9 M5 8.5h14"/>',
+});
 export const glyphSvg = (g) => `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${GLYPHS[g] || ''}</svg>`;
 
 /**
@@ -93,6 +109,36 @@ export function cardFacts({ round = null, finding = null, week = null, myRank = 
 export function cardBanner(facts) {
   const b = chooseBanner(facts);
   return b ? { key: b.key, label: b.label, tone: b.tone, reason: b.reason, svg: glyphSvg(b.glyph) } : null;
+}
+
+/** A Matchup Insights row's words, with team names put in (the row carries ids, never names). */
+export function rowText(parts, names) {
+  return (parts || []).map((p, i) => (typeof p === 'string' ? afterName(i && parts[i - 1] && parts[i - 1].t != null ? names[parts[i - 1].t] : '', p) : p && p.t != null ? names[p.t] || 'a team' : p && (p.v ?? p.p) != null ? String(p.v ?? p.p) : p && p.d != null ? String(p.d).slice(0, 10) : '')).join('');
+}
+
+/* The banner's words without the label its title already shows ("Comeback on: X was down…" under "Comeback on"). */
+export function withoutLabel(text, label) {
+  const head = `${label}: `;
+  if (!label || !text.startsWith(head)) return text;
+  const rest = text.slice(head.length);
+  return rest.charAt(0).toUpperCase() + rest.slice(1);
+}
+
+/**
+ * The home card's banner from Matchup Insights' stored banners (D30): the postseason game keeps today's label, words
+ * and medal tone (D36); any other banner takes its row's label, its words and its category's colour (tone
+ * 'cat-<category>'). Null when the stored banners are for another week or the team has none.
+ */
+export function insightBanner(stored, teamId, week, names = {}) {
+  if (!stored || !stored.byTeam || (week != null && Number(stored.week) !== Number(week))) return null;
+  const b = stored.byTeam[teamId];
+  if (!b) return null;
+  if (b.tier === 1) {
+    const key = { championship: 'championship', third: 'third', semi: 'semi', quarter: 'quarter', consolation: 'consolation' }[Object.keys(BANNERS).find((k) => BANNERS[k].label === b.label)] || 'consolation';
+    return { key, label: BANNERS[key].label, tone: BANNERS[key].tone, reason: reasonFor(key, {}), svg: glyphSvg(BANNERS[key].glyph) };
+  }
+  const row = b.row || {};
+  return { key: `mi-${row.type || 'row'}`, label: b.label, tone: `cat-${row.cat || b.tone}`, reason: withoutLabel(rowText(row.parts, names), b.label), svg: glyphSvg(GLYPHS[b.glyph] ? b.glyph : row.cat) };
 }
 
 export function bannerHtml(b, esc) {
