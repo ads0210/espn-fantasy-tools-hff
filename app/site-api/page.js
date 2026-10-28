@@ -17,6 +17,7 @@ import { wireScrollers, xyScrollHtml, hScrollHtml } from "../../src/hscroll.js";
 import { logEvent } from "../shared/sitelog.js";
 import { makeGuides } from "./guides.js";
 import { seasonRecordRows } from "../../src/apiseason.js";
+import { insightCsvRows } from "../../src/apiinsights.js";
 
 var DAY = 86400000, MIN = 60000;
 var P = null;                 // the payload from /apps/site-api/api
@@ -57,7 +58,7 @@ export function setPayload(p, hooks) {
   LEAGUE = (p.league && p.league.name) || 'League'; SEASON = p.league && p.league.season; WEEK = p.league && p.league.matchupPeriod;
   var d = p.data || {};
   D = { scoreboard: d.scoreboard || [], _rosterRows: d.rosterRows || [], _activity: d.activity || [], standings: d.standings || [],
-    schedule: d.schedule || [], freeAgents: d.freeAgents || [], headToHead: d.headToHead || [], season: d.season || null, seasonPeriods: d.seasonPeriods || [] };
+    schedule: d.schedule || [], freeAgents: d.freeAgents || [], headToHead: d.headToHead || [], season: d.season || null, seasonPeriods: d.seasonPeriods || [], insights: d.insights || null };
   TEAMS = (p.teams || []).map(function (t) { return { teamId: t.teamId, name: t.name, logo: '/api/logo/' + t.teamId }; });
   if (!S.guideTeam || !TEAMS.some(function (t) { return t.teamId === S.guideTeam; })) S.guideTeam = TEAMS.length ? TEAMS[0].teamId : null;
   if (WEEK) { if (!S.dlWeek.live) S.dlWeek.live = WEEK; if (!S.dlWeek.timeline) S.dlWeek.timeline = WEEK; }
@@ -124,7 +125,7 @@ function leftOut(key) {
   return hit ? hit.why : null;
 }
 
-/* ---- the six endpoints ------------------------------------------------------------------------------------------ */
+/* ---- the seven endpoints ------------------------------------------------------------------------------------------ */
 var ENDPOINTS = REG_ENDPOINTS.map(function (e) {
   return Object.assign({}, e, {
     refreshWords: function () { return e.refreshWords({ games: S.games, quiet: S.load === 'quiet' }); },
@@ -140,6 +141,7 @@ function endpointRows(key, team) {
   if (key === 'rosters') return D._rosterRows.filter(function (r) { return !t || r.teamId === t; });
   if (key === 'activity') return D._activity;
   if (key === 'season') return D.season ? (S.epTable === 'records' && S.epFormat.season === 'csv' ? seasonRecordRows(D.season) : D.season.standings) : [];
+  if (key === 'insights') return D.insights ? insightCsvRows(D.insights) : [];
   return null;
 }
 function endpointUrl(key, o) {
@@ -435,7 +437,7 @@ function flipRow(row, mutate, onDone) {
 /* ==== carried from the design sample's src/40-api.js ==== */
 export var HELP_API = [
   ['01', 'Find the league’s key', 'It sits under Your league’s key, hidden until you press Show. There is one key for the whole league; Copy puts it on your clipboard, and every program you build sends it.'],
-  ['02', 'Pick what to ask for', 'Six addresses answer everything: the scoreboard, the standings, Season Statistics for any period, the rosters, league activity, and /full for all of it. Try it shows exactly what a program gets.'],
+  ['02', 'Pick what to ask for', 'Seven addresses answer everything: the scoreboard, the standings, Season Statistics for any period, Matchup Insights for any week, the rosters, league activity, and /full for all of it. Try it shows exactly what a program gets.'],
   ['03', 'Open your platform’s guide', 'Google Sheets, Excel, Python, JavaScript, PowerShell, a shell, iPhone, Android, Home Assistant, Discord or Slack. Each job has the steps and the code, with the league’s key and your team filled in.'],
   ['04', 'Keep to the pace', 'Each program may ask as often as How often to ask says: once a minute on a normal day. A program that asks sooner gets a too_soon error instead of data, and every example here pauses or stops when it sees one.'],
   ['05', 'Keep the key private', 'Anyone with the key can read the league’s data. Keep it out of shared sheets and public code. Whoever administers this site can replace it at any time.'],
@@ -623,7 +625,7 @@ var ERRORS = [
   { g: 'soon', s: 429, code: 'too_soon', kind: 'pace_changed', v: 'address', when: 'Four programs at this address already asked in this interval', msg: 'Four programs at this address have already asked in this minute, the most one address may. Pause this program and ask again in 20 seconds.', fix: 'Wait <code>Retry-After</code> seconds, then carry on. Programs at one address take turns.', stop: 'pause' },
   { g: 'soon', s: 429, code: 'too_soon', kind: 'too_fast', when: 'The program asked sooner than it was ever allowed', msg: 'This program asked after 12 seconds, but the site allows one round a minute. It should stop until its interval is fixed.', fix: 'Stop, and fix the program’s interval before running it again.', stop: 'exit' },
   { g: 'addr', s: 400, code: 'bad_request', when: 'Something after the address is wrong or unknown', msg: 'team must be one of this league’s team ids: 1 to 10.', fix: 'Check the address against the endpoint’s card above; every card lists what it takes.' },
-  { g: 'addr', s: 404, code: 'not_found', when: 'Any other address under /api/v1/', msg: 'There’s no endpoint here. The six are /full, /scoreboard, /standings, /season, /rosters and /activity.', fix: 'Check the spelling of the address.' },
+  { g: 'addr', s: 404, code: 'not_found', when: 'Any other address under /api/v1/', msg: 'There’s no endpoint here. The seven are /full, /scoreboard, /standings, /season, /insights, /rosters and /activity.', fix: 'Check the spelling of the address.' },
   { g: 'addr', s: 405, code: 'method_not_allowed', when: 'Anything but GET, HEAD or OPTIONS', msg: 'The API only reads.', fix: 'Use <code>GET</code>.' },
   { g: 'site', s: 403, code: 'api_off', when: 'The API is switched off, or the tool is hidden', msg: 'The API is switched off for this league.', fix: 'Nothing on your side: ask whoever administers this site.' },
   { g: 'site', s: 403, code: 'not_visible', when: '/season while Season Statistics isn’t visible to members', msg: 'Season Statistics isn’t visible to members, so its data is left out.', fix: 'Nothing on your side: ask whoever administers this site.' },
@@ -697,7 +699,7 @@ function stripHtml() {
     '<div class="pacetext"><span class="v"><span class="valg">' + esc(p.secs == null ? 'Not until ' + timeOf(p.until) : p.short[0].toUpperCase() + p.short.slice(1)) + '</span>' +
     ' <span class="pacechip">' + esc(L.name) + (S.games ? ' · games on' : '') + '</span></span><span class="s">' + esc(paceS) + '</span>' + extra + '</div></div>' +
     '<div class="scell"><span class="k">API</span><span class="v"><span class="dot" style="--c:var(--' + (S.apiOn ? 'accent' : 'flag') + ')"></span><span class="valg">' + (S.apiOn ? 'On' : 'Off') + '</span></span>' +
-    '<span class="s">' + (S.apiOn ? 'Six endpoints, read-only' : 'Switched off in Site Configuration') + '</span></div>' +
+    '<span class="s">' + (S.apiOn ? 'Seven endpoints, read-only' : 'Switched off in Site Configuration') + '</span></div>' +
     '<div class="scell' + (k.soon || k.prev ? ' warn' : '') + '"><span class="k">Key</span>' + keyCell + '</div>' +
     '<div class="scell"><span class="k">Data</span><span class="v"><span class="valg">' + (S.dataReady ? 'Built <span data-ago="' + b + '">' + ago(b) + '</span>' : 'Not pulled yet') + '</span></span>' +
     '<span class="s">' + (!S.dataReady ? 'See League data in Site Configuration' : P && P.refreshing ? 'Updating to the latest now' :
