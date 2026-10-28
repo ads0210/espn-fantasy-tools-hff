@@ -15,8 +15,8 @@ import { FT_DEV_VIEW_KEY, FT_ESPN_ODDS_KEY } from './fortuneteller.js';
 import { loadConfig } from './config.js';
 import { sendEvents } from './sitelog.js';
 import { fetchPart } from './espn.js';
-import { simplestPath, totalsOf } from '../app/fortune-teller/engine.js';
-import { ownGameOdds, teamFinding } from '../app/fortune-teller/findings.js';
+import { simplestPath, totalsOf, countLean } from '../app/fortune-teller/engine.js';
+import { ownGameOdds, teamFinding, teamSwing, assembleSwing } from '../app/fortune-teller/findings.js';
 import { finalOdds } from '../app/fortune-teller/final.js';
 import { leagueState, readiness, buildRealInput, treeFingerprint, newTrims, projectedTotals, leagueUrl, gameChances } from './ftleague.js';
 
@@ -137,15 +137,19 @@ export class FortuneTellerDO {
    */
   async findings(prefix, summary, trimIdxs) {
     const G = summary.games.length, out = new Map(trimIdxs.map((k) => [k, new Array(summary.teams.length).fill(null)]));
+    // Matchup Insights (D33): the coming week's swing table, counted from the same maps at the same updates.
+    const swing = new Map(trimIdxs.map((k) => [k, new Array(summary.teams.length).fill(null)]));
     for (let i = 0; i < summary.teams.length; i++) {
       try {
         const mo = await this.env.DATA.get(`${prefix}maps/${summary.teams[i].id}.bin`); if (!mo) continue;
         const raw = await inflateBytes(new Uint8Array(await mo.arrayBuffer())), meta = summary.maps[i];
         const map = { nodes: new Int32Array(raw.buffer, raw.byteOffset, raw.length / 4), root: meta.root, G, leafBase: meta.leafBase || 256, leaves: meta.leaves || null };
         for (const k of trimIdxs) out.get(k)[i] = teamFinding(ownGameOdds(summary, summary.trims[k], i, map, totalsOf));
+        for (const k of trimIdxs) { try { swing.get(k)[i] = teamSwing(summary, summary.trims[k], i, map, countLean, totalsOf); } catch { swing.get(k)[i] = null; } }
       } catch (e) { await this.log('warn', `banner finding for ${summary.teams[i].name} failed: ${String((e && e.message) || e)}`); }
     }
     for (const k of trimIdxs) summary.trims[k].next = out.get(k);
+    for (const k of trimIdxs) summary.trims[k].swing = assembleSwing(summary, swing.get(k));
     return summary;
   }
 
@@ -163,7 +167,7 @@ export class FortuneTellerDO {
     await this.findings(prefix, s, s.trims.map((_, k) => k));
     await this.env.DATA.put(`${prefix}summary.json`, JSON.stringify(s), { httpMetadata: { contentType: 'application/json' } });
     const live = await this.activeSummary();
-    if (live && live.datasetId === id) { live.trims.forEach((tr, k) => { tr.odds = s.trims[k].odds; if (s.trims[k].places) tr.places = s.trims[k].places; tr.next = s.trims[k].next || null; }); await this.env.DATA.put(FT_SUMMARY_KEY, JSON.stringify(live), { httpMetadata: { contentType: 'application/json' } }); }
+    if (live && live.datasetId === id) { live.trims.forEach((tr, k) => { tr.odds = s.trims[k].odds; if (s.trims[k].places) tr.places = s.trims[k].places; tr.next = s.trims[k].next || null; tr.swing = s.trims[k].swing || null; }); await this.env.DATA.put(FT_SUMMARY_KEY, JSON.stringify(live), { httpMetadata: { contentType: 'application/json' } }); }
     return { ok: true, id, ms: Date.now() - t0, sums: odds.map((a) => +a.reduce((x, v) => x + (v || 0), 0).toFixed(4)) };
   }
 
