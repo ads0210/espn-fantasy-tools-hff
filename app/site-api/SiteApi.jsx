@@ -65,7 +65,7 @@ function Endpoints({ bump }) {
           <div className="fact wide"><span className="k">Made for</span><span className="v">{e.madeFor}</span></div>
           <div className="fact"><span className="k">Size</span><span className="v"><span className="valg">{PG.epSize(e.key) || e.size.replace("About ", "").replace(" of JSON; about 120 to 180 KB sent", "")}</span>{PG.epSize(e.key) ? <small> {e.key === "full" ? "of JSON now, without logos" : e.team ? "now, all teams" : "now"}</small> : null}</span></div>
           <div className="fact"><span className="k">Refreshes</span><span className="v"><span className="valg">{e.refreshWords()}</span></span></div>
-          <div className="fact"><span className="k">Takes</span><span className="v"><span className="valg">{(e.team ? "team, " : "") + (e.period ? "period, table, " : "") + (e.csv ? "format, " : "") + (e.logos ? "logos, " : "") + "name, pretty"}</span></span></div>
+          <div className="fact"><span className="k">Takes</span><span className="v"><span className="valg">{(e.team ? "team, " : "") + (e.period ? "period, table, " : "") + (e.week ? "week, " : "") + (e.csv ? "format, " : "") + (e.logos ? "logos, " : "") + "name, pretty"}</span></span></div>
         </div>
         <div className="epctl">
           {e.team ? (
@@ -265,7 +265,7 @@ export default function SiteApi() {
         ) : null}
         <Head t="Your league’s key" count="One for the whole league · opens the API only" id="key" />
         <div ref={refs.key} id="p-key" />
-        <Head t="What you can ask for" count="Six endpoints · one key · read-only" id="endpoints" />
+        <Head t="What you can ask for" count="Seven endpoints · one key · read-only" id="endpoints" />
         <Endpoints bump={bump} />
         <div id="p-guides">
           <GuidesIntro bump={bump} />

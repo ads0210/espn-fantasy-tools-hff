@@ -1,7 +1,7 @@
 /**
  * Site API: the platform guides.
  *
- * Sixteen platforms and 72 jobs (week 6 added five platforms and 33 jobs, in jobs6.js; Season Statistics two): each job's steps, its code with the league's address, key and team filled in,
+ * Sixteen platforms and 73 jobs (week 6 added five platforms and 33 jobs, in jobs6.js; Season Statistics two; Matchup Insights one): each job's steps, its code with the league's address, key and team filled in,
  * a picture of it working, and how it stops. Every example keeps the pace and stops itself: it waits the pace
  * the site gives (or runs on a schedule slower than the slowest pace), pauses on pace_changed and stops for
  * good on too_fast, in whatever way its platform allows.
@@ -18,6 +18,7 @@
 /* eslint-disable */
 import { addWeek6Jobs } from './jobs6.js';
 import { seasonRecordRows } from '../../src/apiseason.js';
+import { insightCsvRows } from '../../src/apiinsights.js';
 export function makeGuides(env) {
   var API = env.API, D = env.D, S = env.S, LEAGUE = env.LEAGUE, WEEK = env.WEEK, DAY = 86400000, MIN = 60000;
   var esc = env.esc, iso = env.iso, stamp = env.stamp, dayOf = env.dayOf, timeOf = env.timeOf, dateOf = env.dateOf, durWords = env.durWords;
@@ -53,6 +54,8 @@ export function makeGuides(env) {
   }
   /* Season Statistics' records table as /season?format=csv&table=records gives it, for the pictures. */
   function seasonRows() { return D.season ? seasonRecordRows(D.season) : []; }
+  /* Matchup Insights' week as /insights?format=csv gives it, for the pictures. */
+  function insightRows() { return D.insights ? insightCsvRows(D.insights) : []; }
   function gctx() {
     var t = S.guideTeam;
     return { K: keyInExamples(), T: t, TN: teamName(t), p: pace() };
@@ -173,6 +176,20 @@ export function makeGuides(env) {
             return LOOK.sheet('=IMPORTDATA("…/season.csv?table=records&key=eft_…")', rows, seasonRows().length ? 'A row per holder, refreshed by Sheets about hourly.' : 'Season Statistics fills this in once the first week settles.');
           },
           stop: 'As for the standings: a refusal arrives as one cell of text, <code>Site API: …</code>, until the next hourly refresh. Deleting the formula stops it for good. While Season Statistics isn’t visible to members, the cell says so instead.' },
+        { key: 'insights', title: 'Keep this week’s insights in a sheet', have: 'Every insight Matchup Insights has about this week’s games, one row each, with its category, importance and words, on a tab of its own.',
+          keyInAddress: true,
+          steps: ['Add a tab to your sheet and click cell <b>A1</b>.',
+            'Paste the formula below. It asks <code>/insights</code> for this week as CSV: one row per insight, the week’s own first, then each game’s, heaviest first.',
+            'Press Enter. Sheets refreshes it about once an hour; rows written before kickoff stay as they were, and what happened arrives once each game ends.',
+            'For a week already played, add <code>&amp;week=6</code> (any week the site holds) to the address.',
+            'Keep the sheet private: anyone who can open it can read the key in the formula.'],
+          file: 'Cell A1', lang: 'formula',
+          code: function (c) { return '=IMPORTDATA("' + U('insights.csv', { key: c.K, name: 'insights-sheet' }) + '")'; },
+          look: function () {
+            var rows = [['category', 'label', 'importance', 'text']].concat(insightRows().slice(0, 6).map(function (r) { return [r.category, r.label, r.importance, r.text]; }));
+            return LOOK.sheet('=IMPORTDATA("…/insights.csv?key=eft_…")', rows, insightRows().length ? 'A row per insight, refreshed by Sheets about hourly.' : 'Matchup Insights fills this in once it has read this week’s games.');
+          },
+          stop: 'As for the standings: a refusal arrives as one cell of text, <code>Site API: …</code>, until the next hourly refresh. Deleting the formula stops it for good. While Matchup Insights isn’t visible to members, the cell says so instead.' },
         { key: 'left', title: 'List who’s left to play', have: 'Your starters whose games haven’t kicked off, as a short list that updates itself.',
           keyInAddress: true,
           steps: ['In any empty cell of your sheet, paste the formula below. Your team is already filled in (<code>team=%T%</code>).',
@@ -746,7 +763,7 @@ export function makeGuides(env) {
   var PLAT_KIND = { sheets: 'Spreadsheet', excel: 'Spreadsheet', python: 'Script', node: 'Script', powershell: 'Script · Windows',
     shell: 'Script · macOS and Linux', iphone: 'Phone', android: 'Phone', ha: 'Smart home', chat: 'Chat bot' };
   var RUNS = {
-    'sheets.standings': 'About hourly, by Sheets', 'sheets.records': 'About hourly, by Sheets', 'excel.records': 'When the file opens', 'sheets.left': 'About hourly, by Sheets', 'sheets.log': 'Every 30 minutes', 'sheets.email': 'Daily at about 8',
+    'sheets.standings': 'About hourly, by Sheets', 'sheets.records': 'About hourly, by Sheets', 'sheets.insights': 'About hourly, by Sheets', 'excel.records': 'When the file opens', 'sheets.left': 'About hourly, by Sheets', 'sheets.log': 'Every 30 minutes', 'sheets.email': 'Daily at about 8',
     'excel.standings': 'Every 15 minutes', 'excel.chart': 'When the file opens', 'excel.left': 'Every 15 minutes',
     'python.score': 'At the site’s pace', 'python.bot': 'Every 20 minutes', 'python.save': 'Once a day', 'python.chart': 'When you run it',
     'node.score': 'At the site’s pace', 'node.bot': 'Every 20 minutes', 'node.save': 'Once a day',

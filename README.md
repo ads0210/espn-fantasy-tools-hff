@@ -7,7 +7,7 @@ yours.</p>
 
 <p align="center">
   <img alt="Runs on Cloudflare's free tier" src="https://img.shields.io/badge/runs%20on-Cloudflare%20free%20tier-63FF4A?style=flat-square&labelColor=111713">
-  <img alt="Nine tools" src="https://img.shields.io/badge/tools-9-63FF4A?style=flat-square&labelColor=111713">
+  <img alt="10 tools" src="https://img.shields.io/badge/tools-10-63FF4A?style=flat-square&labelColor=111713">
   <img alt="Works with any ESPN league" src="https://img.shields.io/badge/works%20with-any%20ESPN%20league-63FF4A?style=flat-square&labelColor=111713">
 </p>
 
@@ -30,7 +30,8 @@ yours.</p>
 - [The home page](#the-home-page)
 - [On every page: help and settings](#on-every-page-help-and-settings)
 - [The tools](#the-tools)
-  - [Draft Helper](#draft-helper) · [Live Matchups](#live-matchups) · [Season Statistics](#season-statistics) · [Hall of Fame](#hall-of-fame) ·
+  - [Draft Helper](#draft-helper) · [Live Matchups](#live-matchups) · [Season Statistics](#season-statistics) · [Matchup Insights](#matchup-insights) ·
+    [Hall of Fame](#hall-of-fame) ·
     [Fortune Teller](#fortune-teller) · [Trade Analyzer](#trade-analyzer) · [LLM Data Export](#llm-data-export) ·
     [Site API](#site-api) · [Site Backend](#site-backend)
 - [Site Configuration](#site-configuration)
@@ -52,6 +53,7 @@ any ESPN fantasy football league: your scoring, your roster shape, your playoff 
 | 📋 | [Draft Helper](#draft-helper) | Live draft board, roster needs and recommended targets | Visible |
 | 📈 | [Live Matchups](#live-matchups) | This week's scoreboard, lineups and live win probability | Visible |
 | 📊 | [Season Statistics](#season-statistics) | This season's standings and records, after any week | Visible |
+| 🔍 | [Matchup Insights](#matchup-insights) | What makes every game interesting, before, during and after it | Visible |
 | 🏆 | [Hall of Fame](#hall-of-fame) | Champions, all-time standings and every team's record | Visible |
 | 🔮 | [Fortune Teller](#fortune-teller) | Every way the rest of the season can go, and where each leaves you | Visible |
 | 🤝 | [Trade Analyzer](#trade-analyzer) | Every offer on the table, broken down for both sides | Visible |
@@ -110,7 +112,7 @@ and (when the home page shows them) your row in the standings all follow it. Eve
 | --- | --- |
 | **Matchups strip** | This week's fantasy matchups: live scores and projections, moving while games are on |
 | **NFL strip** | The NFL games behind them, with scores and kickoff times |
-| **Your matchup** | This week's score, projection and win chance for you and your opponent, with a countdown to the next kickoff. When a game matters, a banner says why: **Championship**, a playoff round, **Third Place Game**, **Must Win**, **Win and You're In**, **Most Critical Remaining Matchup**, **Top of the Table** |
+| **Your matchup** | This week's score, projection and win chance for you and your opponent, with a countdown to the next kickoff. When a game matters, a banner from [Matchup Insights](#matchup-insights) says why: a postseason game (**Championship**, a playoff round, **Third Place Game**), **Must Win**, **Win and You're In**, or the most important fact about your game, in its category's colour. It can change as the game goes on |
 | **Standings** | Only when whoever administers the site turns them on here (they always live on [Season Statistics](#season-statistics)). The same table: sortable on any column, with ESPN's **Playoff %**, **Sim %** once [Fortune Teller](#fortune-teller) has run, all-play, luck and the power ranking. Your own row is highlighted |
 | **Tools** | One tile per tool. A tool kept for admins shows a lock |
 | **Injury watch** | Injuries on your own roster, using whichever of ESPN's two reports is newer |
@@ -129,7 +131,10 @@ and (when the home page shows them) your row in the standings all follow it. Eve
 **For whoever administers the site**
 
 - Which tiles appear, and in what order, is set in Site Configuration (**Tools**, **Home page order**).
-- **Standings on the home page** (under **Home page order**) shows the standings table here as well as on Season
+- **Matchup banners** (in **Home page display**) puts one fact from [Matchup Insights](#matchup-insights) across the
+  top of each member's matchup card. It is on by default and works whatever the tool's visibility; off removes it from
+  every card.
+- **Standings on the home page** (in **Home page display**) shows the standings table here as well as on Season
   Statistics. It is off by default, and stays on while Season Statistics is not Visible, so members can always see the
   standings somewhere.
 - The **data banner** can be dismissed for everyone with the Admin Password; it comes back only if a check fails three
@@ -235,6 +240,49 @@ hundred and twenty of this season's records, each with the team or player who ho
   stat corrections), so opening the page costs almost nothing.
 - Records about how a game unfolded (lead changes, comebacks, time spent leading) count only games the site recorded
   as they were played; their note says from which week.
+
+### Matchup Insights
+
+*What makes every game interesting, before, during and after it.* Every game of the week, drawn as the home page's
+matchup card, with the facts that make it worth watching: what is at stake, the rivalry, form, the players, who is
+missing, records within reach, ESPN's projection, what happens live and what it all came to.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/matchup-insights-dark.webp">
+  <img alt="Matchup Insights: the control deck and this week's games with their insights" src="docs/images/matchup-insights-light.webp">
+</picture>
+
+**For members**
+
+- **Choose a week** with the arrows: the page opens on this week, and every week played stays, with what was said
+  before kickoff and how it turned out.
+- **Every game** is a matchup card: the countdown to kickoff, then the score and win chance, then the result and each
+  team's record with it counted, with its **top insight** beneath. Your team's game comes first; in the postseason, the
+  games follow the bracket.
+- **Now** (the default) shows each game what fits where it stands: before kickoff, what to watch for; while it is on,
+  what is happening; once it is over, what it came to. **Any time** shows everything said about it.
+- **Open a game** for its insights. Each row has a coloured **category**, a **weight** from one to ten diamonds (ten is
+  an all-time record from [Hall of Fame](#hall-of-fame) or the title itself; a season record is eight) and the logos
+  of every team it names. A game shows its five weightiest rows first; **Show all** opens the rest.
+- **Records**: a record within reach is flagged while the game is on, and a record that falls leads the game once it
+  is over, unless something bigger happened. Hall of Fame's all-time records count for more than this season's.
+- **Narrow it down** with the control deck: search any word, tap categories on the colour bar, pick **Any time**,
+  **Before**, **Live** or **After**, or show only rows about your team. On a phone the filters sit behind **Filters**.
+- **Before, during and after**: rows written before kickoff are kept as they stood at each team's first kickoff; live
+  rows appear while games are on; once a game ends, what happened takes over, counted at once rather than when ESPN
+  settles the week (the standings everywhere else still follow ESPN). A prediction is judged **Held** or **Broke** once
+  the game is final.
+- **Across the league**: facts about the whole week (the closest projected week, who can clinch, the week's big game)
+  and, once games are over, one row for every record that fell.
+- Your team is the one chosen on the home page; rows naming it carry a small **You** mark.
+
+**For whoever administers the site**
+
+- Visible by default. Every row is worked out by the site in the background, so opening the page costs almost nothing.
+- Weeks played before the site had Matchup Insights show only what the results can say honestly: no lineups or injury
+  news from before kickoff.
+- The stakes rows (Must Win, Win and You're In, odds with a win and a loss) come from [Fortune Teller](#fortune-teller)
+  once its simulation is running.
 
 ### Hall of Fame
 
@@ -353,9 +401,9 @@ a page that shows how to use it on the tools people already have.
 **For members**
 
 - **The league's key** opens the API and nothing else on the site. It shows behind dots until you press **Show**.
-- **Six addresses** answer everything: the scoreboard, the standings, [Season Statistics](#season-statistics) for any
-  period, the rosters, league activity, and one for all of it. **Try it** shows exactly what a program gets.
-- **Guides for sixteen platforms and seventy-two jobs**: Google Sheets, Excel, Python, JavaScript, PowerShell, a Mac or
+- **Seven addresses** answer everything: the scoreboard, the standings, [Season Statistics](#season-statistics) for any
+  period, [Matchup Insights](#matchup-insights) for any week, the rosters, league activity, and one for all of it. **Try it** shows exactly what a program gets.
+- **Guides for sixteen platforms and seventy-three jobs**: Google Sheets, Excel, Python, JavaScript, PowerShell, a Mac or
   Linux shell, iPhone and iPad, Android, Home Assistant, Discord or Slack, your calendar, **ntfy** phone alerts,
   Telegram, GroupMe, desk and TV displays, and dashboards and SQL. Close-game alerts, injury changes, notable drops,
   clinched and eliminated posts, weekly awards, a desk scoreboard, a bye-week planner and more. Each job has its steps,
@@ -413,7 +461,8 @@ on every change; nothing stays unlocked after you close the tab. Every panel sta
 | **ESPN cookies** | Replace them when league data stops loading. The site tests them against ESPN before saving |
 | **Passwords** | Change the League Password or the Admin Password. Changing the League Password signs everyone out and replaces the Site API key |
 | **Tools** | Set each tool to Visible, Admin-only or Hidden. At least one league tool always stays visible |
-| **Home page order** | Move tiles up or down; the home page follows at once. Beneath the list, choose whether the home page shows the standings too |
+| **Home page order** | Move tiles up or down; the home page follows at once |
+| **Home page display** | Whether each member's matchup card carries a banner from Matchup Insights, and whether the home page shows the standings too |
 | **Sign-in length** | How long a member stays signed in, from one hour to infinite |
 | **Note from the Site Admin** | Write a note for everyone, with bold, italic, the site's colours and links to its pages, and a signature from your saved list. Each browser sees it once |
 | **Site API** | Switch the API on or off, replace the key, choose how often it is replaced, and whether it may travel in an address |

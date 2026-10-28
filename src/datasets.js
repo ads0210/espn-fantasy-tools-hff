@@ -223,6 +223,18 @@ export const DATASETS = [
     expect: 'draftDetail',
   },
   {
+    // Matchup Insights: how many fantasy points each NFL defence gives up to each position in this league's own
+    // scoring, with its rank (32 gives up the most). About 9 KB; ESPN updates it as weeks are played.
+    key: 'positional_ratings',
+    label: 'Points allowed by each NFL defence, per position',
+    group: 'fantasy',
+    ttl: TTL.HOUR_6,
+    auth: true,
+    tier: 'aux',
+    parts: (cfg) => [{ part: 'main', url: `${leagueBase(cfg)}?view=mPositionalRatings` }],
+    expect: 'positionAgainstOpponent',
+  },
+  {
     key: 'matchups',
     timeoutMs: TIMEOUT.LARGE,
     label: 'Matchup schedule & scores',

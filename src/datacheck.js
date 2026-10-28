@@ -35,7 +35,7 @@ export const MEMBER_NAMES = {
   nfl_qbr_weekly: 'NFL quarterback ratings', nfl_scoreboard: 'the NFL scoreboard', nfl_standings: 'NFL standings',
   nfl_team_rosters: 'NFL team rosters', nfl_team_schedules: 'NFL team schedules', nfl_team_season_stats: 'NFL team statistics',
   nfl_teams: 'NFL teams', nfl_transactions: 'NFL transactions', nfl_weekly_events: 'NFL games by week',
-  pending_transactions: 'open trade offers', player_weeks: 'players\u2019 weekly scoring', rosters: 'rosters',
+  pending_transactions: 'open trade offers', positional_ratings: 'points allowed by each NFL defence', player_weeks: 'players\u2019 weekly scoring', rosters: 'rosters',
   season_schedule: 'the season schedule', standings: 'standings', transactions: 'league activity',
 };
 

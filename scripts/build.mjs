@@ -50,6 +50,12 @@ const TOOLS = [
     head: () => `<script>${STANDINGS_JS.split('</script').join('<\\/script')}</script>`,
   },
   {
+    key: 'matchup-insights',
+    title: 'Matchup Insights',
+    entry: 'app/matchup-insights/main.jsx',
+    css: 'app/matchup-insights/styles.css',
+  },
+  {
     key: 'hall-of-fame',
     title: 'Hall of Fame',
     entry: 'app/hall-of-fame/main.jsx',

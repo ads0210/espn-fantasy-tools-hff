@@ -7,6 +7,7 @@
  * not serve. A plain module: the Worker and the Site API page both import it.
  */
 import { seasonRecordRows } from './apiseason.js';
+import { insightCsvRows } from './apiinsights.js';
 
 /* The tools a section follows. A section is served only while its tool is visible to members. */
 export const SECTION_TOOL = {
@@ -14,7 +15,7 @@ export const SECTION_TOOL = {
   history: 'hall-of-fame', records: 'hall-of-fame', teamHistory: 'hall-of-fame', headToHead: 'hall-of-fame',
   fortuneTeller: 'fortune-teller', fortuneOdds: 'fortune-teller', fortuneFinishes: 'fortune-teller',
   fortuneGames: 'fortune-teller', fortunePaths: 'fortune-teller',
-  tradeAnalysis: 'trade-analyzer', draftOrder: 'draft-helper', seasonStats: 'season-stats',
+  tradeAnalysis: 'trade-analyzer', draftOrder: 'draft-helper', seasonStats: 'season-stats', matchupInsights: 'matchup-insights',
 };
 
 /* Every section of /full, in the order an answer carries them (about first). `sec` is how often
@@ -53,6 +54,7 @@ export const SECTIONS = [
   { key: 'fortunePaths', group: 'site', what: 'For each team: its best path, its simplest path to the playoffs, and the path where every game goes to ESPN’s projected winner', refresh: 'Weekly', sec: 604800, csv: false },
   { key: 'tradeAnalysis', group: 'site', what: 'Each offer on the table broken down row by row for both sides, at the league’s weighting, with the balance and the verdict', refresh: '5 min', sec: 300, csv: true, rowWord: 'a row per offer per row' },
   { key: 'seasonStats', group: 'site', what: 'Season Statistics for the whole season, as /season: the standings with all-play, luck and the power ranking, and every record with each holder', refresh: 'When a week settles', sec: 3600, csv: true, rowWord: 'a row per record holder' },
+  { key: 'matchupInsights', group: 'site', what: 'Matchup Insights for this week, as /insights: every game with its insights (category, weight from 1 to 10, when, the teams it names and its words, and a prediction’s outcome) and the week’s insights across the league', refresh: '{live} in games, else 5 min', sec: 300, live: true, csv: true, rowWord: 'a row per insight' },
   { key: 'draftOrder', group: 'site', what: 'The draft’s shape: rounds, snake or linear, pick order, every slot with the team holding it, and the league’s roster shape', refresh: '1 min during a draft', sec: 86400, csv: true },
 ];
 
@@ -62,7 +64,7 @@ export function section(key) { return SECTIONS.find((s) => s.key === key) || nul
 /** A section's refresh figure as the reader receives it: the live parts follow the snapshot's rebuild. */
 export function refreshOf(s, quiet) { return s.refresh.split('{live}').join(quiet ? '15 s' : '1 min'); }
 
-/* The six endpoints. The refresh words and figures depend on whether games are on and whether the
+/* The seven endpoints. The refresh words and figures depend on whether games are on and whether the
    site is quiet (st = { games, quiet }). */
 export const ENDPOINTS = [
   { key: 'scoreboard', path: '/scoreboard', team: true, csv: true, size: 'About 5 to 10 KB',
@@ -78,6 +80,11 @@ export const ENDPOINTS = [
     sentence: 'This season’s standings and every record for one period: ?period=whole (the default), regular, post, or the season as it stood after a week (w1, w2 and so on). As CSV, ?table=standings or ?table=records (a row per holder).',
     madeFor: 'Weekly bot posts, a season sheet, analysis of the season so far',
     refreshWords: () => 'When a week settles', refresh: () => 300 },
+  { key: 'insights', path: '/insights', csv: true, week: true, size: 'About 30 to 80 KB',
+    sentence: 'One week of Matchup Insights: every game with its insights, heaviest first, and the week’s insights across the league. ?week= any week the site holds (this week by default). As CSV, a row per insight.',
+    madeFor: 'Weekly bot posts, a preview of the week in a chat, analysis of what each week said and how it turned out',
+    refreshWords: (st) => (st.games ? 'Every minute during games' : 'Every 5 minutes'),
+    refresh: (st) => (st.games ? 60 : 300) },
   { key: 'rosters', path: '/rosters', team: true, csv: true, size: 'About 60 to 90 KB',
     sentence: 'Every rostered player: fantasy team, slot, position, NFL team, this week’s opponent and game state, points and projection this week, season points and average, injury status, bye.',
     madeFor: 'Lineup checks, “who’s left to play” scripts, sheets',
@@ -100,7 +107,7 @@ export function endpoint(key) { return ENDPOINTS.find((e) => e.key === key) || n
 export function paramsOf(key) {
   const ep = endpoint(key);
   if (!ep) return [];
-  return ['name', 'pretty'].concat(ep.csv ? ['format'] : [], ep.team ? ['team'] : [], ep.logos ? ['logos'] : [], ep.period ? ['period', 'table'] : []);
+  return ['name', 'pretty'].concat(ep.csv ? ['format'] : [], ep.team ? ['team'] : [], ep.logos ? ['logos'] : [], ep.period ? ['period', 'table'] : [], ep.week ? ['week'] : []);
 }
 
 export const CONVENTIONS = ['Times are ISO 8601 in UTC.', 'Odds are fractions from 0 to 1.', 'Ids are ESPN’s own.', 'A missing value is null.'];
@@ -145,6 +152,7 @@ export const CSV_ROWS = {
   draft: (v) => (v && v.picks) || [],
   draftOrder: (v) => (v && v.slots) || [],
   seasonStats: (v) => seasonRecordRows(v),
+  matchupInsights: (v) => insightCsvRows(v),
   fortuneTeller: (v) => ((v && v.teams) || []).map((t) => ({ state: v.state, simulatedThroughWeek: v.simulatedThroughWeek, ...t })),
   headToHead: (v) => {
     const rows = [];
@@ -236,6 +244,12 @@ export const MEANING = {
   section: 'The Season Statistics section it belongs to', about: 'How the record is counted', unit: 'What the value measures',
   good: 'true for a record a team wants, false for one it doesn’t, null for neither', recordedFromWeek: 'For a record read from the score timeline: the first week recorded',
   empty: 'Why no one holds it yet; null when someone does', freeAgent: 'true when the player is on no fantasy team', against: 'true when the record names the team on the receiving end',
+  gameId: 'The game’s id, the same as the matchup’s', homeTeamId: 'The home team’s ESPN id', homeTeam: 'The home team’s name', awayTeamId: 'The away team’s ESPN id',
+  awayTeam: 'The away team’s name', insights: 'Every insight about the game, heaviest first',
+  acrossTheLeague: 'The week’s insights about the whole league', category: 'The insight’s category, as the page colours it',
+  importance: 'How much the insight matters, 1 to 10 (the page’s weight): 10 an all-time record or the title itself, 9 decides a season or a game, 8 a season record', subject: 'What the insight is about: matchup, team, player or league',
+  when: 'beforeKickoff, live or afterTheFinal', teamIds: 'Every team the insight names, playing in the game or not', prediction: 'true when the insight predicts something',
+  outcome: 'held or broke once the game is final, pending before; null when it predicts nothing', current: 'true for this week',
   detail: 'A short note beside the value', weeks: 'The first and last week of a stretch', text: 'The value as words, where a number alone would mislead', opponentName: 'The other team’s name',
 };
 export const NULLTYPE = { decided: 'text or null', simPlayoffOdds: 'number or null', injuryStatus: 'text or null', winnerTeamId: 'number or null',

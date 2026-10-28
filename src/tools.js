@@ -43,6 +43,15 @@ export const TOOLS = [
     href: '/apps/season-stats/',
     defaultVisibility: VISIBILITY.VISIBLE,
   },
+  /* What makes every game interesting, before, during and after it: one row per fact, built on the backend
+     (src/insightstep.js). Its rows also give the home matchup card its banner, whatever this tool's state. */
+  {
+    key: 'matchup-insights',
+    name: 'Matchup Insights',
+    description: 'What makes every game interesting, before, during and after it.',
+    href: '/apps/matchup-insights/',
+    defaultVisibility: VISIBILITY.VISIBLE,
+  },
   {
     key: 'hall-of-fame',
     name: 'Hall of Fame',

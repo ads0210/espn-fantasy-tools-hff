@@ -84,6 +84,14 @@ const TOOL_READS = {
     // timeline facts it keeps under its own prefix.
     datasets: ['season_schedule', 'league_settings', 'standings_digest', 'player_weeks', 'transactions', 'draft_results', 'league_history_digest'],
   },
+  'matchup-insights': {
+    routes: [['GET', '/apps/matchup-insights/', 'document'], ['GET', '/apps/matchup-insights/api', 'on load, on a week change and once a minute while this week is open', 60],
+      ['GET', '/api/meta', 'on load'], ['GET', '/api/logo/:team', 'on load']],
+    // Every row is built on the backend from these (src/insightstep.js), plus Season Statistics' stored parts and
+    // weeks, the score timeline and Fortune Teller's swing table.
+    datasets: ['season_schedule', 'league_settings', 'standings_digest', 'live_scoring_digest', 'transaction_digest', 'h2h_full_digest',
+      'injuries_digest', 'bye_weeks', 'depth_digest', 'league_history_digest', 'positional_ratings', 'nfl_scoreboard'],
+  },
   'hall-of-fame': {
     routes: [['GET', '/apps/hall-of-fame/', 'document'], ['GET', '/api/hof', 'on load'], ['GET', '/api/meta', 'on load']],
     datasets: ['league_history_digest', 'h2h_full_digest'],

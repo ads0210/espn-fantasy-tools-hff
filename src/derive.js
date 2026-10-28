@@ -1463,6 +1463,11 @@ export function bannerRound(tier, week, { lastPlayoffWeek } = {}) {
 export function playoffRoundLabel(tier, week, { firstPlayoffWeek, lastPlayoffWeek }) {
   if (!tier || tier === 'NONE') return null;
   const fromEnd = Number(lastPlayoffWeek) - Number(week);
+  // Matchup Insights' docket K1: WINNERS_CONSOLATION_LADDER is the winners bracket's losers playing on, so its last game
+  // is the third-place game, never the Championship (it read "Championship" in Hall of Fame's head-to-head).
+  if (String(tier).toUpperCase() === 'WINNERS_CONSOLATION_LADDER') {
+    return fromEnd <= 0 ? 'Third Place Game' : `Consolation Round ${Number(week) - Number(firstPlayoffWeek) + 1}`;
+  }
   const isWinners = String(tier).toUpperCase().includes('WINNER');
   if (isWinners) {
     if (fromEnd <= 0) return 'Championship';

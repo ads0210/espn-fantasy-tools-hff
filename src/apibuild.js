@@ -26,6 +26,9 @@ import { logoObjectKey } from './logos.js';
 import { createEngine } from '../app/trade-analyzer/engine.js';
 import { loadConfig } from './config.js';
 import { seasonPeriod, seasonPeriodKeys, seasonRecordRows, seasonExtras } from './apiseason.js';
+import { insightWeek, insightCsvRows } from './apiinsights.js';
+/* Matchup Insights' stored weeks (src/insightstep.js miKey; repeated here so this module stays free of the step). */
+const miKey = (season, rest) => `matchup-insights/${season}/${rest}`;
 /* Season Statistics' stored objects (src/seasonstep.js ssKey; repeated here so this module stays free of the step). */
 const ssKey = (season, rest) => `season-stats/${season}/${rest}`;
 
@@ -675,7 +678,14 @@ export function shapeAll(src, { now = Date.now() } = {}) {
     tradeAnalysis: shapeTradeAnalysis(src.trade_digest, src.tradeWeights),
     draftOrder: draftDoc ? shapeDraftOrder(draftDoc, names) : null,
     seasonStats: seasonPeriods.whole || null,
+    matchupInsights: null,
   };
+  // Matchup Insights' stored weeks (src/insightstep.js): every week it holds, this week with its Live rows laid over.
+  const mi = src.insights || null;
+  const insightWeeks = {};
+  if (mi && mi.index) for (const w of mi.index.weeks || []) if (mi.weeks[w.week]) insightWeeks[w.week] = insightWeek(mi.weeks[w.week], names, w.week === mi.index.current ? mi.live : null);
+  const insightCurrent = mi && mi.index && insightWeeks[mi.index.current] ? mi.index.current : null;
+  sections.matchupInsights = insightCurrent ? insightWeeks[insightCurrent] : null;
   const leftOut = {
     ...(fortune.hasSim ? {} : {
       fortuneFinishes: 'Appears once Fortune Teller’s first simulation has run' + (fortune.fortuneTeller.opensAfterWeek ? ` (after week ${fortune.fortuneTeller.opensAfterWeek} settles).` : '.'),
@@ -684,13 +694,14 @@ export function shapeAll(src, { now = Date.now() } = {}) {
     }),
     ...(fortune.hasSim && !fortune.hasPlaces ? { fortuneFinishes: 'Appears once Fortune Teller next builds or moves its simulation on a week.' } : {}),
     ...(seasonPeriods.whole ? {} : { seasonStats: 'Appears once the first week of the season has settled.' }),
+    ...(insightCurrent ? {} : { matchupInsights: 'Appears once Matchup Insights has read this week’s games.' }),
   };
   const detail = (draftDoc && draftDoc.draftDetail) || {};
   return {
     ready: true,
     leagueName: sections.league.name, season: sections.league.season, week, matchupPeriod, phase: sections.league.phase,
     teams: Object.keys(names).map(Number).sort((a, b) => a - b), names,
-    sections, standingsNoSim, rosterRows: rosters.base, activity: act.activity, leftOut, seasonPeriods,
+    sections, standingsNoSim, rosterRows: rosters.base, activity: act.activity, leftOut, seasonPeriods, insightWeeks, insightCurrent,
     windows: gameWindows(src.scoreboard_digest), draftLive: Boolean(detail.inProgress),
   };
 }
@@ -757,6 +768,8 @@ export function snapshotParts(shape) {
   for (const [k, p] of Object.entries(shape.seasonPeriods || {})) {
     put('e:season:' + k, p); csv('ec:season:' + k + ':standings', p.standings); csv('ec:season:' + k + ':records', seasonRecordRows(p));
   }
+  // /insights: every stored week, whole, and as CSV (a row per insight).
+  for (const [w, wk] of Object.entries(shape.insightWeeks || {})) { put('e:insights:w' + w, wk); csv('ec:insights:w' + w, insightCsvRows(wk)); }
   // The description file, from this league's own data; its address is filled in when handed over.
   const sampleMeta = { endpoint: 'standings', apiVersion: 1, league: shape.leagueName, season: shape.season, week: shape.week,
     updatedAt: '2026-09-28T14:15:08Z', refreshEverySeconds: 300, pace: { askEverySeconds: 60, site: 'normal', note: 'Please ask at most once a minute.' },
@@ -767,7 +780,7 @@ export function snapshotParts(shape) {
     conventions: ['Times are ISO 8601 in UTC.'] };
   parts.push(['x:schema', JSON.stringify(schemaDoc({ leagueName: shape.leagueName, values: shape.sections, about: sampleAbout, meta: sampleMeta,
     rows: { scoreboard: shape.sections.scoreboard, standings: shape.sections.standings, rosters: shape.rosterRows, activity: shape.activity,
-      season: [shape.sections.seasonStats || {}] } }), null, 2) + '\n']);
+      season: [shape.sections.seasonStats || {}], insights: [shape.sections.matchupInsights || {}] } }), null, 2) + '\n']);
   for (const id of shape.teams) {
     const sb = shape.sections.scoreboard.filter((m) => m.home.teamId === id || m.away.teamId === id);
     put('e:scoreboard:' + id, sb); csv('ec:scoreboard:' + id, sb);
@@ -825,7 +838,7 @@ export const SECTION_SOURCES = {
   nflScoreboard: ['scoreboard_digest'], injuries: ['injuries_digest'], news: ['nfl_news'], pointsAllowed: ['llm_export_digest'],
   live: ['live_scoring_digest'], timeline: ['timeline'], history: ['league_history_digest'], records: ['league_history_digest'],
   teamHistory: ['league_history_digest'], headToHead: ['h2h_full_digest'], fortuneTeller: ['ft'], fortuneOdds: ['ft'], fortuneFinishes: ['ft'],
-  fortuneGames: ['ft'], fortunePaths: ['ft'], tradeAnalysis: ['trade_digest'], draftOrder: ['draft_results'], seasonStats: ['season'],
+  fortuneGames: ['ft'], fortunePaths: ['ft'], tradeAnalysis: ['trade_digest'], draftOrder: ['draft_results'], seasonStats: ['season'], matchupInsights: ['insights'],
 };
 const LIVE_SOURCES = new Set(['live_scoring_digest', 'scoreboard_digest']);
 export const REFRESH_FLOOR_MS = 15 * 60000;
@@ -929,6 +942,19 @@ export async function buildSnapshot(env, mem, opts = {}) {
       at.season = Date.parse(ssIndex.builtAt) || null;
     }
   } catch { src.season = null; }
+  // Matchup Insights: its index, every stored week and this week's Live rows, each read again only when it has changed.
+  try {
+    const miSeason = Number((src.league_settings && src.league_settings.seasonId) || 0);
+    const miIndex = miSeason ? await readR2(miKey(miSeason, 'index.json')) : null;
+    if (miIndex) {
+      const weeks = {};
+      await Promise.all((miIndex.weeks || []).map(async (w) => { weeks[w.week] = await readR2(miKey(miSeason, `w${w.week}.json`)); }));
+      const live = miIndex.current ? await readR2(miKey(miSeason, `w${miIndex.current}.live.json`)) : null;
+      // Live rows the step stopped rewriting (no game on any more) are left out.
+      src.insights = { index: miIndex, weeks, live: live && live.on && now - Date.parse(live.builtAt) < 3 * 60000 ? live : null };
+      at.insights = Math.max(Date.parse(miIndex.builtAt) || 0, live ? Date.parse(live.builtAt) || 0 : 0) || null;
+    }
+  } catch { src.insights = null; }
   // The league's own weighting, for Trade Analyzer's breakdown.
   try { src.tradeWeights = (await loadConfig(env)).tradeWeights || {}; } catch { src.tradeWeights = {}; }
   at.ft = Math.max(0, ...[FT_SUMMARY_KEY, FT_PIPELINE_STATUS_KEY, FT_ESPN_ODDS_KEY].map((k) => (mem.docs.get(k) || {}).at || 0)) || null;
@@ -979,6 +1005,7 @@ export async function buildSnapshot(env, mem, opts = {}) {
     phase: shape.phase || null, teams: shape.teams || [], names: shape.names || {}, windows: shape.windows || [], draftLive: Boolean(shape.draftLive),
     leftOut: shape.leftOut || {}, sections, read, refreshed, refreshesToday: mem.refreshes || 0,
     seasonPeriods: Object.keys(shape.seasonPeriods || {}),
+    insightWeeks: Object.keys(shape.insightWeeks || {}).map(Number), insightCurrent: shape.insightCurrent || null,
   };
   const parts = shape.ready ? snapshotParts(shape) : [];
   index.buildMs = Date.now() - t0;
