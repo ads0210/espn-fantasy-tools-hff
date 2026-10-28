@@ -1,7 +1,7 @@
 /**
  * Site API: the /api/v1/ router.
  *
- * Six endpoints, opened by the league's key alone; cookies are never read. Answered first in line, before the
+ * Seven endpoints, opened by the league's key alone; cookies are never read. Answered first in line, before the
  * League Password gate, with the site's settings held 60 seconds per isolate. Every answer is a slice of the
  * prebuilt snapshot plus a small meta block; nothing is built on a request. Each program gets one round of
  * requests per suggested interval, kept by its pace record; a request sooner is refused with too_soon.
@@ -170,7 +170,7 @@ export function visibleSections(cfg) {
   }
   return out;
 }
-const TOOL_NAMES = { 'season-stats': 'Season Statistics', 'live-matchups': 'Live Matchups', 'hall-of-fame': 'Hall of Fame', 'fortune-teller': 'Fortune Teller', 'trade-analyzer': 'Trade Analyzer', 'draft-helper': 'Draft Helper' };
+const TOOL_NAMES = { 'season-stats': 'Season Statistics', 'matchup-insights': 'Matchup Insights', 'live-matchups': 'Live Matchups', 'hall-of-fame': 'Hall of Fame', 'fortune-teller': 'Fortune Teller', 'trade-analyzer': 'Trade Analyzer', 'draft-helper': 'Draft Helper' };
 
 /** Every section's reason for being left out of this answer, in order. */
 export function leftOutList(cfg, index, { logos = false } = {}) {
@@ -230,6 +230,8 @@ export function answerParts(epKey, { csv, team, logos, cfg, index, period = 'who
   if (epKey === 'rosters') return { parts: [(csv ? 'ec:rosters' : 'e:rosters') + (team ? ':' + team : '')], updatedAt: latest('rosters') };
   if (epKey === 'activity') return { parts: [csv ? 'ec:activity' : 'e:activity'], updatedAt: latest('transactions', 'trades') };
   if (epKey === 'season') return { parts: [csv ? `ec:season:${period}:${table}` : `e:season:${period}`], updatedAt: latest('seasonStats') };
+  // /insights: `period` carries the week as wN.
+  if (epKey === 'insights') return { parts: [csv ? `ec:insights:${period}` : `e:insights:${period}`], updatedAt: latest('matchupInsights') };
   // /full: every section its tools allow, in registry order.
   const keys = SECTIONS.filter((s) => s.key !== 'about' && vis.has(s.key) && (s.key !== 'logos' || logos)).map((s) => s.key);
   return { parts: keys.map((k) => (k === 'standings' ? 's:standings' + sim : 's:' + k)), keys, updatedAt: index.builtAt };
@@ -256,7 +258,7 @@ export function answerBody(snap, epKey, { csv, team, logos, cfg, meta, about, pr
     keys.forEach((k, i) => { const b = snap.bytes(parts[i]); if (b) { chunks.push(enc.encode(',"' + k + '":')); chunks.push(b); } });
     chunks.push(enc.encode('}'));
     data = concatBytes(chunks);
-  } else data = snap.bytes(parts[0]) || enc.encode(epKey === 'season' ? '{}' : '[]');
+  } else data = snap.bytes(parts[0]) || enc.encode(epKey === 'season' || epKey === 'insights' ? '{}' : '[]');
   const body = concatBytes([enc.encode('{"ok":true,"data":'), data, enc.encode(',"meta":' + JSON.stringify(meta) + '}')]);
   if (!pretty) return body;
   return enc.encode(JSON.stringify(JSON.parse(new TextDecoder().decode(body)), null, 2) + '\n');
@@ -283,6 +285,7 @@ export function buildAnswer({ snap, cfg, epKey, team = '', csv = false, logos = 
   const meta = {
     endpoint: epKey, apiVersion: 1, league: snap.index.leagueName, season: snap.index.season, week: snap.index.week,
     ...(epKey === 'season' ? { period } : {}),
+    ...(epKey === 'insights' ? { insightsWeek: Number(String(period).slice(1)) || null } : {}),
     updatedAt, refreshEverySeconds: refreshEvery,
     pace: { askEverySeconds: pace.header, site: pace.level, note: pace.note },
     docs: `${origin}/apps/site-api/#${epKey}`,
@@ -362,7 +365,7 @@ export async function handleSiteApi(request, env, ctx, { now = Date.now() } = {}
       'Access-Control-Allow-Headers': 'Authorization, If-None-Match, X-Script-Name', 'Access-Control-Max-Age': '86400' }) });
   }
   if (method !== 'GET' && method !== 'HEAD') return fail(cr, 405, 'method_not_allowed', 'The API only reads.', {}, { Allow: 'GET, HEAD, OPTIONS' });
-  if (!m) return fail(cr, 404, 'not_found', 'There’s no endpoint here. The six are /full, /scoreboard, /standings, /season, /rosters and /activity.');
+  if (!m) return fail(cr, 404, 'not_found', 'There’s no endpoint here. The seven are /full, /scoreboard, /standings, /season, /insights, /rosters and /activity.');
 
   let cfg;
   try { cfg = await apiSettings(env, now); } catch { return fail(cr, 500, 'server_error', 'Something went wrong on the site. Try again shortly.'); }
@@ -471,6 +474,16 @@ export async function handleSiteApi(request, env, ctx, { now = Date.now() } = {}
     if (tq && !csv) return fail(cr, 400, 'bad_request', 'table chooses a CSV table: add format=csv, or leave table out for JSON.');
     if (tq && tq !== 'standings' && tq !== 'records') return fail(cr, 400, 'bad_request', 'table must be standings or records.');
     table = tq || 'standings';
+  }
+  // /insights: Matchup Insights' rows, served only while the tool is visible to members, for a week it holds.
+  if (m.ep.key === 'insights') {
+    if (visibilityOf(cfg, 'matchup-insights') !== VISIBILITY.VISIBLE) return fail(cr, 403, 'not_visible', 'Matchup Insights isn’t visible to members, so its data is left out.');
+    const have = snap.index.insightWeeks || [];
+    if (!have.length) return fail(cr, 503, 'not_ready', 'Matchup Insights appears once it has read this week’s games.');
+    const wq = url.searchParams.get('week');
+    const wk = wq == null || wq === '' ? (snap.index.insightCurrent || have[have.length - 1]) : Number(wq);
+    if (!/^\d+$/.test(String(wk)) || !have.includes(wk)) return fail(cr, 400, 'bad_request', `week must be one of ${have.join(', ')}.`);
+    period = `w${wk}`;
   }
   const logos = logosQ === 'true';
   const keyInfo = keyMeta(sa, ring, match, now);
