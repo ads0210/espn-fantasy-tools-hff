@@ -111,6 +111,9 @@ function normalise(raw) {
     /* Season Statistics (plan D10): whether the home page shows the standings too. Off by default; forced on while
        Season Statistics is not Visible (homeStandingsOf in tools.js). */
     homeStandings: c.homeStandings === true,
+    /* Matchup Insights (plan D39): the banner across each member's matchup card on the home page. On unless switched
+       off, whatever the tool's visibility. */
+    homeBanners: c.homeBanners !== false,
     /* Seconds since the epoch: sign-ins made before this moment no longer count (set when the League Password changes). */
     sessionsFrom: Number.isFinite(c.sessionsFrom) ? c.sessionsFrom : null,
     /* Week 6 (P9): the note from the Site Admin shown once over the home page, and the saved signatures (null: the
@@ -222,7 +225,7 @@ export async function saveConfig(env, patch) {
   const allowed = [
     'leagueId', 'espnS2', 'swid', 'season', 'leaguePrivate', 'historySeasons',
     'leaguePasswordHash', 'adminPasswordHash', 'sessionSecret', 'setupCompletedAt',
-    'toolVisibility', 'toolOrder', 'sessionHours', 'homeStandings', 'sessionsFrom', 'datasetsCheckedVersion', 'tradeWeights', 'fortuneTeller', 'stamps', 'siteApi',
+    'toolVisibility', 'toolOrder', 'sessionHours', 'homeStandings', 'homeBanners', 'sessionsFrom', 'datasetsCheckedVersion', 'tradeWeights', 'fortuneTeller', 'stamps', 'siteApi',
     'adminNote', 'noteSigs',
     'workersOrigin',
   ];
@@ -264,6 +267,7 @@ export function describeConfig(cfg) {
     toolOrder: cfg.toolOrder || null,
     sessionHours: sessionHoursOf(cfg),
     homeStandings: cfg.homeStandings === true,
+    homeBanners: cfg.homeBanners !== false,
     adminNote: cfg.adminNote || null,
     noteSigs: cleanSigs(cfg.noteSigs),
     fortuneTeller: { enabled: Boolean(cfg.fortuneTeller && cfg.fortuneTeller.enabled) },
