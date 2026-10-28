@@ -90,6 +90,16 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
           <ol id="orderRows" class="orderlist"></ol>
           <button class="ghost" id="orderReset" hidden>Reset to the default order</button>
           <div class="msg" id="msgOrder"></div>
+          </div>
+        </div>
+
+        <div class="panel p-home">
+          <button type="button" class="panelhead cfgtoggle" aria-expanded="false" aria-controls="cb-home"><span class="t">Home page display</span><i class="cfgchev" aria-hidden="true"></i></button>
+          <div class="cfgbody" id="cb-home" hidden>
+          <p class="hint">What the home page shows below the team picker, for every member.</p>
+          <span class="lbl2">Matchup banners</span>
+          <div id="homeBnRows"></div>
+          <div class="msg" id="msgHomeBn"></div>
           <span class="lbl2">Standings</span>
           <div id="homeStRows"></div>
           <div class="msg" id="msgHomeSt"></div>
@@ -342,7 +352,7 @@ export function siteConfigPage({ theme, reduceMotion, leagueName }) {
     .cfgsw span.l { color:var(--ink-2); font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.13em; }
     .cfgsw .r { display:flex; align-items:center; gap:10px; font-size:13px; font-weight:700; }
     .cfgsw.locked .sw { opacity:.6; cursor:not-allowed; }
-    .p-api .lbl2, .p-order .lbl2 { display:block; margin:16px 0 8px; font-size:10.5px; font-weight:900; color:var(--ink-2); letter-spacing:.2em; text-transform:uppercase; }
+    .p-api .lbl2, .p-order .lbl2, .p-home .lbl2 { display:block; margin:16px 0 8px; font-size:10.5px; font-weight:900; color:var(--ink-2); letter-spacing:.2em; text-transform:uppercase; }
     .p-api .btnstack { display:flex; flex-direction:column; gap:10px; }
     .p-api .btnstack button { margin-top:0; width:100%; }
     .p-api .btnstack button.minor { padding:12px 14px; }
@@ -458,6 +468,8 @@ function render(r) {
   renderOrder(r.order || { tiles: [], custom: false });
   HOMEST.stored = c.homeStandings === true;
   renderHomeSt();
+  HOMEBN.on = c.homeBanners !== false;
+  renderHomeBn();
   renderSession(c.sessionHours);
   noteRender(c.adminNote || null, c.noteSigs || ['- Site admin']);
   renderWeights((r.config || {}).tradeWeights || {});
@@ -527,7 +539,7 @@ function renderTools(tools) {
         r.tools.forEach(function (t) { vis[t.key] = t.visibility; });
         ORDER.tiles.forEach(function (t) { if (vis[t.key]) t.visibility = vis[t.key]; });
         renderOrder(ORDER);
-        renderHomeSt();
+        renderHomeSt(); renderHomeBn();
       }
     });
   });
@@ -600,6 +612,26 @@ function renderHomeSt() {
     var r = await call('/api/admin/home-standings', { on: !HOMEST.stored });
     note('msgHomeSt', r.ok ? 'Saved.' : (r.error || 'Could not save.'), r.ok ? 'ok' : 'err');
     if (r.ok) { HOMEST.stored = r.stored; renderHomeSt(); var b = document.getElementById('homeStSwitch'); if (b) b.focus({ preventScroll: true }); }
+  });
+}
+
+/* Matchup Insights (plan D39): the banner across each member's matchup card. On by default; it works whatever the
+   tool's visibility, because the rows are worked out in the background either way. */
+var HOMEBN = { on: true };
+function renderHomeBn() {
+  var host = document.getElementById('homeBnRows');
+  if (!host) return;
+  var mi = (ORDER.tiles || []).filter(function (t) { return t.key === 'matchup-insights'; })[0];
+  var vis = mi ? mi.visibility : 'visible';
+  var on = HOMEBN.on;
+  host.innerHTML = '<div class="cfgsw"><span class="l">On the matchup card</span><span class="r">' + (on ? 'On' : 'Off') +
+    '<button class="sw" role="switch" type="button" aria-checked="' + on + '" aria-label="Matchup banners on the matchup card" id="homeBnSwitch"></button></span></div>' +
+    '<p class="hint">The ribbon across the top of each member\u2019s matchup card: a postseason game, Must Win or Win and You\u2019re In, or the most important fact about the member\u2019s game, from Matchup Insights. It works whether Matchup Insights is Visible, Admin-only or Hidden' +
+    (vis !== 'visible' ? ' (it is ' + (vis === 'hidden' ? 'Hidden' : 'Admin-only') + ' now)' : '') + '. Off removes the ribbon from every card.</p>';
+  document.getElementById('homeBnSwitch').addEventListener('click', async function () {
+    var r = await call('/api/admin/home-banners', { on: !HOMEBN.on });
+    note('msgHomeBn', r.ok ? 'Saved.' : (r.error || 'Could not save.'), r.ok ? 'ok' : 'err');
+    if (r.ok) { HOMEBN.on = r.on; renderHomeBn(); var b = document.getElementById('homeBnSwitch'); if (b) b.focus({ preventScroll: true }); }
   });
 }
 
@@ -1073,20 +1105,22 @@ async function call(url, body, pwOverride) {
       ['03', 'Tools have three settings',
        'Visible to the league, admin-only, or hidden. Admin-only tools still appear on the home page with a lock, so the league can see they exist. A tool that arrived in this release is marked New here and in the order below.'],
       ['04', 'Home page order',
-       'Move a tile up or down and the home page follows at once. Reset puts the shipped order back. A tool that arrived in this release is marked New, so you can see where it landed; the home page\u2019s tiles never are. Beneath the list, Standings on the home page shows the league table there as well as on Season Statistics; it stays on while Season Statistics is not Visible.'],
-      ['05', 'Sign-in length',
+       'Move a tile up or down and the home page follows at once. Reset puts the shipped order back. A tool that arrived in this release is marked New, so you can see where it landed; the home page\u2019s tiles never are.'],
+      ['05', 'Home page display',
+       'Matchup banners puts one fact from Matchup Insights across the top of each member\u2019s matchup card; it works even while the tool is not Visible. Standings on the home page shows the league table there as well as on Season Statistics; it stays on while Season Statistics is not Visible.'],
+      ['06', 'Sign-in length',
        'The slider sets how long a member stays signed in before the League Password is asked for again, from one hour to infinite. It applies from the next sign-in. Changing the League Password signs everyone out.'],
-      ['06', 'Note from the Site Admin',
+      ['07', 'Note from the Site Admin',
        'Write a short note for everyone, shown once over the home page. Select words and use the buttons for bold, italic, a colour or a link to one of the site\u2019s pages; the preview shows exactly what members will see. Pick a signature from your saved list, or add, rename and reorder them. Publishing a new note shows it again to everyone; Remove note stops it showing.'],
-      ['07', 'Site API',
+      ['08', 'Site API',
        'Switch the API on or off, see when the key started and when it next changes, replace it now (gently, or at once after a leak), choose how often it is replaced, and whether it may travel in an address. The key itself is on the Site API page.'],
-      ['08', 'Trade Analyzer weighting',
+      ['09', 'Trade Analyzer weighting',
        'Sets what each statistic is worth when the tool judges a deal for your league. Anyone can still move the adjustable ones while they look at a trade; that never changes what you save here.'],
-      ['09', 'Fortune Teller',
+      ['10', 'Fortune Teller',
        'Switch it on and it builds the map by itself as soon as the league is close enough to the end of the regular season, then moves on each week. Check now asks it to look straight away; Rebuild starts the map again from scratch.'],
-      ['10', 'Re-run a pull any time',
+      ['11', 'Re-run a pull any time',
        'Refreshing league data, and re-pulling past seasons, can both be run again whenever you like. Neither loses anything by being repeated.'],
-      ['11', 'Time zone is per person',
+      ['12', 'Time zone is per person',
        'The zone under the gear is yours alone, not a league setting. Everyone picks their own.'],
     ] });
 }
