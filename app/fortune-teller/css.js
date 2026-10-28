@@ -391,6 +391,8 @@ table.ftst tr.dragging td:first-child { box-shadow:0 10px 22px rgba(0,0,0,.5), i
 .owkey i.espnk { display:inline-block; width:14px; height:0; border-top:2px solid color-mix(in srgb,var(--ink) 55%,transparent); margin:0 6px 0 0; vertical-align:middle; }
 .seedby { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 12px; }
 .seedby .ftbtn[aria-pressed="true"] { color:var(--accent); border-color:var(--accent); background:var(--accent-glow); }
+/* Docket K2: the light theme's accent on its glow reads 4.19:1; the deep accent clears 4.5:1. */
+html[data-theme="light"] .seedby .ftbtn[aria-pressed="true"] { color:var(--accent-deep); }
 .owdot { position:absolute; z-index:2; width:10px; height:10px; margin:-5px 0 0 -5px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 3px var(--panel); }
 .owdot.projected { background:var(--panel); border:2px solid var(--sky); }
 .owdot.now { width:14px; height:14px; margin:-7px 0 0 -7px; box-shadow:0 0 0 3px var(--panel), 0 0 0 5px var(--accent), 0 0 16px var(--accent-glow); }
