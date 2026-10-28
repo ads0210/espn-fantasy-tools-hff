@@ -600,9 +600,10 @@ export function applyLiveScoring(digest, live, now = Date.now()) {
  * What the route and the dev preview both send. One function, so a preview
  * cannot show a payload the signed-in page would not.
  */
-export function llmExportPayload(raw, sim = null, season = null) {
-  // Fortune Teller's odds and Season Statistics are laid over here, the one shaping function the route and the preview share.
-  const digest = applySeasonStats(applySimOdds(raw, sim), season);
+export function llmExportPayload(raw, sim = null, season = null, insights = null) {
+  // Fortune Teller's odds, Season Statistics and Matchup Insights are laid over here, the one shaping function the route
+  // and the preview share.
+  const digest = applyInsights(applySeasonStats(applySimOdds(raw, sim), season), insights);
   if (!digest || !digest.export || !Array.isArray(digest.export.teams) || !digest.export.teams.length) {
     return { ok: true, ready: false };
   }
@@ -653,6 +654,34 @@ export function applySeasonStats(digest, season) {
     if (k === 'standings') ex.seasonStats = section;
   }
   if (!('seasonStats' in ex)) ex.seasonStats = section;
+  return { ...digest, export: ex };
+}
+
+/**
+ * Matchup Insights for this week (plan D29), laid over at request time right after `thisWeek`: every game with its
+ * insights, heaviest first, written out with team names, and the week's insights across the league. `week` is the
+ * week as src/apiinsights.js shapes it (insightWeek), or null to leave the section out (not built yet, or the tool not
+ * visible to members). Owner names never appear.
+ */
+export function applyInsights(digest, week) {
+  if (!digest || !digest.export || !week || !Array.isArray(week.games)) return digest;
+  const row = (r) => {
+    const out = { category: r.category, insight: r.label, importance: r.importance, when: r.when, text: r.text };
+    if (r.outcome) out.outcome = r.outcome;
+    return out;
+  };
+  const section = {
+    week: week.week, label: week.label,
+    games: week.games.map((g) => ({ game: `${g.homeTeam} v ${g.awayTeam}`, state: g.state, ...(g.round ? { round: g.round } : {}),
+      ...(g.headline ? { headline: row(g.headline) } : {}), insights: g.insights.map(row) })),
+    acrossTheLeague: (week.acrossTheLeague || []).map(row),
+  };
+  const ex = {};
+  for (const [k, v] of Object.entries(digest.export)) {
+    ex[k] = v;
+    if (k === 'thisWeek') ex.matchupInsights = section;
+  }
+  if (!('matchupInsights' in ex)) ex.matchupInsights = section;
   return { ...digest, export: ex };
 }
 
