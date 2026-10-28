@@ -50,6 +50,10 @@ export function compactExport(doc) {
         // The standings' three columns and the headline records only.
         out.seasonStats = { ...v, records: v.records.filter((r) => r.headline) };
         break;
+      case 'matchupInsights':
+        // Each game's headline and its rows of importance 7 or more (of 10); the week's own rows.
+        out.matchupInsights = { ...v, games: v.games.map((g) => ({ ...g, insights: g.insights.filter((r) => r.importance >= 7) })) };
+        break;
       case 'teams':
         out.teams = v.map(({ seasonMoves, roster, ...t }) => ({ ...t, roster: roster.map(slimPlayer) }));
         break;
