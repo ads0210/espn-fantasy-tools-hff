@@ -1,9 +1,7 @@
 import ToolControls from "../shared/ToolControls.jsx";
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from "react";
 import { PALETTES, BASE_CSS, BACKDROP, TEAM_COOKIE, dateTimeText } from "../../src/ui.js";
-import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamSelect from "../shared/TeamSelect.jsx";
-import Instructions from "../shared/Instructions.jsx";
 import { attachVScroll } from "../../src/vscroll.js";
 import { applyMyTeam } from "./myteam.js";
 import { logEvent } from "../shared/sitelog.js";

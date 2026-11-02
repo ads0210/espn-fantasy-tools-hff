@@ -1,13 +1,11 @@
 import ToolControls from "../shared/ToolControls.jsx";
 import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { PALETTES, BASE_CSS, BACKDROP, pts2, dateTimeText } from "../../src/ui.js";
-import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
 import { weightDays, makeXOf } from "./axis.js";
 import { attachLineHover, LINEHOVER_CSS } from "../shared/linehover.js";
 import { playerMeta, pointsText, projectionShare, pointsDelta, liveClock, gameProgress } from "./gamestate.js";
 import { noteBrake, pollDelay } from "../shared/brake.js";
-import Instructions from "../shared/Instructions.jsx";
 
 /**
  * Live Matchups.

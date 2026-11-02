@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { PALETTES, BASE_CSS, BACKDROP, pts2, dateText, dateTimeText } from "../../src/ui.js";
 import { MATCHUP_CARD_CSS } from "../../src/matchupcard.js";
-import { CATS as CAT_LIST, WEIGHT_MAX, headlineOf, phaseOf, afterName } from "../../src/insights.js";
+import { CATS as CAT_LIST, WEIGHT_MAX, headlineOf, phaseOf, rowsIn, afterName } from "../../src/insights.js";
 import ToolControls from "../shared/ToolControls.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
 import { noteBrake, pollDelay } from "../shared/brake.js";
@@ -295,14 +295,16 @@ function WeekView({ wk, mine, nav, T, rec, ftOpensAfter }) {
   // `g` is the row's game, or null for a row across the league.
   const pass = (r, g) => {
     if (f.cats.size && !f.cats.has(r.cat)) return false;
-    if (f.when === "now" ? (g ? r.when !== phaseOf(g.state) : !lp.has(r.when)) : f.when !== "all" && r.when !== f.when) return false;
+    // Now: a game's rows come through rowsIn (rows carried from before kickoff at their lighter weight, K1).
+    if (f.when === "now" ? (!g && !lp.has(r.when)) : f.when !== "all" && r.when !== f.when) return false;
     if (f.mineOnly && mine != null && !r.teams.includes(mine)) return false;
     if (f.q && !`${textOf(r.parts, T)} ${r.label} ${CAT_LIST[r.cat].label}`.toLowerCase().includes(f.q.toLowerCase())) return false;
     return true;
   };
   const games = useMemo(() => orderGames(wk, mine), [wk, mine]);
+  const gameRows = (g) => (f.when === "now" ? rowsIn(g.rows, g.state) : g.rows).filter((r) => pass(r, g));
   const total = wk.league.length + wk.games.reduce((x, g) => x + g.rows.length, 0);
-  const shownCount = wk.league.filter((r) => pass(r, null)).length + wk.games.reduce((x, g) => x + g.rows.filter((r) => pass(r, g)).length, 0);
+  const shownCount = wk.league.filter((r) => pass(r, null)).length + wk.games.reduce((x, g) => x + gameRows(g).length, 0);
   const league = sortRows(wk.league.filter((r) => pass(r, null)), sort, T);
   // In the default view a league section with nothing for where the week stands is left out.
   const showLeague = wk.league.length > 0 && (league.length > 0 || f.when !== "now" || f.q || f.cats.size || f.mineOnly);
@@ -323,7 +325,7 @@ function WeekView({ wk, mine, nav, T, rec, ftOpensAfter }) {
       )}
       <SecHead>{wk.post ? wk.label : `Week ${wk.week}'s games`}</SecHead>
       <div className="migames">
-        {games.map((g, i) => <Game key={`${wk.week}-${g.id}`} g={g} wk={wk} rec={rec} rows={sortRows(g.rows.filter((r) => pass(r, g)), sort, T)} mine={mine} sort={sort} setSort={setSort} empty={emptyWhy(wk, f, ftOpensAfter, g)} startOpen={i === 0} T={T} />)}
+        {games.map((g, i) => <Game key={`${wk.week}-${g.id}`} g={g} wk={wk} rec={rec} rows={sortRows(gameRows(g), sort, T)} mine={mine} sort={sort} setSort={setSort} empty={emptyWhy(wk, f, ftOpensAfter, g)} startOpen={i === 0} T={T} />)}
       </div>
     </>
   );

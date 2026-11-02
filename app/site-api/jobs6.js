@@ -116,6 +116,16 @@ export function addWeek6Jobs(g) {
       'send(f"Week {week} awards", "\\n".join(lines))\nSTATE.write_text(json.dumps(done + [week]))\n';
   }
 
+  function lineupBody() {
+    return 'team = ask(URL)[0]                       # Front Office\'s page for your team\n' +
+      'week = str(team["week"])\nwas = json.loads(STATE.read_text()) if STATE.exists() else {}\ntold = set(was.get(week, []))\n' +
+      'urgent = [c for c in team["checklist"] if c["level"] == "act now"]\n' +
+      'new = [c for c in urgent if c["key"] + ":" + c["text"] not in told]\n' +
+      'if new:                                  # each problem once a week, until it changes\n' +
+      '    send(f"Lineup check, week {week}", "\\n".join(c["text"] for c in new))\n' +
+      'STATE.write_text(json.dumps({week: sorted(told | {c["key"] + ":" + c["text"] for c in urgent})}))\n';
+  }
+
   /* The close-game watch keeps the pace itself: it runs all game long, like the live score. */
   function pyClose(c, via, name) {
     var p = PREP[via];
@@ -175,6 +185,11 @@ export function addWeek6Jobs(g) {
     if (wins[0]) out.push('😬 Nail-biter: ' + wins[0][0].team + ' beat ' + wins[0][1].team + ' by ' + wins[0][2].toFixed(2));
     return out;
   }
+  function lineupText(c) {
+    var t = (D.frontOffice || []).filter(function (x) { return x.teamId === +c.T; })[0];
+    var urgent = t ? t.checklist.filter(function (x) { return x.level === 'act now'; }).map(function (x) { return x.text; }) : [];
+    return urgent.length ? urgent.slice(0, 3).join('\n') : 'A starter is out: start someone else in his slot.';
+  }
   var phoneAlert = function (app, title, text) { return LOOK.phone(notif(app, title, text)); };
 
   /* ---- one job, any channel ---- */
@@ -209,6 +224,13 @@ export function addWeek6Jobs(g) {
         'Run it once by hand: the first run only remembers where every team stands.',
         'Schedule it every hour: <code>0 * * * * python3 /path/to/playoff_race.py</code> (cron), or Task Scheduler on Windows.']); },
       text: decidedText, head: 'Clinched', stop: STOPFILE() + ' A run refused with <code>pace_changed</code> skips; the next is an hour away.' },
+    lineup: { title: 'A lineup alert before kickoff', have: 'A message when Front Office finds something in your lineup to fix now: a starter ruled out or on a bye, an empty slot, a game moved. Each problem once a week.',
+      runs: 'Every 30 minutes', file: 'lineup_alert.py',
+      code: function (c, via) { return pyScheduled({ c: c, via: via, file: 'lineup_alert.py', desc: 'a message when Front Office finds something in my lineup to fix now.', when: 'Run it every 30 minutes', state: 'lineup',
+        urls: 'URL = "' + U('frontoffice', { team: c.T, name: 'lineup-alert-' + via }) + '"\n', body: lineupBody() }); },
+      steps: function (via) { return PREP[via].setup.concat(['Save the script below as <code>lineup_alert.py</code> (<code>pip install requests</code>). Your team (<code>team=%T%</code>) is filled in. It needs Front Office to be visible to members.',
+        'Schedule it every 30 minutes: <code>*/30 * * * * python3 /path/to/lineup_alert.py</code> (cron), or Task Scheduler on Windows. It tells you about each problem once a week, as soon as it appears.']); },
+      text: lineupText, head: function () { return 'Lineup check, week ' + (WEEK || 1); }, stop: STOPFILE() + ' A run refused with <code>pace_changed</code> skips; the next is 30 minutes away.' },
     awards: { title: 'Weekly awards', have: 'Once a week settles: the top and lowest scores, the blowout, the nail-biter, and the luckiest win and unluckiest loss against the week’s median.',
       runs: 'Tuesday mornings', file: 'weekly_awards.py',
       code: function (c, via) { return pyScheduled({ c: c, via: via, file: 'weekly_awards.py', desc: 'the week\'s awards, once each week has settled.', when: 'Run it on Tuesday mornings', state: 'awards',
@@ -236,7 +258,7 @@ export function addWeek6Jobs(g) {
 
   /* ======================================================================== new platforms */
 
-  var ntfyJobs = jobsFor('ntfy', ['close', 'injury', 'drop', 'decided']);
+  var ntfyJobs = jobsFor('ntfy', ['close', 'injury', 'lineup', 'drop', 'decided']);
   PLATFORMS.push({ key: 'ntfy', name: 'ntfy (phone alerts)', glyph: GL.ntfy, schedule: true,
     stops: 'Writes a SITE_API_STOPPED file and exits; every run checks for it first', jobs: ntfyJobs });
   var tgJobs = jobsFor('telegram', ['close', 'injury', 'drop', 'decided', 'awards']);

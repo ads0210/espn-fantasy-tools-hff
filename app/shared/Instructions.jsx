@@ -57,7 +57,8 @@ export default function Instructions({ open, steps, onClose, label = "How this p
           </div>
           {(steps || []).map(([n, title, body]) => (
             <div className="istep" key={String(n)}>
-              <span className="inum">{n}</span>
+              {/* The site numbers help steps 01…N everywhere (a tool may list them as numbers). */}
+              <span className="inum">{typeof n === "number" ? String(n).padStart(2, "0") : n}</span>
               <span><b>{title}</b><p>{body}</p></span>
             </div>
           ))}

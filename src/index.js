@@ -52,6 +52,8 @@ import { runPrimeBatch, primeStatus, missingDatasetKeys } from './prime.js';
 import { fetchPart } from './espn.js';
 import { fetchScoringPeriod, readSeasonIndex, readSeasonPart, ssKey } from './seasonstep.js';
 import { readInsightIndex, readInsightWeek, readInsightLive, readInsightBanners } from './insightstep.js';
+import { readFoIndex, readFoTeam, overlayLive } from './frontofficestep.js';
+import { foTeamData } from './apifrontoffice.js';
 import { insightWeek } from './apiinsights.js';
 import { seasonPeriod } from './apiseason.js';
 import { liveWeek as seasonLiveFrom } from './seasonlive.js';
@@ -76,7 +78,7 @@ import { started as startedKey, normaliseSiteApi, replaced as replacedKey, dueCh
 import { RELEASE_NOTE_ITEMS } from './release.js';
 import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r241';
+const BUILD_MARKER = 'r253';
 
 
 
@@ -217,6 +219,18 @@ export async function runMinute(rawEnv, { at = Date.now(), via = 'cron', cron = 
       if (new Date(at).getUTCMinutes() % 15 === 3) { try { const c = await loadConfig(env); if (isSetupFinished(c)) await ensureDataset(env, 'positional_ratings', null); } catch { /* read as stored */ } }
       return insightsTick(env, at);
     }, (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false }));
+    // Front Office: every team's page worked out again (every five minutes around games, fifteen otherwise; written only
+    // when it changed), inside the dataset coordinator's 'front_office' object (src/frontofficestep.js). Every fifteen
+    // minutes the sources no page keeps fresh (rosters, weekly projections, injuries) are brought up to date first.
+    await timed('frontoffice', async () => {
+      if (new Date(at).getUTCMinutes() % 15 === 11) {
+        try {
+          const c = await loadConfig(env);
+          if (isSetupFinished(c)) for (const k of ['rosters', 'weekly_projections_digest', 'injuries_digest']) await ensureDataset(env, k, null);
+        } catch { /* read as stored */ }
+      }
+      return frontOfficeTick(env, at);
+    }, (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false }));
     // Week 6 (F2): the hourly reachability check, one dataset a minute (src/datacheck.js).
     await timed('check', async () => {
       const cfg = await loadConfig(env);
@@ -259,6 +273,16 @@ export async function seasonStatsTick(env, at = Date.now(), reason = 'minute') {
   if (!isSetupFinished(cfg)) return null;
   const stub = env.COORDINATOR.get(env.COORDINATOR.idFromName('season_stats'));
   const r = await stub.fetch(`https://coordinator/season-stats?brake=${encodeURIComponent(brakeNow(at).brake)}&reason=${encodeURIComponent(reason)}`);
+  try { return await r.json(); } catch { return { ok: false, error: `status ${r.status}` }; }
+}
+
+/** Ask Front Office's backend step to do this minute's share (src/frontofficestep.js). */
+export async function frontOfficeTick(env, at = Date.now(), reason = 'minute', force = false) {
+  if (!env.COORDINATOR) return null;
+  const cfg = await loadConfig(env);
+  if (!isSetupFinished(cfg)) return null;
+  const stub = env.COORDINATOR.get(env.COORDINATOR.idFromName('front_office'));
+  const r = await stub.fetch(`https://coordinator/front-office?brake=${encodeURIComponent(brakeNow(at).brake)}&reason=${encodeURIComponent(reason)}${force ? '&force=1' : ''}`);
   try { return await r.json(); } catch { return { ok: false, error: `status ${r.status}` }; }
 }
 
@@ -734,9 +758,12 @@ async function route(request, env, ctx) {
     const seasonApi = key === 'season-stats' && path === '/apps/season-stats/api';
     // Matchup Insights' rows: likewise under the tool's own path.
     const insightsApi = key === 'matchup-insights' && path === '/apps/matchup-insights/api';
+    // Front Office's team pages: likewise.
+    const foApi = key === 'front-office' && path === '/apps/front-office/api';
     if (vis === VISIBILITY.HIDDEN) {
       if (seasonApi) return json({ ok: false, error: 'Season Statistics is switched off.' }, 403);
       if (insightsApi) return json({ ok: false, error: 'Matchup Insights is switched off.' }, 403);
+      if (foApi) return json({ ok: false, error: 'Front Office is switched off.' }, 403);
       if (siteBackendApi) return json({ ok: false, error: 'Site Backend is switched off.' }, 403);
       if (siteApiPage) return json({ ok: false, error: 'Site API is switched off.' }, 403, { 'cache-control': 'no-store' });
       return html(shell({
@@ -757,6 +784,7 @@ async function route(request, env, ctx) {
         if (siteApiPage) return json({ ok: false, error: 'locked', locked: true }, 401, { 'cache-control': 'no-store' });
         if (seasonApi) return json({ ok: false, error: 'locked', locked: true }, 401, { 'cache-control': 'no-store' });
         if (insightsApi) return json({ ok: false, error: 'locked', locked: true }, 401, { 'cache-control': 'no-store' });
+        if (foApi) return json({ ok: false, error: 'locked', locked: true }, 401, { 'cache-control': 'no-store' });
         if (isDocument) markPage(request, key, `${tool.name} (Admin Password prompt)`);
         return html(adminGatePage({ tool, theme, reduceMotion }), 200);
       }
@@ -765,6 +793,7 @@ async function route(request, env, ctx) {
     if (siteApiPage) return siteApiPageRoute(request, env, cfg, url, ctx);
     if (seasonApi) return seasonStatsRoute(request, env, cfg, url, ctx);
     if (insightsApi) return insightsRoute(request, env, cfg, url, ctx);
+    if (foApi) return frontOfficeRoute(request, env, cfg, url, ctx);
     if (isDocument) {
       markPage(request, key, tool.name);
       // A shared link being opened: its parameters say so, and nothing else about it is kept.
@@ -818,6 +847,45 @@ async function seasonStatsRoute(request, env, cfg, url, ctx) {
   if (part && sim && sim.byTeam) for (const r of part.standings || []) r.simPct = sim.byTeam[r.team] ?? null;
   return json({ ok: true, ready: Boolean(part), season, index, part, sim: sim ? { state: sim.state, ready: Boolean(sim.byTeam) } : null, live },
     200, { etag, 'cache-control': 'no-cache' });
+}
+
+/* Front Office: a page read may ask for the sources and the step at most every five minutes per isolate. */
+const FO_POKE = { at: 0 };
+const FO_VISIT_SOURCES = ['rosters', 'weekly_projections_digest', 'transaction_digest', 'injuries_digest', 'depth_digest', 'bye_weeks', 'positional_ratings', 'nfl_scoreboard', 'live_scoring_digest'];
+
+/**
+ * One team's Front Office page (the team chosen on the home page, sent as ?team=, D9), as the backend step stored it
+ * (src/frontofficestep.js), with each player's lock, game state and points laid over from the live digest at the
+ * time of asking. Answers 304 to a matching If-None-Match. A read older than five minutes refreshes the sources and
+ * asks the step behind the answer.
+ */
+async function frontOfficeRoute(request, env, cfg, url, ctx) {
+  const season = Number(cfg.season);
+  const now = Date.now();
+  if (now - FO_POKE.at > 5 * 60000 && refreshAllowed(env.BRAKE || 'normal')) {
+    FO_POKE.at = now;
+    const work = (async () => {
+      for (const k of FO_VISIT_SOURCES) { try { await ensureDataset(env, k, null); } catch { /* the step reads what is stored */ } }
+      try { await frontOfficeTick(env, now, 'visit'); } catch { /* the minute's work tries again */ }
+    })();
+    if (ctx && ctx.waitUntil) ctx.waitUntil(work);
+  }
+  const index = await readFoIndex(env, season);
+  const team = Number(url.searchParams.get('team'));
+  if (!index) return json({ ok: true, ready: false, season }, 200, { 'cache-control': 'no-store' });
+  if (!team || !(index.teams || {})[team]) return json({ ok: true, ready: true, season, index, team: null }, 200, { 'cache-control': 'no-store' });
+  const obj = await readFoTeam(env, season, team);
+  if (!obj) return json({ ok: true, ready: false, season, index }, 200, { 'cache-control': 'no-store' });
+  const digest = await readDigest(env, 'live_scoring_digest', ctx).catch(() => null);
+  const liveTag = digest && Number(digest.scoringPeriod || digest.matchupPeriod) === index.week
+    ? fnvTag((digest.games || []).map((g) => `${g.id}:${g.state}:${g.home && g.home.points}:${g.away && g.away.points}`).join('|')) : '-';
+  const minuteTag = Math.floor(now / 60000);
+  const etag = `"fo-${obj.etag}-${liveTag}-${minuteTag}"`;
+  if (request.headers.get('if-none-match') === etag) return new Response(null, { status: 304, headers: { etag, 'cache-control': 'no-cache' } });
+  let doc = null;
+  try { doc = await obj.json(); } catch { doc = null; }
+  if (!doc) return json({ ok: true, ready: false, season, index }, 200, { 'cache-control': 'no-store' });
+  return json({ ok: true, ready: true, season, index, team, page: overlayLive(doc, digest, now) }, 200, { etag, 'cache-control': 'no-cache' });
 }
 
 /* Matchup Insights: a page read may ask for the sources and the step at most every five minutes per isolate. */
@@ -1813,13 +1881,14 @@ async function llmExportRoute(env, ctx, wantFresh = false) {
   const sim = await simOdds(env);
   const season = await seasonForExport(env);
   const insights = await insightsForExport(env);
-  if (!wantFresh || !digest) return json(llmExportPayload(digest, sim, season, insights));
+  const fo = await frontOfficeForExport(env, ctx);
+  if (!wantFresh || !digest) return json(llmExportPayload(digest, sim, season, insights, fo));
   const obj = await ensureDataset(env, 'live_scoring_digest', ctx);
   let live = null;
   if (obj) {
     try { live = await obj.json(); } catch { live = null; }
   }
-  return json(llmExportPayload(applyLiveScoring(digest, live), sim, season, insights));
+  return json(llmExportPayload(applyLiveScoring(digest, live), sim, season, insights, fo));
 }
 
 /** Season Statistics' Whole season for the LLM export, shaped as Site API carries it; null while not built or not visible. */
@@ -1847,6 +1916,29 @@ export async function insightsForExport(env) {
     const live = await readInsightLive(env, season, index.current).catch(() => null);
     const names = Object.fromEntries(Object.entries(index.teams || {}).map(([id, t]) => [id, t.name]));
     return insightWeek(await obj.json(), names, live && live.on && Date.now() - Date.parse(live.builtAt) < 3 * 60000 ? live : null);
+  } catch { return null; }
+}
+
+/** Front Office's pages for every team for the LLM export, shaped as Site API carries them; null while not built or not visible. */
+export async function frontOfficeForExport(env, ctx = null) {
+  try {
+    const cfg = await loadConfig(env);
+    if (visibilityOf(cfg, 'front-office') !== VISIBILITY.VISIBLE) return null;
+    const season = Number(cfg.season);
+    const index = await readFoIndex(env, season);
+    if (!index || !index.teams) return null;
+    const digest = await readDigest(env, 'live_scoring_digest', ctx).catch(() => null);
+    const now = Date.now();
+    const out = [];
+    for (const id of Object.keys(index.teams).map(Number).sort((a, b) => a - b)) {
+      const obj = await readFoTeam(env, season, id);
+      if (!obj) continue;
+      const doc = await obj.json();
+      if (doc.week !== index.week) continue;
+      const d = foTeamData(overlayLive(doc, digest, now));
+      if (d) out.push(d);
+    }
+    return out.length ? out : null;
   } catch { return null; }
 }
 

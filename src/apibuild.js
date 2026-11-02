@@ -27,6 +27,10 @@ import { createEngine } from '../app/trade-analyzer/engine.js';
 import { loadConfig } from './config.js';
 import { seasonPeriod, seasonPeriodKeys, seasonRecordRows, seasonExtras } from './apiseason.js';
 import { insightWeek, insightCsvRows } from './apiinsights.js';
+import { foTeamData, foCsvRows } from './apifrontoffice.js';
+import { overlayLive } from './frontofficestep.js';
+/* Front Office's stored pages (src/frontofficestep.js foKey). */
+const foKey = (season, rest) => `front-office/${season}/${rest}`;
 /* Matchup Insights' stored weeks (src/insightstep.js miKey; repeated here so this module stays free of the step). */
 const miKey = (season, rest) => `matchup-insights/${season}/${rest}`;
 /* Season Statistics' stored objects (src/seasonstep.js ssKey; repeated here so this module stays free of the step). */
@@ -36,7 +40,8 @@ export const SNAPSHOT_KEY = 'site-api/snapshot.bin';
 const MAGIC = 'EFTSNAP1';
 
 /* ---- conventions ------------------------------------------------------------------------ */
-const r1 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 10) / 10 : null);
+/* Points as ESPN keeps them: two decimals (PD38; was one, an audit fix of 30 Oct). */
+const r1 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 100 + 1e-9) / 100 : null);
 const r2 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 100) / 100 : null);
 const frac = (n, dp = 4) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 10 ** dp) / 10 ** dp : null);
 const num = (v) => (v === null || v === undefined || v === '' ? null : (isFinite(Number(v)) ? Number(v) : null));
@@ -679,7 +684,18 @@ export function shapeAll(src, { now = Date.now() } = {}) {
     draftOrder: draftDoc ? shapeDraftOrder(draftDoc, names) : null,
     seasonStats: seasonPeriods.whole || null,
     matchupInsights: null,
+    frontOffice: null,
   };
+  // Front Office's stored team pages (src/frontofficestep.js), with the live overlay laid over as the page does.
+  const foTeams = {};
+  const fo = src.frontOffice || null;
+  if (fo && fo.teams) for (const [id, doc] of Object.entries(fo.teams)) {
+    let d = null;
+    try { d = foTeamData(overlayLive(doc, src.live_scoring_digest, now)); } catch { d = null; }
+    if (d) foTeams[id] = d;
+  }
+  const foList = Object.keys(foTeams).map(Number).sort((a, b) => a - b).map((id) => foTeams[id]);
+  sections.frontOffice = foList.length ? foList : null;
   // Matchup Insights' stored weeks (src/insightstep.js): every week it holds, this week with its Live rows laid over.
   const mi = src.insights || null;
   const insightWeeks = {};
@@ -695,13 +711,14 @@ export function shapeAll(src, { now = Date.now() } = {}) {
     ...(fortune.hasSim && !fortune.hasPlaces ? { fortuneFinishes: 'Appears once Fortune Teller next builds or moves its simulation on a week.' } : {}),
     ...(seasonPeriods.whole ? {} : { seasonStats: 'Appears once the first week of the season has settled.' }),
     ...(insightCurrent ? {} : { matchupInsights: 'Appears once Matchup Insights has read this week’s games.' }),
+    ...(foList.length ? {} : { frontOffice: 'Appears once Front Office has read this week’s rosters.' }),
   };
   const detail = (draftDoc && draftDoc.draftDetail) || {};
   return {
     ready: true,
     leagueName: sections.league.name, season: sections.league.season, week, matchupPeriod, phase: sections.league.phase,
     teams: Object.keys(names).map(Number).sort((a, b) => a - b), names,
-    sections, standingsNoSim, rosterRows: rosters.base, activity: act.activity, leftOut, seasonPeriods, insightWeeks, insightCurrent,
+    sections, standingsNoSim, rosterRows: rosters.base, activity: act.activity, leftOut, seasonPeriods, insightWeeks, insightCurrent, foTeams,
     windows: gameWindows(src.scoreboard_digest), draftLive: Boolean(detail.inProgress),
   };
 }
@@ -770,6 +787,11 @@ export function snapshotParts(shape) {
   }
   // /insights: every stored week, whole, and as CSV (a row per insight).
   for (const [w, wk] of Object.entries(shape.insightWeeks || {})) { put('e:insights:w' + w, wk); csv('ec:insights:w' + w, insightCsvRows(wk)); }
+  // /frontoffice: every team, and each team on its own.
+  if (shape.sections.frontOffice) {
+    put('e:frontoffice', shape.sections.frontOffice); csv('ec:frontoffice', foCsvRows(shape.sections.frontOffice));
+    for (const [id, t] of Object.entries(shape.foTeams || {})) { put('e:frontoffice:' + id, [t]); csv('ec:frontoffice:' + id, foCsvRows([t])); }
+  }
   // The description file, from this league's own data; its address is filled in when handed over.
   const sampleMeta = { endpoint: 'standings', apiVersion: 1, league: shape.leagueName, season: shape.season, week: shape.week,
     updatedAt: '2026-09-28T14:15:08Z', refreshEverySeconds: 300, pace: { askEverySeconds: 60, site: 'normal', note: 'Please ask at most once a minute.' },
@@ -780,7 +802,7 @@ export function snapshotParts(shape) {
     conventions: ['Times are ISO 8601 in UTC.'] };
   parts.push(['x:schema', JSON.stringify(schemaDoc({ leagueName: shape.leagueName, values: shape.sections, about: sampleAbout, meta: sampleMeta,
     rows: { scoreboard: shape.sections.scoreboard, standings: shape.sections.standings, rosters: shape.rosterRows, activity: shape.activity,
-      season: [shape.sections.seasonStats || {}], insights: [shape.sections.matchupInsights || {}] } }), null, 2) + '\n']);
+      season: [shape.sections.seasonStats || {}], insights: [shape.sections.matchupInsights || {}], frontoffice: shape.sections.frontOffice || [] } }), null, 2) + '\n']);
   for (const id of shape.teams) {
     const sb = shape.sections.scoreboard.filter((m) => m.home.teamId === id || m.away.teamId === id);
     put('e:scoreboard:' + id, sb); csv('ec:scoreboard:' + id, sb);
@@ -802,7 +824,7 @@ export function shapeTradeAnalysis(digest, weights) {
   E.setWeights('admin', {});
   const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
   const tag = (p) => `${p.n} (${p.pos}, ${p.tm})`;
-  const r1 = (n) => Math.round((Number(n) || 0) * 10) / 10 + 0;
+  const r1 = (n) => Math.round((Number(n) || 0) * 100 + 1e-9) / 100 + 0;
   const out = [];
   for (const offer of E.crossReference(E.DATA.pending)) {
     if ((offer.teams || 2) !== 2 || offer.b == null) continue;
@@ -838,7 +860,7 @@ export const SECTION_SOURCES = {
   nflScoreboard: ['scoreboard_digest'], injuries: ['injuries_digest'], news: ['nfl_news'], pointsAllowed: ['llm_export_digest'],
   live: ['live_scoring_digest'], timeline: ['timeline'], history: ['league_history_digest'], records: ['league_history_digest'],
   teamHistory: ['league_history_digest'], headToHead: ['h2h_full_digest'], fortuneTeller: ['ft'], fortuneOdds: ['ft'], fortuneFinishes: ['ft'],
-  fortuneGames: ['ft'], fortunePaths: ['ft'], tradeAnalysis: ['trade_digest'], draftOrder: ['draft_results'], seasonStats: ['season'], matchupInsights: ['insights'],
+  fortuneGames: ['ft'], fortunePaths: ['ft'], tradeAnalysis: ['trade_digest'], draftOrder: ['draft_results'], seasonStats: ['season'], matchupInsights: ['insights'], frontOffice: ['frontOffice'],
 };
 const LIVE_SOURCES = new Set(['live_scoring_digest', 'scoreboard_digest']);
 export const REFRESH_FLOOR_MS = 15 * 60000;
@@ -955,6 +977,17 @@ export async function buildSnapshot(env, mem, opts = {}) {
       at.insights = Math.max(Date.parse(miIndex.builtAt) || 0, live ? Date.parse(live.builtAt) || 0 : 0) || null;
     }
   } catch { src.insights = null; }
+  // Front Office: its index and every team's page, each read again only when it has changed.
+  try {
+    const foSeason = Number((src.league_settings && src.league_settings.seasonId) || 0);
+    const foIndex = foSeason ? await readR2(foKey(foSeason, 'index.json')) : null;
+    if (foIndex && foIndex.teams) {
+      const teams = {};
+      await Promise.all(Object.keys(foIndex.teams).map(async (id) => { const d = await readR2(foKey(foSeason, `team-${id}.json`)); if (d && d.week === foIndex.week) teams[id] = d; }));
+      src.frontOffice = { index: foIndex, teams };
+      at.frontOffice = Math.max(0, ...Object.values(teams).map((d) => Date.parse(d.builtAt) || 0)) || null;
+    }
+  } catch { src.frontOffice = null; }
   // The league's own weighting, for Trade Analyzer's breakdown.
   try { src.tradeWeights = (await loadConfig(env)).tradeWeights || {}; } catch { src.tradeWeights = {}; }
   at.ft = Math.max(0, ...[FT_SUMMARY_KEY, FT_PIPELINE_STATUS_KEY, FT_ESPN_ODDS_KEY].map((k) => (mem.docs.get(k) || {}).at || 0)) || null;
@@ -1006,6 +1039,7 @@ export async function buildSnapshot(env, mem, opts = {}) {
     leftOut: shape.leftOut || {}, sections, read, refreshed, refreshesToday: mem.refreshes || 0,
     seasonPeriods: Object.keys(shape.seasonPeriods || {}),
     insightWeeks: Object.keys(shape.insightWeeks || {}).map(Number), insightCurrent: shape.insightCurrent || null,
+    frontOffice: Boolean(shape.sections && shape.sections.frontOffice),
   };
   const parts = shape.ready ? snapshotParts(shape) : [];
   index.buildMs = Date.now() - t0;

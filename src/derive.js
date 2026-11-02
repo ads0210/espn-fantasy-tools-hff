@@ -138,7 +138,7 @@ export function buildInjuryDigest(doc, { maxAgeDays = MAX_AGE_DAYS, now = Date.n
 
 // ESPN's fixed position and NFL-team id conventions, validated against live data.
 const POSITION_MAP = { 1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K', 16: 'D/ST' };
-const PRO_TEAM_MAP = {
+export const PRO_TEAM_MAP = {
   1: 'ATL', 2: 'BUF', 3: 'CHI', 4: 'CIN', 5: 'CLE', 6: 'DAL', 7: 'DEN', 8: 'DET',
   9: 'GB', 10: 'TEN', 11: 'IND', 12: 'KC', 13: 'LV', 14: 'LAR', 15: 'MIA', 16: 'MIN',
   17: 'NE', 18: 'NO', 19: 'NYG', 20: 'NYJ', 21: 'PHI', 22: 'ARI', 23: 'PIT', 24: 'LAC',
@@ -2243,6 +2243,46 @@ export async function buildPlayerFormDigest({ readPart, now = Date.now() }) {
   };
 }
 
+/**
+ * Front Office's weekly projections (src/datasets.js weekly_projections), reduced at once: for every player the
+ * name, position, NFL team, injury, whether he can be dropped, ESPN ownership and its change, where he stands
+ * (on a team, free, on waivers) and, week by week, his projection (pr), his points (ac) and, for the volume note, his
+ * targets (stat 58) and carries (stat 23). Seven reads of several megabytes come down to a few hundred kilobytes.
+ */
+const WEEKLY_PARTS = ['rostered', 'QB', 'RB', 'WR', 'TE', 'DST', 'K'];
+const r2w = (x) => Math.round(Number(x) * 100 + 1e-9) / 100;
+export async function buildWeeklyProjectionsDigest({ readPart, injury = null, now = Date.now() }) {
+  const players = {};
+  let season = 0;
+  for (const part of WEEKLY_PARTS) {
+    let doc = null;
+    try { doc = await readPart(part); } catch { doc = null; }
+    for (const e of (doc && doc.players) || []) {
+      const p = e.player || {};
+      if (p.id == null || players[p.id]) continue;
+      const pr = {}, ac = {}, tg = {}, ca = {};
+      for (const st of p.stats || []) {
+        if (st.statSplitTypeId !== 1 || !st.scoringPeriodId) continue;
+        if (st.seasonId > season) season = st.seasonId;
+        if (st.statSourceId === 1) pr[st.scoringPeriodId] = r2w(st.appliedTotal);
+        else if (st.statSourceId === 0) {
+          ac[st.scoringPeriodId] = r2w(st.appliedTotal);
+          const raw = st.stats || {};
+          if (raw['58']) tg[st.scoringPeriodId] = Number(raw['58']);
+          if (raw['23']) ca[st.scoringPeriodId] = Number(raw['23']);
+        }
+      }
+      const own = p.ownership || {};
+      players[p.id] = {
+        n: p.fullName || '', p: p.defaultPositionId, t: p.proTeamId, i: injury ? injury.pick(p.id, p.injuryStatus || 'ACTIVE') : p.injuryStatus || 'ACTIVE', d: p.droppable === false ? 0 : 1,
+        o: Math.round((Number(own.percentOwned) || 0) * 10) / 10, c: Math.round((Number(own.percentChange) || 0) * 10) / 10,
+        s: e.status || (part === 'rostered' ? 'ONTEAM' : 'FREEAGENT'), tm: e.onTeamId || 0, pr, ac, tg, ca,
+      };
+    }
+  }
+  return { generatedAt: new Date(now).toISOString(), season: season || seasonForDate(new Date(now)), count: Object.keys(players).length, players };
+}
+
 /** The season a date falls in: the NFL year turns over in the spring. */
 function seasonForDate(d) { return d.getUTCMonth() >= 2 ? d.getUTCFullYear() : d.getUTCFullYear() - 1; }
 
@@ -2596,6 +2636,11 @@ export const DERIVATIONS = {
   player_weeks: {
     target: 'player_form_digest',
     buildMulti: buildPlayerFormDigest,
+  },
+  weekly_projections: {
+    target: 'weekly_projections_digest',
+    buildMulti: buildWeeklyProjectionsDigest,
+    injuryCheck: true,
   },
   nfl_leaders: {
     target: 'nfl_leaders_digest',

@@ -13,16 +13,14 @@
  * updated, which is the honest thing to say about a build whose changes nobody
  * outside the repo would notice.
  */
-/* Matchup Insights: drafted at the user's request and approved by the user as written (25 October 2026). It
-   replaces the Season Statistics list (v1.227, also shown for v1.228). */
+/* Front Office: drafted at the user's request and approved by the user as written (30 October 2026). It replaces
+   the Matchup Insights list (v1.241). */
 export const RELEASE_NOTE_ITEMS = [
-  'New tool: Matchup Insights. Every game of the week as a matchup card, with what makes it worth watching: what is at '
-  + 'stake, the rivalry, form, injuries, records within reach, ESPN\u2019s projection, what is happening live and how it '
-  + 'all turned out. Predictions are judged once a game is final, and every week played stays.',
-  'The banner across your matchup card on the home page now comes from Matchup Insights: a postseason game, Must Win, '
-  + 'Win and You\u2019re In, or the most important fact about your game, and it changes as the game goes on.',
-  'Site Configuration has a new Home page display panel, with switches for the matchup banners and for the standings.',
-  'LLM Data Export and Site API now carry each week\u2019s insights.',
+  'New tool: Front Office. Your weekly roster desk, with who to start, a checklist before lock, free agents ranked by '
+  + 'how much they\u2019d help your lineup (each with a player to drop), and the weeks ahead.',
+  'Matchup Insights keeps what still matters on screen once a game starts.',
+  'Site API: Front Office for any team, a lineup alert, and eight new iPhone and iPad jobs.',
+  'LLM Data Export includes your Front Office.',
   'Various bug fixes and performance improvements.',
 ];
 
@@ -35,5 +33,5 @@ export const RELEASE_NOTE_ITEMS = [
  * production package's Step 0): the list is reviewed with the notes, and like them it is cleared or rewritten for the
  * next release. Keys are those in src/tools.js; a test holds every one to a registered tool.
  */
-/* Matchup Insights' release: the new tool carries the tag. */
-export const NEW_TOOLS = ['matchup-insights'];
+/* Front Office's release: the new tool carries the tag. */
+export const NEW_TOOLS = ['front-office'];

@@ -22,6 +22,7 @@ import { sendTally, sendEvents, meteredEnv } from './sitelog.js';
 import { buildSnapshot } from './apibuild.js';
 import { seasonStep } from './seasonstep.js';
 import { insightStep } from './insightstep.js';
+import { frontOfficeStep } from './frontofficestep.js';
 
 const EMPTY_COUNTERS = { requests: 0, sweeps: 0, coalesced: 0, lastSweepAt: null };
 const hourOf = (ms) => Math.floor(ms / 3600000) * 3600000;
@@ -136,6 +137,7 @@ export class DatasetCoordinator {
     if (url.pathname === '/api-snapshot') return this.apiSnapshot(url);
     if (url.pathname === '/season-stats') return this.seasonStats(url);
     if (url.pathname === '/insights') return this.insights(url);
+    if (url.pathname === '/front-office') return this.frontOffice(url);
 
     if (url.pathname !== '/refresh') {
       return json({ ok: false, error: 'unknown coordinator route' }, 404);
@@ -282,6 +284,28 @@ DatasetCoordinator.prototype.insights = async function insights(url) {
     try {
       return await insightStep(this.env, mem, { brake: q.get('brake') || 'normal', reason: q.get('reason') || 'minute',
         force: q.get('force') === 'full' ? 'full' : q.get('force') === '1' });
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err).slice(0, 200) };
+    }
+  })();
+  mem.inFlight = run;
+  let r;
+  try { r = await run; } finally { mem.inFlight = null; }
+  return json(r);
+};
+
+/**
+ * Front Office's backend step (src/frontofficestep.js), in its own coordinator instance ('front_office'): one call at a
+ * time, a call already running is shared.
+ */
+DatasetCoordinator.prototype.frontOffice = async function frontOffice(url) {
+  const q = url.searchParams;
+  const mem = this.foMem || (this.foMem = { inFlight: null });
+  if (mem.inFlight) return json({ ...(await mem.inFlight), coalesced: true });
+  // --- no awaits between the check above and the assignment below ---
+  const run = (async () => {
+    try {
+      return await frontOfficeStep(this.env, mem, { brake: q.get('brake') || 'normal', reason: q.get('reason') || 'minute', force: q.get('force') === '1' });
     } catch (err) {
       return { ok: false, error: String((err && err.message) || err).slice(0, 200) };
     }

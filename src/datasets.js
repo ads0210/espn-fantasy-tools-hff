@@ -162,6 +162,27 @@ const leadersFilter = (season) =>
     },
   });
 
+/* Front Office (plan "The data it draws on"): every scoring period's actual (source 0) and projected (source 1)
+   single-week points for rostered players and, at the depth decided for the tool (D16), the free agents at each
+   position. ESPN answers 400 unless the filter carries a sort. One request per part names every week of the season. */
+export const FO_FREE_DEPTH = { QB: 25, RB: 40, WR: 40, TE: 25, DST: 15, K: 15 };
+const FO_WEEKS = Array.from({ length: 18 }, (_, i) => i + 1);
+export const weeklyFilter = (season, { status, limit, slot = null }) => {
+  const p = {
+    filterStatus: { value: status },
+    limit,
+    sortPercOwned: { sortPriority: slot == null ? 1 : 2, sortAsc: false },
+    filterStatsForSourceIds: { value: [0, 1] },
+    filterStatsForSplitTypeIds: { value: [1] },
+    filterStatsForScoringPeriodIds: { value: FO_WEEKS },
+  };
+  if (slot != null) {
+    p.filterSlotIds = { value: [slot] };
+    p.sortAppliedStatTotal = { sortAsc: false, sortPriority: 1, value: `12${season}` };
+  }
+  return JSON.stringify({ players: p });
+};
+
 /** Convenience: a dataset that is one single call. */
 const one = (url, headers) => () => [{ part: 'main', url, headers }];
 
@@ -345,6 +366,26 @@ export const DATASETS = [
     notes: 'Feeds the Trade Analyzer. Past weeks come from ESPN whenever asked, so a site set up mid-season has them all.',
   },
   {
+    // Front Office: every week's projection and score for rostered players and the free agents worth a look.
+    key: 'weekly_projections',
+    label: 'Weekly projections and scores, every week of the season',
+    group: 'fantasy',
+    timeoutMs: TIMEOUT.LARGE,
+    ttl: TTL.MIN_30,
+    auth: true,
+    tier: 'core',
+    parts: (cfg) => [
+      { part: 'rostered', url: `${leagueBase(cfg)}?view=kona_player_info`, headers: { 'X-Fantasy-Filter': weeklyFilter(cfg.season, { status: ['ONTEAM'], limit: 400 }) } },
+      ...FREE_AGENT_SLOTS.map((s) => ({
+        part: s.part,
+        url: `${leagueBase(cfg)}?view=kona_player_info`,
+        headers: { 'X-Fantasy-Filter': weeklyFilter(cfg.season, { status: ['FREEAGENT', 'WAIVERS'], limit: FO_FREE_DEPTH[s.part], slot: s.slot }) },
+      })),
+    ],
+    expect: 'players',
+    notes: 'Feeds Front Office. Reduced at once to weekly_projections_digest.',
+  },
+  {
     key: 'season_schedule',
     label: 'Season schedule & results (lightweight)',
     group: 'fantasy',
@@ -519,6 +560,17 @@ export const DATASETS = [
     derivedFrom: 'player_weeks',
     parts: () => [{ part: 'main', url: null }],
     notes: 'Built from player_weeks for the Trade Analyzer\'s rows.',
+  },
+  {
+    key: 'weekly_projections_digest',
+    label: 'Weekly projections and scores, reduced',
+    group: 'derived',
+    ttl: TTL.MIN_30,
+    auth: true,
+    tier: 'core',
+    derivedFrom: 'weekly_projections',
+    parts: () => [{ part: 'main', url: null }],
+    notes: 'Built from weekly_projections for Front Office: each player\'s projection and points by week, ownership and status.',
   },
   {
     key: 'depth_digest',

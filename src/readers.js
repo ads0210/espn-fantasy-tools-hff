@@ -92,6 +92,14 @@ const TOOL_READS = {
     datasets: ['season_schedule', 'league_settings', 'standings_digest', 'live_scoring_digest', 'transaction_digest', 'h2h_full_digest',
       'injuries_digest', 'bye_weeks', 'depth_digest', 'league_history_digest', 'positional_ratings', 'nfl_scoreboard'],
   },
+  'front-office': {
+    routes: [['GET', '/apps/front-office/', 'document'], ['GET', '/apps/front-office/api', 'on load, and once a minute while a starter is playing or a lock is within the hour', 60],
+      ['GET', '/api/meta', 'on load'], ['GET', '/api/logo/:team', 'on load']],
+    // Every page is built on the backend from these (src/frontofficestep.js), plus the depth chart Matchup Insights
+    // keeps each week; the live digest is laid over at the time of asking.
+    datasets: ['league_settings', 'rosters', 'season_schedule', 'weekly_projections_digest', 'bye_weeks', 'nfl_scoreboard', 'positional_ratings',
+      'depth_digest', 'injuries_digest', 'transaction_digest', 'standings_digest', 'live_scoring_digest'],
+  },
   'hall-of-fame': {
     routes: [['GET', '/apps/hall-of-fame/', 'document'], ['GET', '/api/hof', 'on load'], ['GET', '/api/meta', 'on load']],
     datasets: ['league_history_digest', 'h2h_full_digest'],

@@ -7,7 +7,7 @@ yours.</p>
 
 <p align="center">
   <img alt="Runs on Cloudflare's free tier" src="https://img.shields.io/badge/runs%20on-Cloudflare%20free%20tier-63FF4A?style=flat-square&labelColor=111713">
-  <img alt="10 tools" src="https://img.shields.io/badge/tools-10-63FF4A?style=flat-square&labelColor=111713">
+  <img alt="11 tools" src="https://img.shields.io/badge/tools-11-63FF4A?style=flat-square&labelColor=111713">
   <img alt="Works with any ESPN league" src="https://img.shields.io/badge/works%20with-any%20ESPN%20league-63FF4A?style=flat-square&labelColor=111713">
 </p>
 
@@ -31,7 +31,7 @@ yours.</p>
 - [On every page: help and settings](#on-every-page-help-and-settings)
 - [The tools](#the-tools)
   - [Draft Helper](#draft-helper) · [Live Matchups](#live-matchups) · [Season Statistics](#season-statistics) · [Matchup Insights](#matchup-insights) ·
-    [Hall of Fame](#hall-of-fame) ·
+    [Front Office](#front-office) · [Hall of Fame](#hall-of-fame) ·
     [Fortune Teller](#fortune-teller) · [Trade Analyzer](#trade-analyzer) · [LLM Data Export](#llm-data-export) ·
     [Site API](#site-api) · [Site Backend](#site-backend)
 - [Site Configuration](#site-configuration)
@@ -54,6 +54,7 @@ any ESPN fantasy football league: your scoring, your roster shape, your playoff 
 | 📈 | [Live Matchups](#live-matchups) | This week's scoreboard, lineups and live win probability | Visible |
 | 📊 | [Season Statistics](#season-statistics) | This season's standings and records, after any week | Visible |
 | 🔍 | [Matchup Insights](#matchup-insights) | What makes every game interesting, before, during and after it | Visible |
+| 🚪 | [Front Office](#front-office) | Your weekly roster desk: who to start, who to pick up, and the weeks ahead | Visible |
 | 🏆 | [Hall of Fame](#hall-of-fame) | Champions, all-time standings and every team's record | Visible |
 | 🔮 | [Fortune Teller](#fortune-teller) | Every way the rest of the season can go, and where each leaves you | Visible |
 | 🤝 | [Trade Analyzer](#trade-analyzer) | Every offer on the table, broken down for both sides | Visible |
@@ -284,6 +285,45 @@ missing, records within reach, ESPN's projection, what happens live and what it 
 - The stakes rows (Must Win, Win and You're In, odds with a win and a loss) come from [Fortune Teller](#fortune-teller)
   once its simulation is running.
 
+### Front Office
+
+*Your weekly roster desk: who to start, who to pick up, and the weeks ahead.* Everything about your own roster in one
+place, worked out from ESPN's projections for every week left, your league's lineup and its rules.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/front-office-dark.webp">
+  <img alt="Front Office: your lineup against the best possible and your opponent, the checklist before lock and the player cards" src="docs/images/front-office-light.webp">
+</picture>
+
+**For members**
+
+- **Your team** is the one chosen on the home page. The top of the page sets your lineup's projection against the best
+  lineup your roster could field and your opponent's.
+- **This week**: every starter as a card in his slot's colour, with his projection, his game, how the defence he faces
+  ranks against his position, notes worth knowing (running hot, a teammate out, a shootout, a soft matchup and more),
+  and **Start … instead** when someone on your bench projects 2.00 or more higher, or a note makes him worth a look.
+  Open any card with the arrow at its foot for his season so far against his projections, this week's game in full,
+  the next three weeks and how he compares with everyone who could play his slot.
+- **Before lock**: a checklist, most urgent first: a starter ruled out or on a bye, an empty slot, a game moved, a
+  better start on the bench, an open IR spot. Once the first game kicks off, the slots still open for a late swap are
+  listed with the next lock.
+- **Pickups**: free agents ranked by how much they would add to *your* lineups, weighted towards the next three weeks,
+  then the rest of the season and the postseason weeks. Each comes with the player to drop for him (the least valuable
+  one who leaves no hole in the next three weeks) and your place in the waiver order. After them come **bench
+  upgrades**: players who would not start for you but project better than a bench player at their position, who is
+  the suggested drop. They rank below pickups that would start.
+- **Weeks ahead**: every week left, with the best lineup your roster can field against your opponent's, the slots you
+  cannot fill (byes, injuries), your postseason weeks and players worth stashing for them.
+- **The race**: once [Fortune Teller](#fortune-teller) is running late in the season, Weeks ahead also shows your
+  playoff odds now, with a win and with a loss this week, and if you win out, your biggest game left, and the other
+  games this week worth rooting in. It appears only while Fortune Teller is visible to members.
+
+**For whoever administers the site**
+
+- Visible by default. Every team's page is worked out in the background every five minutes while games are on or
+  near, and every fifteen otherwise, so opening it costs almost nothing.
+- It only advises: nothing on the page changes a lineup or makes a claim on ESPN.
+
 ### Hall of Fame
 
 *Champions, all-time standings and every team's record.* The league's record book, built from every season it has
@@ -401,11 +441,12 @@ a page that shows how to use it on the tools people already have.
 **For members**
 
 - **The league's key** opens the API and nothing else on the site. It shows behind dots until you press **Show**.
-- **Seven addresses** answer everything: the scoreboard, the standings, [Season Statistics](#season-statistics) for any
-  period, [Matchup Insights](#matchup-insights) for any week, the rosters, league activity, and one for all of it. **Try it** shows exactly what a program gets.
-- **Guides for sixteen platforms and seventy-three jobs**: Google Sheets, Excel, Python, JavaScript, PowerShell, a Mac or
+- **Eight addresses** answer everything: the scoreboard, the standings, [Season Statistics](#season-statistics) for any
+  period, [Matchup Insights](#matchup-insights) for any week, [Front Office](#front-office) for any team, the rosters,
+  league activity, and one for all of it. **Try it** shows exactly what a program gets.
+- **Guides for sixteen platforms and eighty-two jobs**: Google Sheets, Excel, Python, JavaScript, PowerShell, a Mac or
   Linux shell, iPhone and iPad, Android, Home Assistant, Discord or Slack, your calendar, **ntfy** phone alerts,
-  Telegram, GroupMe, desk and TV displays, and dashboards and SQL. Close-game alerts, injury changes, notable drops,
+  Telegram, GroupMe, desk and TV displays, and dashboards and SQL. Close-game alerts, lineup alerts before kickoff, apps of your own on an iPhone (your matchup live, Front Office, the standings offline, a picture of your week to share, a Siri briefing), injury changes, notable drops,
   clinched and eliminated posts, weekly awards, a desk scoreboard, a bye-week planner and more. Each job has its steps,
   its code with the key and your team filled in, and a picture of it working.
 - **How often to ask.** Programs should ask about once a minute; the site slows that when it is busy and says so in

@@ -26,6 +26,7 @@ import { normaliseSiteApi } from './apikey.js';
 import { SITE_API_PANELS } from './sbapi.js';
 import { ssKey, RECHECK_AFTER_MS } from './seasonstep.js';
 import { miKey } from './insightstep.js';
+import { foKey } from './frontofficestep.js';
 import { homeStandingsOf } from './tools.js';
 import {
   C, B, worst, hourOf, utcMidnight, median, ttlText, upstream, countEvents, eventsSince, groupEvents, latestEvents, sumReq,
@@ -37,6 +38,7 @@ const P = (id, title, def) => ({ id, title, ...def });
 /* Season Statistics' stored state, index and weeks, read as stored (src/seasonstep.js). */
 const ssJson = async (src, ctx, rest) => src.r2json(ssKey(Number(ctx.cfg.season), rest));
 const miJson = async (src, ctx, rest) => src.r2json(miKey(Number(ctx.cfg.season), rest));
+const foJson = async (src, ctx, rest) => src.r2json(foKey(Number(ctx.cfg.season), rest));
 const DAY = 86400000;
 /** A trade's status in the words the home page's league activity uses (a proposal pulled by its proposer is withdrawn). */
 export const TRADE_STATUS = { completed: 'Completed', on_the_table: 'On the table', pending_approval: 'Pending approval', rejected: 'Rejected', cancelled: 'Withdrawn', expired: 'Expired' };
@@ -599,6 +601,35 @@ const OWN = {
             C.txt(x ? (x.tier === 1 ? 'the postseason game' : x.tier === 2 ? 'Fortune Teller' : `a weight ${x.row ? x.row.weight : ''} row`) : '\u2014')]))),
             B.kv([['Week', C.n(b.week)], ['Worked out', C.time(b.builtAt)]]),
             B.note('One banner a team: a postseason game\u2019s round, then Must Win or Win and You\u2019re In, then the team\u2019s weightiest row of weight 7 or more (of 10) for the game\u2019s phase.')];
+        },
+      }),
+    ],
+  },
+
+  'front-office': {
+    panels: [
+      P('o-pages', 'Team pages', {
+        sum: async (src, ctx) => { const st = await foJson(src, ctx, 'state.json'); return [null, st && st.builtAt ? `week ${st.week}, worked out ${st.builds || 0} time${st.builds === 1 ? '' : 's'}` : 'not built yet']; },
+        body: async (src, ctx) => {
+          const [st, ix] = await Promise.all([foJson(src, ctx, 'state.json'), foJson(src, ctx, 'index.json')]);
+          if (!st || !st.builtAt) return [B.empty('No team page has been built yet. The first are built the minute after the site has rosters and the weekly projections.')];
+          const T = (ix && ix.teams) || {};
+          return [B.kv([['Week', C.n(st.week)], ['Last worked out', C.time(st.builtAt)], ['How long it took', C.txt(`${st.ms || 0} ms`)], ['Worked out again every', C.txt(st.every === 300000 ? '5 minutes (a game is on or near)' : '15 minutes')],
+              ['Pages written in all', C.n(st.writes || 0)], ['Last problem', C.txt(st.lastError || 'none')]]),
+            B.table([['Team'], ['Page fingerprint']], Object.entries(st.hashes || {}).map(([id, h]) => B.row([C.txt((T[id] || {}).name || id), C.txt(h)]))),
+            B.note('Every team\u2019s page is worked out again on that schedule and written only when something on it changed. Each player\u2019s lock and live points are laid over when a page is asked for.')];
+        },
+      }),
+      P('o-proj', 'Weekly projections', {
+        sum: async (src) => { const d = await src.digest('weekly_projections_digest'); return [null, d ? `${d.count || 0} players` : 'not stored yet']; },
+        body: async (src, ctx) => {
+          const d = await src.digest('weekly_projections_digest');
+          const r = ctx.rowByKey.weekly_projections_digest;
+          if (!d) return [B.empty('The weekly projections have not been read yet.')];
+          const by = {};
+          for (const p of Object.values(d.players || {})) { const k = p.s === 'ONTEAM' ? 'On a team' : p.s === 'WAIVERS' ? 'On waivers' : 'Free agent'; by[k] = (by[k] || 0) + 1; }
+          return [B.kv([['Players', C.n(d.count || 0)], ...Object.entries(by).map(([k, v]) => [k, C.n(v)]), ['Digest', C.bytes(r ? r.bytes : 0)], ['Built', C.time(d.generatedAt)]]),
+            B.note('One read for rostered players and one per position for free agents, every week of the season at once; each player\u2019s projection and points by week are kept.')];
         },
       }),
     ],

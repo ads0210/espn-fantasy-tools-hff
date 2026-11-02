@@ -118,7 +118,7 @@ const TEN = {
   I41: 4, I79: 4, I80: 4, I163: 4, I102: 4, I27: 6, I28: 6, I115: 6, I129: 7,
 };
 /* The rules' version: raise it with any change to what a row says or weighs, so played weeks are rebuilt once with it. */
-export const RULES_VERSION = 10;
+export const RULES_VERSION = 11;
 export const WEIGHT_MAX = 10;
 export const BANNER_MIN = 7;
 const CAP = new Set(['I132', 'I186', 'I178', 'I59']);
@@ -141,7 +141,35 @@ function row(type, o) {
   let weight = Math.max(1, Math.min(WEIGHT_MAX, baseWeight(type) + 2 * (o.bump || 0) + (o.adj || 0)));
   if (CAP.has(type)) weight = Math.min(CAP_WEIGHT, weight);
   return { type, cat, label, weight, when: o.when || when, teams: o.teams || [],
-    about: o.about || 'matchup', parts: o.parts, predict: PREDICTS.has(type) ? (o.predict || null) : null, outcome: null };
+    about: o.about || 'matchup', parts: o.parts, predict: PREDICTS.has(type) ? (o.predict || null) : null, outcome: null,
+    ...(o.until ? { until: o.until } : {}) };
+}
+
+/* ------------------------------------------------------------------ rows across phases (docket K1, 30 Oct) */
+/* A Before row that stays true once the game is on shows in Live too, two points lighter so the live rows lead; one
+   about a player shows only until his own kickoff (the row's `until`). A few facts the result cannot change show
+   after the final as well. Nothing is copied: the stored row keeps its phase, and each view weighs it on reading. */
+export const CARRY_DROP = 2;
+const CARRY_LIVE = new Set(['I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I8', 'I10', 'I11', 'I12', 'I13', 'I14', 'I16', 'I19', 'I20', 'I21', 'I22',
+  'I178', 'I221', 'I223', 'I24', 'I25', 'I26', 'I27', 'I28', 'I29', 'I31', 'I37', 'I38', 'I41', 'I42', 'I43', 'I45', 'I46', 'I47', 'I48', 'I49',
+  'I51', 'I52', 'I53', 'I56', 'I57', 'I59', 'I60', 'I115', 'I116', 'I119', 'I128', 'I129', 'I104', 'I105', 'I107', 'I174', 'I91', 'I164', 'I165']);
+const CARRY_PLAYER = new Set(['I79', 'I80', 'I81', 'I82', 'I83', 'I97', 'I98', 'I99', 'I100', 'I102', 'I103', 'I106', 'I108', 'I109', 'I181', 'I182']);
+const CARRY_POST = new Set(['I51', 'I52', 'I53', 'I57', 'I91', 'I164', 'I165', 'I178']);
+export const CARRIES = { live: CARRY_LIVE, player: CARRY_PLAYER, post: CARRY_POST };
+/** A row's weight in a phase: its own in its own phase, two points less where it carries over, null where it does not show. */
+export function weightIn(r, phase, now = Date.now()) {
+  if (!r || r.when === phase) return r ? r.weight : null;
+  if (r.when !== 'pre') return null;
+  const ok = phase === 'live' ? CARRY_LIVE.has(r.type) || (CARRY_PLAYER.has(r.type) && Boolean(r.until) && Date.parse(r.until) > now)
+    : phase === 'post' && CARRY_POST.has(r.type);
+  return ok ? Math.max(1, r.weight - CARRY_DROP) : null;
+}
+/** The rows a game shows for where it stands (the page's Now), each at its weight there; carried rows are marked. */
+export function rowsIn(rows, state, now = Date.now()) {
+  const phase = phaseOf(state);
+  const out = [];
+  for (const r of rows || []) { const w = weightIn(r, phase, now); if (w != null) out.push(w === r.weight && r.when === phase ? r : { ...r, weight: w, carried: true }); }
+  return out;
 }
 
 /* ------------------------------------------------------------------ the week's facts */
@@ -450,12 +478,12 @@ export function lineupRows(M, game, opts = {}) {
     const later = notYet(firstKick(sd)) ? -1 : 0;
     // Availability.
     for (const p of st) {
-      if ((p.injury === 'QUESTIONABLE' || p.injury === 'DOUBTFUL') && unplayed(p)) out.push(row('I102', { teams: [id], about: 'player', parts: [T(id), ' starts ', name(p), `, listed ${p.injury === 'DOUBTFUL' ? 'Doubtful' : 'Questionable'}.`] }));
-      if (isOut(p)) out.push(row('I103', { teams: [id], about: 'player', bump: notYet(p.kickoff) ? -1 : 0, parts: [T(id), ' starts ', name(p), ', who is listed Out.'] }));
-      if (p.injury === 'INJURY_RESERVE') out.push(row('I106', { teams: [id], about: 'player', parts: [T(id), ' has ', name(p), ', on injured reserve, in its starting lineup.'] }));
+      if ((p.injury === 'QUESTIONABLE' || p.injury === 'DOUBTFUL') && unplayed(p)) out.push(row('I102', { teams: [id], about: 'player', until: p.kickoff, parts: [T(id), ' starts ', name(p), `, listed ${p.injury === 'DOUBTFUL' ? 'Doubtful' : 'Questionable'}.`] }));
+      if (isOut(p)) out.push(row('I103', { teams: [id], about: 'player', until: p.kickoff, bump: notYet(p.kickoff) ? -1 : 0, parts: [T(id), ' starts ', name(p), ', who is listed Out.'] }));
+      if (p.injury === 'INJURY_RESERVE') out.push(row('I106', { teams: [id], about: 'player', until: p.kickoff, parts: [T(id), ' has ', name(p), ', on injured reserve, in its starting lineup.'] }));
       if (M.byes.byes && M.byes.byes[p.nfl] === week) out.push(row('I105', { teams: [id], about: 'player', bump: later, parts: [T(id), ' starts ', name(p), ', whose team is on bye.'] }));
       const inj = M.injuries[String(p.id)];
-      if (inj && p.injury && unplayed(p) && capture - Date.parse(inj.date) < 36 * 3600e3) out.push(row('I109', { teams: [id], about: 'player', parts: ['Status change: ', name(p), ` was listed ${inj.status.charAt(0) + inj.status.slice(1).toLowerCase().replace('_', ' ')} on `, { d: inj.date }, '.'] }));
+      if (inj && p.injury && unplayed(p) && capture - Date.parse(inj.date) < 36 * 3600e3) out.push(row('I109', { teams: [id], about: 'player', until: p.kickoff, parts: ['Status change: ', name(p), ` was listed ${inj.status.charAt(0) + inj.status.slice(1).toLowerCase().replace('_', ' ')} on `, { d: inj.date }, '.'] }));
     }
     const slots = M.startSlots.reduce((x, [, n]) => x + n, 0);
     const empty = slots - st.length;
@@ -467,7 +495,7 @@ export function lineupRows(M, game, opts = {}) {
     if (onBye.length >= 2) out.push(row('I107', { teams: [id], about: 'team', parts: ['Bye crunch: ', T(id), ` has ${num(onBye.length)} regular starters on bye this week.`] }));
     const healthyBench = (pos) => sd.bench.filter((p) => p.pos === pos && !['OUT', 'INJURY_RESERVE', 'DOUBTFUL'].includes(p.injury)).length;
     for (const p of st) if ((p.injury === 'QUESTIONABLE' || p.injury === 'DOUBTFUL') && unplayed(p) && healthyBench(p.pos) === 0 && Date.parse(p.kickoff) - Date.parse(sd.starters.reduce((m, x) => (x.kickoff && x.kickoff < m ? x.kickoff : m), '9999')) > 3 * 3600e3)
-      out.push(row('I108', { teams: [id], about: 'player', parts: [name(p), ' is questionable for a late kickoff and ', T(id), ` has no healthy ${p.pos} on the bench to cover.`] }));
+      out.push(row('I108', { teams: [id], about: 'player', until: p.kickoff, parts: [name(p), ' is questionable for a late kickoff and ', T(id), ` has no healthy ${p.pos} on the bench to cover.`] }));
     for (const pos of ['RB', 'WR']) if (st.filter((p) => p.pos === pos).length >= 2 && healthyBench(pos) === 0) out.push(row('I111', { teams: [id], about: 'team', parts: [T(id), ` has no healthy ${pos} on its bench.`] }));
     // Players and lineups.
     if (s70 && s70.entries[0] && st.some((p) => p.id === s70.entries[0].pid)) out.push(row('I77', { teams: [id], about: 'player', parts: [T(id), ' starts the league’s top scorer, ', P(s70.entries[0].player.name, s70.entries[0].player.pos), ' (', V(pts(s70.entries[0].value)), ').'] }));
@@ -476,25 +504,25 @@ export function lineupRows(M, game, opts = {}) {
       if (tp && tp.entries[0] && tp.entries[0].pid === p.id && !(s70 && s70.entries[0] && s70.entries[0].pid === p.id)) out.push(row('I78', { teams: [id], about: 'player', parts: [T(id), ' starts the top-scoring ', p.pos, ' in the league this season, ', name(p), ' (', V(pts(tp.entries[0].value)), ').'] }));
       const o = M.nfl[p.nfl];
       const pr = o && M.posr[posOf(p)] && M.posr[posOf(p)][o.opp];
-      if (pr && unplayed(p) && p.pos !== 'D/ST' && p.pos !== 'K' && pr.rank >= 30) out.push(row('I79', { teams: [id], about: 'player',
+      if (pr && unplayed(p) && p.pos !== 'D/ST' && p.pos !== 'K' && pr.rank >= 30) out.push(row('I79', { teams: [id], about: 'player', until: p.kickoff,
         parts: [name(p), ' faces ', `${o.opp}, the defence that gives up the ${pr.rank === 32 ? 'most' : `${ord(33 - pr.rank)}-most`} points to ${p.pos}s in this league’s scoring (`, V(pts(pr.avg)), ' a game).'] }));
-      if (pr && unplayed(p) && p.pos !== 'D/ST' && p.pos !== 'K' && pr.rank <= 2) out.push(row('I80', { teams: [id], about: 'player',
+      if (pr && unplayed(p) && p.pos !== 'D/ST' && p.pos !== 'K' && pr.rank <= 2) out.push(row('I80', { teams: [id], about: 'player', until: p.kickoff,
         parts: [name(p), ' faces ', `${o.opp}, the ${pr.rank === 1 ? 'stingiest' : '2nd-stingiest'} defence against ${p.pos}s (`, V(pts(pr.avg)), ' a game).'] }));
-      if (pr && unplayed(p) && p.pos === 'D/ST' && pr.rank >= 30) out.push(row('I81', { teams: [id], about: 'player',
+      if (pr && unplayed(p) && p.pos === 'D/ST' && pr.rank >= 30) out.push(row('I81', { teams: [id], about: 'player', until: p.kickoff,
         parts: [name(p), ` plays ${o.opp}, the offence that gives up the ${pr.rank === 32 ? 'most' : `${ord(33 - pr.rank)}-most`} D/ST points (`, V(pts(pr.avg)), ' a game).'] }));
     }
     const qb = st.find((p) => p.pos === 'QB');
     if (qb) {
       const mates = st.filter((p) => p !== qb && p.nfl === qb.nfl && (p.pos === 'WR' || p.pos === 'TE'));
-      if (mates.length) out.push(row('I82', { teams: [id], about: 'team', parts: ['A stack: ', T(id), ' starts ', name(qb), ' with ', ...mates.flatMap((m, i) => [i ? ' and ' : '', name(m)]), ` (${qb.nfl}).`] }));
+      if (mates.length) out.push(row('I82', { teams: [id], about: 'team', until: qb.kickoff, parts: ['A stack: ', T(id), ' starts ', name(qb), ' with ', ...mates.flatMap((m, i) => [i ? ' and ' : '', name(m)]), ` (${qb.nfl}).`] }));
       const oq = opp.starters.find((p) => p.pos === 'QB');
-      if (id === h && oq && M.nfl[qb.nfl] && M.nfl[qb.nfl].opp === oq.nfl) out.push(row('I100', { teams: [h, a], about: 'player', parts: ['QB duel: ', name(qb), ' and ', name(oq), ` meet in ${M.nfl[qb.nfl].key}.`] }));
+      if (id === h && oq && M.nfl[qb.nfl] && M.nfl[qb.nfl].opp === oq.nfl) out.push(row('I100', { teams: [h, a], about: 'player', until: qb.kickoff, parts: ['QB duel: ', name(qb), ' and ', name(oq), ` meet in ${M.nfl[qb.nfl].key}.`] }));
       const big = Object.values(M.nfl).filter((g) => g.overUnder).sort((x, y) => y.overUnder - x.overUnder)[0];
-      if (big && unplayed(qb) && (qb.nfl === big.home || qb.nfl === big.away)) out.push(row('I181', { teams: [id], about: 'player', parts: [name(qb), ` plays in the week's highest over/under game, ${big.key} (`, V(String(big.overUnder)), ').'] }));
+      if (big && unplayed(qb) && (qb.nfl === big.home || qb.nfl === big.away)) out.push(row('I181', { teams: [id], about: 'player', until: qb.kickoff, parts: [name(qb), ` plays in the week's highest over/under game, ${big.key} (`, V(String(big.overUnder)), ').'] }));
     }
     const dst = opp.starters.find((p) => p.pos === 'D/ST');
     if (dst) for (const p of st.filter((x) => ['QB', 'RB', 'WR', 'TE'].includes(x.pos))) {
-      if (M.nfl[p.nfl] && M.nfl[p.nfl].opp === dst.nfl && unplayed(p)) out.push(row('I83', { teams: [id, other(id)], about: 'player', parts: ['Facing each other: ', T(id), "'s ", name(p), ' plays against ', T(other(id)), "'s ", name(dst), '.'] }));
+      if (M.nfl[p.nfl] && M.nfl[p.nfl].opp === dst.nfl && unplayed(p)) out.push(row('I83', { teams: [id, other(id)], about: 'player', until: p.kickoff, parts: ['Facing each other: ', T(id), "'s ", name(p), ' plays against ', T(other(id)), "'s ", name(dst), '.'] }));
     }
     // Player form from the box scores.
     for (const p of st) {
@@ -506,15 +534,15 @@ export function lineupRows(M, game, opts = {}) {
       const last = pw.weeks[week - 1];
       if (last && last.proj >= 5 && p.proj >= 10 && p.proj >= last.proj * 1.3) out.push(row('I89', { teams: [id], about: 'player', parts: ['Rising projection: ', name(p), ' is projected for ', V(pts(p.proj)), `, up ${Math.round((p.proj / last.proj - 1) * 100)}% on last week.`] }));
       const wks = Object.entries(pw.weeks).map(([w, x]) => ({ w: Number(w), ...x })).filter((x) => x.slot !== 20 && x.slot !== 21 && x.w < week);
-      if (wks.length >= 3) { const best = wks.sort((x, y) => y.pts - x.pts)[0]; if (best.opp === other(id) && best.pts >= 15) out.push(row('I99', { teams: [id, other(id)], about: 'player', parts: [name(p), ` had his best week of the season against `, T(other(id)), ': ', V(pts(best.pts)), ` in week ${best.w}.`] })); }
+      if (wks.length >= 3) { const best = wks.sort((x, y) => y.pts - x.pts)[0]; if (best.opp === other(id) && best.pts >= 15) out.push(row('I99', { teams: [id, other(id)], about: 'player', until: p.kickoff, parts: [name(p), ` had his best week of the season against `, T(other(id)), ': ', V(pts(best.pts)), ` in week ${best.w}.`] })); }
       // Former player: on the other team's roster earlier this season.
       const held = M.heldBy[p.id] || {};
       const before = Object.entries(held).filter(([w, t]) => Number(w) < week && t === other(id));
       if (before.length) out.push(row('I91', { teams: [id, other(id)], about: 'player', parts: ['Former player: ', T(id), ' starts ', name(p), `, who was on `, T(other(id)), `'s roster until week ${Math.max(...before.map(([w]) => Number(w)))}.`] }));
       const d = M.depth[p.id], d0 = (M.depthBefore || {})[p.id];
-      if (d && d0 && d.d >= 2 && d0.d < d.d && ['RB', 'WR', 'TE'].includes(p.pos) && p.proj >= 8) out.push(row('I98', { teams: [id], about: 'player', parts: ['Depth chart: ', name(p), ` has slipped from ${ord(d0.d)} to ${ord(d.d)} at ${p.pos} on ${p.nfl}'s chart.`] }));
+      if (d && d0 && d.d >= 2 && d0.d < d.d && ['RB', 'WR', 'TE'].includes(p.pos) && p.proj >= 8) out.push(row('I98', { teams: [id], about: 'player', until: p.kickoff, parts: ['Depth chart: ', name(p), ` has slipped from ${ord(d0.d)} to ${ord(d.d)} at ${p.pos} on ${p.nfl}'s chart.`] }));
       const wasIr = [week - 1, week - 2].some((w) => pw.weeks[w] && pw.weeks[w].slot === 21 && pw.weeks[w].team === id);
-      if (wasIr) out.push(row('I97', { teams: [id], about: 'player', parts: ['Back from injury: ', name(p), ' starts after time on injured reserve.'] }));
+      if (wasIr) out.push(row('I97', { teams: [id], about: 'player', until: p.kickoff, parts: ['Back from injury: ', name(p), ' starts after time on injured reserve.'] }));
     }
     if (s86 && s86.entries[0] && s86.entries[0].team === other(id)) {
       const e = s86.entries[0];
@@ -569,7 +597,7 @@ export function lineupRows(M, game, opts = {}) {
   for (const id of [h, a]) for (const p of side[id].starters.filter((x) => (x.pos === 'K' || x.pos === 'QB') && unplayed(x))) {
     const g = M.nfl[p.nfl];
     const wx = g && !g.indoor && g.weather;
-    if (wx && (/rain|snow|storm|shower|wind/i.test(wx.displayValue || '') || wx.temperature <= 32)) out.push(row('I182', { teams: [id], about: 'player',
+    if (wx && (/rain|snow|storm|shower|wind/i.test(wx.displayValue || '') || wx.temperature <= 32)) out.push(row('I182', { teams: [id], about: 'player', until: p.kickoff,
       parts: ['Weather: ', String(wx.displayValue || '').toLowerCase(), ` and ${wx.temperature}\u00b0 forecast where `, name(p), ` plays (${g.key}).`] }));
   }
   const allSt = [...H.starters, ...A.starters].filter((p) => p.id != null);
@@ -969,9 +997,13 @@ export function bracketRows(M, fx, b) {
 /* A game's phase (round 8): what its rows are shown for by default. Final -> After the final, live -> Live, else Before. */
 export const phaseOf = (state) => (state === 'final' ? 'post' : state === 'live' ? 'live' : 'pre');
 /** A game's headline: its weightiest row of the game's phase (D48 for a finished game), else its weightiest row. */
-export function headlineOf(rows, state) {
+export function headlineOf(rows, state, now = Date.now()) {
   const sorted = [...rows].sort(byOrder);
-  return sorted.find((r) => r.when === phaseOf(state)) || sorted[0] || null;
+  const phase = phaseOf(state);
+  // Live (K1): the weightiest of the live rows and the rows carried into Live, at their carried weight. A finished game
+  // keeps D48: its own After-the-final rows first.
+  const pool = phase === 'live' ? rowsIn(rows, state, now).sort(byOrder) : sorted.filter((r) => r.when === phase);
+  return pool[0] || sorted[0] || null;
 }
 export const byOrder = (x, y) => y.weight - x.weight || CATS[x.cat].order - CATS[y.cat].order || Number(x.type.slice(1)) - Number(y.type.slice(1));
 
@@ -980,7 +1012,7 @@ export const byOrder = (x, y) => y.weight - x.weight || CATS[x.cat].order - CATS
 const ROUND_TONE = { championship: 'gold', third: 'bronze', semi: 'silver', quarter: 'silver', consolation: 'muted' };
 const ROUND_LABEL = { championship: 'Championship', third: 'Third Place Game', semi: 'Playoff Semifinal', quarter: 'Playoff Quarterfinal', consolation: 'Consolation' };
 const TYPE_GLYPH = { I20: 'trophy', I19: 'bracket', I22: 'ladder', I2: 'alert', I1: 'check', I4: 'target', I24: 'crown' };
-export function bannerFor(rows, teamId, round, state = 'pre') {
+export function bannerFor(rows, teamId, round, state = 'pre', now = Date.now()) {
   if (!teamId) return null;
   // Once a game is final its banner speaks of what happened (as its card's headline does, review 3): pre-game rows,
   // a prediction that broke among them, no longer qualify for tiers 2 and 3. Round 8: while it is on, the third tier
@@ -996,7 +1028,8 @@ export function bannerFor(rows, teamId, round, state = 'pre') {
   const t2 = mine.find((r) => r.type === 'I2') || mine.find((r) => r.type === 'I1');
   if (t2) return { tier: 2, label: TYPES[t2.type][1], tone: t2.cat, glyph: TYPE_GLYPH[t2.type], row: t2 };
   // Review 4 (G41): a headline or more qualifies for tier 3 (weight 7 of 10 since round 8); the weightiest wins.
-  const t3 = mine.filter((r) => r.weight >= BANNER_MIN && r.when === phase).sort(byOrder)[0];
+  const pool = phase === 'live' ? rowsIn(mine, 'live', now) : mine.filter((r) => r.when === phase);
+  const t3 = pool.filter((r) => r.weight >= BANNER_MIN).sort(byOrder)[0];
   if (t3) return { tier: 3, label: TYPES[t3.type][1], tone: t3.cat, glyph: TYPE_GLYPH[t3.type] || t3.cat, row: t3 };
   return null;
 }

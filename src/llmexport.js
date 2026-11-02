@@ -68,7 +68,9 @@ export const STAT = {
   103: ['returns', 'Interception return touchdown'], 104: ['returns', 'Fumble return touchdown'],
 };
 
-const r1 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 10) / 10 : null);
+/* Points as ESPN keeps them: two decimals (PD38; was one, an audit fix of 30 Oct). Ownership keeps one. */
+const pct1 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 10) / 10 : null);
+const r1 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 100 + 1e-9) / 100 : null);
 const iso = (ms) => (ms ? new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z') : null);
 const clean = (o) => {
   for (const k of Object.keys(o)) if (o[k] === null || o[k] === undefined) delete o[k];
@@ -229,8 +231,8 @@ function playerRow(entry, p, ctx, extra = {}) {
     rosProj: sp.rosProj,
     seasonProj: sp.rosProj == null ? sp.seasonProj : undefined,
     lastSeasonPts: sp.lastSeasonPts,
-    owned: own.percentOwned != null ? r1(own.percentOwned) : undefined,
-    ownedChange: own.percentChange ? r1(own.percentChange) : undefined,
+    owned: own.percentOwned != null ? pct1(own.percentOwned) : undefined,
+    ownedChange: own.percentChange ? pct1(own.percentChange) : undefined,
     acquired: extra.acquired,
     availability: extra.availability,
     waiversClear: extra.waiversClear,
@@ -553,7 +555,7 @@ export function applyLiveScoring(digest, live, now = Date.now()) {
     }
   }
 
-  const r1 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 10) / 10 : null);
+  const r1 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 100 + 1e-9) / 100 : null);
   const patchPlayer = (p) => {
     const live1 = byPlayer.get(p.id);
     if (!live1 || !p.thisWeek) return p;
@@ -600,10 +602,10 @@ export function applyLiveScoring(digest, live, now = Date.now()) {
  * What the route and the dev preview both send. One function, so a preview
  * cannot show a payload the signed-in page would not.
  */
-export function llmExportPayload(raw, sim = null, season = null, insights = null) {
+export function llmExportPayload(raw, sim = null, season = null, insights = null, frontOffice = null) {
   // Fortune Teller's odds, Season Statistics and Matchup Insights are laid over here, the one shaping function the route
   // and the preview share.
-  const digest = applyInsights(applySeasonStats(applySimOdds(raw, sim), season), insights);
+  const digest = applyFrontOffice(applyInsights(applySeasonStats(applySimOdds(raw, sim), season), insights), frontOffice);
   if (!digest || !digest.export || !Array.isArray(digest.export.teams) || !digest.export.teams.length) {
     return { ok: true, ready: false };
   }
@@ -682,6 +684,54 @@ export function applyInsights(digest, week) {
     if (k === 'thisWeek') ex.matchupInsights = section;
   }
   if (!('matchupInsights' in ex)) ex.matchupInsights = section;
+  return { ...digest, export: ex };
+}
+
+/**
+ * Front Office for every team (plan D20), laid over at request time right after `matchupInsights` (or `thisWeek`): each
+ * team's lineup and bench with projections and notes, who to start instead, the checklist before lock, its best pickups
+ * with the drop for each, and the weeks ahead. `teams` is the list src/apifrontoffice.js shapes (foTeamData), or null to
+ * leave the section out. The browser keeps only the reader's own team (app/llm-export/myteam.js).
+ */
+export function applyFrontOffice(digest, teams) {
+  if (!digest || !digest.export || !Array.isArray(teams) || !teams.length) return digest;
+  const tag = (p) => `${p.player} (${p.position}${p.nflTeam ? `, ${p.nflTeam}` : ''})`;
+  const who = (p) => {
+    const out = { slot: p.slot, player: tag(p), projected: p.projected };
+    if (p.points != null) out.points = p.points;
+    if (p.injury) out.injury = p.injury;
+    if (p.gameState === 'bye') out.game = 'bye';
+    else if (p.opponent) out.game = `${p.home ? 'vs' : 'at'} ${p.opponent}${p.gameState && p.gameState !== 'pre' ? ` (${p.gameState === 'live' ? 'playing' : 'final'})` : ''}`;
+    if (p.defenceRank) out.defenceRank = p.defenceRank;
+    if (p.notes && p.notes.length) out.notes = p.notes.map((n) => `${n.label}: ${n.text}`);
+    if (p.startInstead) out.startInstead = `${p.startInstead.player} (${p.startInstead.gain >= 0 ? '+' : ''}${p.startInstead.gain.toFixed(2)}, ${p.startInstead.why})`;
+    return out;
+  };
+  const section = {
+    week: teams[0].week,
+    teams: teams.map((t) => ({
+      teamId: t.teamId, team: t.team,
+      projected: { lineup: t.totals.lineup, bestPossible: t.totals.best, opponent: t.totals.opponent, opponentTeam: t.totals.opponentTeam },
+      checklist: t.checklist.map((c) => `${c.level}: ${c.text}`),
+      lineup: t.lineup.map(who), bench: t.bench.map(who),
+      ...(t.lateSwap ? { lateSwap: t.lateSwap } : {}),
+      pickups: t.pickups.map((x) => ({ player: tag(x), status: x.status, role: x.role, fitPerWeek: x.fitPerWeek, drop: tag(x.drop), ...(x.injury ? { injury: x.injury } : {}), reasons: x.reasons })),
+      waiverPosition: t.waiverPosition,
+      weeksAhead: t.weeksAhead.map((w) => ({ week: w.week, ...(w.postseason ? { postseason: w.round || true } : {}), opponent: w.opponentTeam, bestLineup: w.bestLineup, opponentBestLineup: w.opponentBestLineup, ...(w.missing.length ? { missing: w.missing } : {}) })),
+      stash: t.stash.map((x) => ({ player: tag(x), nextFourAverage: x.nextFourAverage, postseasonAverage: x.postseasonAverage })),
+      ...(t.race ? { playoffRace: (() => { const o = t.race, p = (x) => (x == null ? null : `${(Math.round(x * 1000 + 1e-6) / 10).toFixed(1)}%`);
+        return { source: "Fortune Teller's exact simulation", now: p(o.now), withAWinThisWeek: p(o.withWin), withALossThisWeek: p(o.withLoss), ifItWinsOut: p(o.winOut),
+          ...(o.biggestGame ? { biggestGameLeft: `week ${o.biggestGame.week} v ${o.biggestGame.opponentTeam}` } : {}),
+          rootFor: o.rootFor.map((x) => `${x.team} over ${x.againstTeam} (+${(Math.round(x.oddsGain * 1000 + 1e-6) / 10).toFixed(1)} points of playoff odds)`) }; })() } : {}),
+    })),
+  };
+  const after = 'matchupInsights' in digest.export ? 'matchupInsights' : 'thisWeek';
+  const ex = {};
+  for (const [k, v] of Object.entries(digest.export)) {
+    ex[k] = v;
+    if (k === after) ex.frontOffice = section;
+  }
+  if (!('frontOffice' in ex)) ex.frontOffice = section;
   return { ...digest, export: ex };
 }
 

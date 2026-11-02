@@ -2,9 +2,7 @@ import ScrollBox from "../shared/ScrollBox.jsx";
 import ToolControls from "../shared/ToolControls.jsx";
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { PALETTES, BASE_CSS, BACKDROP, pts2, ptsSigned } from "../../src/ui.js";
-import SettingsMenu from "../shared/SettingsMenu.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
-import Instructions from "../shared/Instructions.jsx";
 
 /**
  * Hall of Fame — the league's record book.
