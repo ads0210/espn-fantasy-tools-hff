@@ -51,7 +51,7 @@ export function schemaDoc({ leagueName, values, rows, about, meta }) {
   }
   return {
     $schema: 'https://json-schema.org/draft/2020-12/schema', $id: API + '/schema.json', title: `${leagueName || 'League'}: Site API, version 1`,
-    description: 'Every answer of the seven endpoints. Errors answer { ok: false, error }. Times are ISO 8601 in UTC; odds are fractions from 0 to 1; ids are ESPN’s own.',
+    description: 'Every answer of the eight endpoints. Errors answer { ok: false, error }. Times are ISO 8601 in UTC; odds are fractions from 0 to 1; ids are ESPN’s own.',
     $ref: '#/$defs/any',
     $defs: { ...defs, any: { anyOf: ENDPOINTS.map((e) => ({ title: e.path, $ref: '#/$defs/' + e.key + 'Answer' })).concat([{ $ref: '#/$defs/errorAnswer' }]) },
       errorAnswer: { type: 'object', properties: { ok: { const: false }, error: { $ref: '#/$defs/error' } } }, ...answers },
