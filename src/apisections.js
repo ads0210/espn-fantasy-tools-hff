@@ -8,6 +8,7 @@
  */
 import { seasonRecordRows } from './apiseason.js';
 import { insightCsvRows } from './apiinsights.js';
+import { foCsvRows } from './apifrontoffice.js';
 
 /* The tools a section follows. A section is served only while its tool is visible to members. */
 export const SECTION_TOOL = {
@@ -15,7 +16,7 @@ export const SECTION_TOOL = {
   history: 'hall-of-fame', records: 'hall-of-fame', teamHistory: 'hall-of-fame', headToHead: 'hall-of-fame',
   fortuneTeller: 'fortune-teller', fortuneOdds: 'fortune-teller', fortuneFinishes: 'fortune-teller',
   fortuneGames: 'fortune-teller', fortunePaths: 'fortune-teller',
-  tradeAnalysis: 'trade-analyzer', draftOrder: 'draft-helper', seasonStats: 'season-stats', matchupInsights: 'matchup-insights',
+  tradeAnalysis: 'trade-analyzer', draftOrder: 'draft-helper', seasonStats: 'season-stats', matchupInsights: 'matchup-insights', frontOffice: 'front-office',
 };
 
 /* Every section of /full, in the order an answer carries them (about first). `sec` is how often
@@ -55,6 +56,7 @@ export const SECTIONS = [
   { key: 'tradeAnalysis', group: 'site', what: 'Each offer on the table broken down row by row for both sides, at the league’s weighting, with the balance and the verdict', refresh: '5 min', sec: 300, csv: true, rowWord: 'a row per offer per row' },
   { key: 'seasonStats', group: 'site', what: 'Season Statistics for the whole season, as /season: the standings with all-play, luck and the power ranking, and every record with each holder', refresh: 'When a week settles', sec: 3600, csv: true, rowWord: 'a row per record holder' },
   { key: 'matchupInsights', group: 'site', what: 'Matchup Insights for this week, as /insights: every game with its insights (category, weight from 1 to 10, when, the teams it names and its words, and a prediction’s outcome) and the week’s insights across the league', refresh: '{live} in games, else 5 min', sec: 300, live: true, csv: true, rowWord: 'a row per insight' },
+  { key: 'frontOffice', group: 'site', what: 'Front Office for every team, as /frontoffice: this week’s lineup and bench with each player’s projection, lock, game and notes, who to start instead, the checklist before lock, the best pickups with a suggested drop, and each week ahead with its best lineup and missing slots', refresh: '5 min in games, else 15 min', sec: 900, csv: true, rowWord: 'a row per player' },
   { key: 'draftOrder', group: 'site', what: 'The draft’s shape: rounds, snake or linear, pick order, every slot with the team holding it, and the league’s roster shape', refresh: '1 min during a draft', sec: 86400, csv: true },
 ];
 
@@ -64,7 +66,7 @@ export function section(key) { return SECTIONS.find((s) => s.key === key) || nul
 /** A section's refresh figure as the reader receives it: the live parts follow the snapshot's rebuild. */
 export function refreshOf(s, quiet) { return s.refresh.split('{live}').join(quiet ? '15 s' : '1 min'); }
 
-/* The seven endpoints. The refresh words and figures depend on whether games are on and whether the
+/* The eight endpoints. The refresh words and figures depend on whether games are on and whether the
    site is quiet (st = { games, quiet }). */
 export const ENDPOINTS = [
   { key: 'scoreboard', path: '/scoreboard', team: true, csv: true, size: 'About 5 to 10 KB',
@@ -85,6 +87,11 @@ export const ENDPOINTS = [
     madeFor: 'Weekly bot posts, a preview of the week in a chat, analysis of what each week said and how it turned out',
     refreshWords: (st) => (st.games ? 'Every minute during games' : 'Every 5 minutes'),
     refresh: (st) => (st.games ? 60 : 300) },
+  { key: 'frontoffice', path: '/frontoffice', team: true, csv: true, size: 'About 15 KB a team; about 150 KB for the league',
+    sentence: 'Front Office for every team, or one with ?team=: this week’s lineup and bench (projection, lock, game, notes, who to start instead), the checklist before lock, the best pickups with a suggested drop and the weeks ahead. As CSV, a row per player on each roster.',
+    madeFor: 'Lineup alerts before kickoff, a weekly roster check in a chat, a sheet of every lineup',
+    refreshWords: (st) => (st.games ? 'Every 5 minutes during games' : 'Every 15 minutes'),
+    refresh: (st) => (st.games ? 300 : 900) },
   { key: 'rosters', path: '/rosters', team: true, csv: true, size: 'About 60 to 90 KB',
     sentence: 'Every rostered player: fantasy team, slot, position, NFL team, this week’s opponent and game state, points and projection this week, season points and average, injury status, bye.',
     madeFor: 'Lineup checks, “who’s left to play” scripts, sheets',
@@ -95,7 +102,7 @@ export const ENDPOINTS = [
     madeFor: 'Bots and alerts: “a trade was offered”, “waivers ran”',
     refreshWords: () => 'Every 5 minutes', refresh: () => 300 },
   { key: 'full', path: '/full', csv: false, logos: true, size: 'About 0.8 to 1.2 MB of JSON; about 120 to 180 KB sent',
-    sentence: 'Everything: all thirty-two sections below, plus about, in one answer.',
+    sentence: 'Everything: all thirty-four sections below, plus about, in one answer.',
     madeFor: 'Scripts that keep their own copy, analysis, an assistant given one file',
     refreshWords: () => 'Each part as its section; the whole is rebuilt at most once a minute',
     refresh: (st) => (st.games ? 60 : 300) },
@@ -153,6 +160,7 @@ export const CSV_ROWS = {
   draftOrder: (v) => (v && v.slots) || [],
   seasonStats: (v) => seasonRecordRows(v),
   matchupInsights: (v) => insightCsvRows(v),
+  frontOffice: (v) => foCsvRows(v),
   fortuneTeller: (v) => ((v && v.teams) || []).map((t) => ({ state: v.state, simulatedThroughWeek: v.simulatedThroughWeek, ...t })),
   headToHead: (v) => {
     const rows = [];
@@ -250,6 +258,28 @@ export const MEANING = {
   importance: 'How much the insight matters, 1 to 10 (the page’s weight): 10 an all-time record or the title itself, 9 decides a season or a game, 8 a season record', subject: 'What the insight is about: matchup, team, player or league',
   when: 'beforeKickoff, live or afterTheFinal', teamIds: 'Every team the insight names, playing in the game or not', prediction: 'true when the insight predicts something',
   outcome: 'held or broke once the game is final, pending before; null when it predicts nothing', current: 'true for this week',
+  injury: 'ESPN’s injury status, such as QUESTIONABLE or OUT; null when healthy', locked: 'true once his game has kicked off and he can no longer be moved',
+  defenceRank: 'How the opposing defence ranks against his position, 1 (toughest) to 32 (easiest)', notes: 'What is worth knowing about him this week',
+  key: 'A stable name for the kind of note or check', leaning: 'up, down or neutral: which way the note leans', startInstead: 'A bench player worth starting in this slot instead, and by how much',
+  gain: 'Points a week gained by the change', why: 'Why he is suggested', totals: 'This week’s lineup, the best possible lineup and the opponent’s projected lineup',
+  best: 'The best possible lineup from the roster', checklist: 'What to look at before lock, most urgent first',
+  level: 'act now, look or note', bench: 'Bench and IR players', lateSwap: 'Slots still open after the first game has kicked off, and the next lock',
+  open: 'The slots still open', nextLock: 'When the next open slot locks', pickups: 'The best available players for this team, by fit',
+  fitPerWeek: 'Points a week the pickup adds to this team’s lineups, weighted to the weeks ahead (a bench upgrade: a quarter of its bench gain)',
+  role: '“would start” (he improves the best lineup) or “bench upgrade” (he only beats a bench player at his position, the suggested drop)',
+  benchGain: 'For a bench upgrade, how many points a week he projects above the bench player he would replace', gainNext3: 'Points a week he adds over the next three weeks (the next game for a K or D/ST)',
+  gainRestOfSeason: 'Points a week he adds over the rest of the regular season', gainPostseason: 'Points a week he adds in the postseason weeks',
+  projectedThisWeek: 'ESPN’s projection for him this week', projectedRestOfSeason: 'ESPN’s projection for the rest of the season', owned: 'Share of ESPN leagues rostering him, as a percentage',
+  ownedChange: 'How that share moved this week', drop: 'The player to drop for him: the least valuable who leaves no hole in the next three weeks', reasons: 'Why he fits',
+  waiverPosition: 'The team’s place in the waiver order', weeksAhead: 'Each week left: the best lineup the roster can field and the opponent’s',
+  bestLineup: 'The best lineup the roster can field that week', opponentBestLineup: 'The opponent’s best lineup that week', missing: 'Slots the roster cannot fill that week',
+  stash: 'Players on no team worth holding for later weeks', lastThreeAverage: 'Points per game over his last three games', nextFourAverage: 'Projected points a week over the next four weeks',
+  postseasonAverage: 'Projected points a week over the postseason weeks', opponentTeam: 'The opponent’s name',
+  race: 'Fortune Teller’s playoff odds for the team (exact, from its last update), or null before it has a table for this week',
+  now: 'Playoff odds now, 0 to 1', withWin: 'Playoff odds if the team wins this week', withLoss: 'Playoff odds if the team loses this week',
+  winOut: 'Playoff odds if the team wins every game left', biggestGame: 'The game left that moves the team’s odds most',
+  rootFor: 'Other games this week whose result moves the team’s odds most: the side to root for and by how much',
+  oddsGain: 'How much that result adds to the team’s playoff odds, 0 to 1', againstTeamId: 'The team to root against', againstTeam: 'The team to root against, by name',
   detail: 'A short note beside the value', weeks: 'The first and last week of a stretch', text: 'The value as words, where a number alone would mislead', opponentName: 'The other team’s name',
 };
 export const NULLTYPE = { decided: 'text or null', simPlayoffOdds: 'number or null', injuryStatus: 'text or null', winnerTeamId: 'number or null',
