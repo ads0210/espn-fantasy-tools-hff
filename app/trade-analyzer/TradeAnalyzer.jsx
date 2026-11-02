@@ -2,13 +2,12 @@ import React, {
   useState, useEffect, useMemo, useRef, useCallback, useDeferredValue,
 } from "react";
 import { PALETTES, BASE_CSS, BACKDROP, TEAM_COOKIE, pts2 } from "../../src/ui.js";
-import SettingsMenu from "../shared/SettingsMenu.jsx";
+import ToolControls from "../shared/ToolControls.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
 import { createEngine } from "./engine.js";
 import TeamSelect from "../shared/TeamSelect.jsx";
 import { shareLinkFor, parseSharedBuild, parseSharedOffer } from "./sharelink.js";
 import { logEvent } from "../shared/sitelog.js";
-import Instructions from "../shared/Instructions.jsx";
 import { freshenWhenStale } from "../shared/freshen.js";
 import VScrollBox from "../shared/VScrollBox.jsx";
 
@@ -1247,13 +1246,10 @@ export default function TradeAnalyzer() {
   const [data, setData] = useState(preview || null);
   const [loading, setLoading] = useState(!preview);
   const [failed, setFailed] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [showInstr, setShowInstr] = useState(false);
   const [theme, setTheme] = useState(() =>
     (typeof document !== "undefined"
       ? document.documentElement.getAttribute("data-theme") : "dark") || "dark");
   const [tz, setTz] = useState(0);
-  const gearRef = useRef(null);
 
   /* What the component actually got, for the preview badge. A payload that is
      present but empty and a payload that never arrived look identical on the
@@ -1469,25 +1465,7 @@ export default function TradeAnalyzer() {
         <div className="toolleague">{(data && data.leagueName) || "League"}</div>
       </div>
       <div className="toolctl">
-        <button className="ctlbtn" type="button" title="How to use this tool"
-          onClick={() => setShowInstr(true)}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-            strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="9.4" />
-            <path d="M9.2 9.3a2.8 2.8 0 1 1 3.9 2.9c-.9.5-1.4 1-1.4 2.1" />
-            <circle cx="12" cy="17.2" r=".55" fill="currentColor" stroke="none" />
-          </svg>
-        </button>
-        <button className="ctlbtn" type="button" title="Site settings" ref={gearRef}
-          aria-haspopup="dialog" onClick={() => setShowSettings((s) => !s)}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"
-            strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3.1" />
-            <path d="M19.1 14.6a1.5 1.5 0 0 0 .3 1.7l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.5 1.5 0 0 0-1.7-.3 1.5 1.5 0 0 0-.9 1.4v.2a2 2 0 1 1-4 0v-.1a1.5 1.5 0 0 0-1-1.4 1.5 1.5 0 0 0-1.7.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.5 1.5 0 0 0 .3-1.7 1.5 1.5 0 0 0-1.4-.9H3a2 2 0 1 1 0-4h.1a1.5 1.5 0 0 0 1.4-1 1.5 1.5 0 0 0-.3-1.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.5 1.5 0 0 0 1.7.3H9a1.5 1.5 0 0 0 .9-1.4V3a2 2 0 1 1 4 0v.1a1.5 1.5 0 0 0 .9 1.4 1.5 1.5 0 0 0 1.7-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.5 1.5 0 0 0-.3 1.7V9a1.5 1.5 0 0 0 1.4.9h.2a2 2 0 1 1 0 4h-.1a1.5 1.5 0 0 0-1.4.9z" />
-          </svg>
-        </button>
-        <SettingsMenu open={showSettings} onClose={() => setShowSettings(false)}
-          theme={theme} onTheme={setTheme} anchorRef={gearRef} />
+        <ToolControls steps={INSTRUCTIONS} label="How to use the Trade Analyzer" theme={theme} onTheme={setTheme} />
       </div>
     </div>
   );
@@ -1516,10 +1494,6 @@ export default function TradeAnalyzer() {
             <a className="pagebtn" href="/">&larr; Back to home</a>
           </div>
         </div>
-      {showInstr ? (
-        <Instructions open steps={INSTRUCTIONS} onClose={() => setShowInstr(false)}
-          label="How to use the Trade Analyzer" />
-      ) : null}
       </React.Fragment>
     );
   }
@@ -1680,10 +1654,6 @@ export default function TradeAnalyzer() {
         </div>
       </div>
 
-      {showInstr ? (
-        <Instructions open steps={INSTRUCTIONS} onClose={() => setShowInstr(false)}
-          label="How to use the Trade Analyzer" />
-      ) : null}
 
       {buildReady ? (
         <div className="stickybar">
