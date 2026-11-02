@@ -1,14 +1,12 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import {
-  ChevronDown, ChevronUp, Star, Ban, X, Sun, Moon, HelpCircle, ArrowLeft,
+  ChevronDown, ChevronUp, Star, Ban, X, Sun, Moon, ArrowLeft,
   Eye, AlertTriangle, Users, RotateCcw, Check, RefreshCw, Newspaper,
-  ClipboardList, SlidersHorizontal, Trophy, LayoutGrid, Radio, Circle,
-  Settings as SettingsIcon
+  ClipboardList, SlidersHorizontal, Trophy, LayoutGrid, Radio, Circle
 } from "lucide-react";
 import { PALETTES, BASE_CSS, BACKDROP, dateTimeText } from "../../src/ui.js";
-import SettingsMenu from "../shared/SettingsMenu.jsx";
+import ToolControls from "../shared/ToolControls.jsx";
 import TeamSelect from "../shared/TeamSelect.jsx";
-import Instructions from "../shared/Instructions.jsx";
 import ScrollBox from "../shared/ScrollBox.jsx";
 import { noteBrake, pollDelay } from "../shared/brake.js";
 import { teamLogoUrl } from "../../src/teamlogo.js";
@@ -35,7 +33,7 @@ const PALETTE = {
     green: "#12762E", greenDeep: "#0A5220", greenSoft: "rgba(18,118,46,0.13)",
     red: "#BF2231", redSoft: "rgba(191,34,49,0.08)",
     amber: "#8A5406", amberSoft: "rgba(138,84,6,0.10)",
-    gold: "#A9790A", blue: "#20629E",
+    gold: "#8A6200", blue: "#20629E",   // gold darkened from #A9790A (3.6:1) to pass 4.5:1 on the light panels
   },
 };
 
@@ -411,9 +409,8 @@ function ErrorBanner({ message }) {
 
 // main app
 export default function DraftHelper() {
-  const [theme, setTheme] = useState("dark");
-  const [showSettings, setShowSettings] = useState(false);
-  const gearRef = useRef(null);
+  // Audit (30 Oct): start from the page's own theme; a fixed "dark" kept the dark palette's position colours on a light page.
+  const [theme, setTheme] = useState(() => (typeof document !== "undefined" && document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark"));
   const pal = PALETTE[theme];
 
   // The shared stylesheet keys every colour off html[data-theme]; the shared settings control puts the theme
@@ -472,7 +469,6 @@ export default function DraftHelper() {
   const [noteText, setNoteText] = useState("");
   const [emphasize, setEmphasize] = useState(null);
   const [posFilter, setPosFilter] = useState("ALL");
-  const [showInstructions, setShowInstructions] = useState(false);
   const [resetArmed, setResetArmed] = useState(false);
 
   useEffect(() => {
@@ -760,6 +756,7 @@ export default function DraftHelper() {
         .board td { border:1px solid var(--line); padding:5px 6px; min-width:78px; height:34px;
           vertical-align:middle; }
         .board td.mine { background:var(--accent-glow); border-color:var(--accent-deep); }
+        .board td.mine .bpos { width:fit-content; margin-inline:auto; padding:0 3px; background:var(--panel); }
         .board td.onclock { border-color:var(--accent); }
         .board .rnd { min-width:26px; width:30px; text-align:center; color:var(--ink-3);
           font-weight:900; font-variant-numeric:tabular-nums; border:0; }
@@ -820,13 +817,7 @@ export default function DraftHelper() {
             <div className="toolleague">{leagueName}</div>
           </div>
           <div className="toolctl">
-            <button onClick={() => setShowInstructions(true)} title="How to use this tool"
-              className="ctlbtn focus-ring" type="button"><HelpCircle size={18} /></button>
-            <button onClick={(e) => { e.stopPropagation(); setShowSettings((v) => !v); }}
-              ref={gearRef} id="gearBtn" title="Site settings" aria-haspopup="dialog"
-              className="ctlbtn focus-ring" type="button"><SettingsIcon size={18} /></button>
-            <SettingsMenu open={showSettings} onClose={() => setShowSettings(false)}
-              theme={theme} onTheme={setTheme} anchorRef={gearRef} />
+            <ToolControls steps={HELP_STEPS} label="How to use Draft Helper" theme={theme} onTheme={setTheme} gearId="gearBtn" />
           </div>
         </div>
 
@@ -1137,8 +1128,6 @@ export default function DraftHelper() {
         </div>
       </div>
 
-      <Instructions open={showInstructions} steps={HELP_STEPS}
-        onClose={() => setShowInstructions(false)} label="How to use Draft Helper" />
     </div>
   );
 }
