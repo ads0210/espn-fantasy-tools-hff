@@ -1,7 +1,7 @@
 /**
  * Site API: the platform guides.
  *
- * Sixteen platforms and 73 jobs (week 6 added five platforms and 33 jobs, in jobs6.js; Season Statistics two; Matchup Insights one): each job's steps, its code with the league's address, key and team filled in,
+ * Sixteen platforms and 82 jobs (week 6 added five platforms and 33 jobs, in jobs6.js; Season Statistics two; Matchup Insights one; Front Office one; the iPhone and iPad docket eight, in jobsios.js): each job's steps, its code with the league's address, key and team filled in,
  * a picture of it working, and how it stops. Every example keeps the pace and stops itself: it waits the pace
  * the site gives (or runs on a schedule slower than the slowest pace), pauses on pace_changed and stops for
  * good on too_fast, in whatever way its platform allows.
@@ -17,6 +17,7 @@
  */
 /* eslint-disable */
 import { addWeek6Jobs } from './jobs6.js';
+import { addIosJobs } from './jobsios.js';
 import { seasonRecordRows } from '../../src/apiseason.js';
 import { insightCsvRows } from '../../src/apiinsights.js';
 export function makeGuides(env) {
@@ -1002,26 +1003,25 @@ export function makeGuides(env) {
   ]);
 
   addJobs('iphone', [
-    { key: 'lineup', title: 'Lineup check on Sunday morning', have: 'A notification before the games if a starter is on bye, out or doubtful, and a quiet all-clear if not.',
-      steps: ['Make a new shortcut named <b>Lineup check</b> with the actions below. Its first actions are the stopped-note check and error handling from <b>My live score</b>.',
-        'In <b>Automation → + → Time of Day</b>, choose Sunday at 11:00 AM, set it to <b>Run Immediately</b>, and run Lineup check. Add a Thursday one for the night game if you like.',
-        'It checks only players whose games haven’t started.'],
+    { key: 'lineup', title: 'Lineup alert on Sunday', have: 'A notification before the games when Front Office finds something to fix now (a starter out or on a bye, an empty slot, a game moved), and nothing when all is well.',
+      steps: ['Make a new shortcut named <b>Lineup alert</b> with the actions below. Its first actions are the stopped-note check and error handling from <b>My live score</b>.',
+        'In <b>Automation → + → Time of Day</b>, choose Sunday at 12:30 PM, set it to <b>Run Immediately</b>, and run Lineup alert. Add a Thursday one for the night game if you like.',
+        'It reads Front Office’s checklist, so Front Office must be visible to members.'],
       file: 'Shortcut actions', lang: 'actions',
       actions: function (c) {
         return actions([
-          ['', 'The stopped-note check and error handling from <b>My live score</b>, with <b>Get Contents of URL</b> <code>' + esc(U('rosters', { team: c.T, name: 'iphone-lineup' })) + '</code>'],
-          ['ok', '<b>Get Dictionary Value</b> for <code>meta.week</code> · <b>Set Variable</b> Week'],
-          ['ok', '<b>Get Dictionary Value</b> for <code>data</code> · <b>Repeat with Each</b> item'],
-          ['cond ind', '<b>If</b> <code>slot</code> is not <code>BE</code> or <code>IR</code>, and <code>gameState</code> is <code>pre</code>'],
-          ['stop ind2', '<b>If</b> <code>bye</code> is Week: <b>Add to Variable</b> Problems “player is on bye”'],
-          ['stop ind2', '<b>If</b> <code>injuryStatus</code> is <code>out</code>, <code>doubtful</code> or <code>injuredReserve</code>: <b>Add to Variable</b> Problems “player is injuryStatus”'],
+          ['', 'The stopped-note check and error handling from <b>My live score</b>, with <b>Get Contents of URL</b> <code>' + esc(U('frontoffice', { team: c.T, name: 'iphone-lineup' })) + '</code>'],
+          ['ok', '<b>Get Dictionary Value</b> for <code>data</code> · <b>Get Item from List</b>: First Item · <b>Get Dictionary Value</b> for <code>checklist</code>'],
+          ['ok', '<b>Repeat with Each</b> item'],
+          ['stop ind', '<b>If</b> <code>level</code> is <code>act now</code>: <b>Add to Variable</b> Urgent its <code>text</code>'],
           ['ok', '<b>End Repeat</b>'],
-          ['cond', '<b>If</b> Problems <b>has any value</b>: <b>Show Notification</b> Problems · <b>Otherwise</b>: <b>Show Notification</b> “Lineup looks good”'],
+          ['cond', '<b>If</b> Urgent <b>has any value</b>: <b>Show Notification</b> Urgent, title “Lineup alert” · <b>End If</b>'],
         ]);
       },
       look: function (c) {
-        var p = lineupProblems(c.T, WEEK);
-        return LOOK.phone(notif('Shortcuts', 'Lineup check', p.length ? p.join(' · ') : 'Lineup looks good.'));
+        var t = (D.frontOffice || []).filter(function (x) { return x.teamId === +c.T; })[0];
+        var urgent = t ? t.checklist.filter(function (x) { return x.level === 'act now'; }).map(function (x) { return x.text; }) : [];
+        return LOOK.phone(notif('Shortcuts', 'Lineup alert', urgent.length ? urgent.slice(0, 2).join(' ') : 'A starter is out: start someone else in his slot.'), 'Silent when Front Office has nothing to fix now.');
       },
       stop: 'The same stopped note as the live score shortcut; an automation that runs twice a week never comes near the pace.' },
   ]);
@@ -1208,7 +1208,7 @@ export function makeGuides(env) {
   Object.assign(PLAT_KIND, { calendar: 'Calendar' });
   Object.assign(RUNS, {
     'python.lineup': 'When you run it', 'python.pandas': 'When you run the cell', 'chat.injuries': 'Every 20 minutes',
-    'sheets.waivers': 'Tuesdays at about 9', 'excel.freeagents': 'When the file opens', 'iphone.lineup': 'Sunday morning',
+    'sheets.waivers': 'Tuesdays at about 9', 'excel.freeagents': 'When the file opens', 'iphone.lineup': 'Sunday before the games',
     'ha.lead': 'With the live score', 'chat.recap': 'Tuesday mornings', 'chat.rivalry': 'Wednesdays',
     'calendar.gcal': 'Wednesdays at about 9', 'calendar.ics': 'When you run it',
   });
@@ -1216,6 +1216,8 @@ export function makeGuides(env) {
   /* Week 6 (N3, PD24, PD43): the twelve picked jobs, five new platforms among them (app/site-api/jobs6.js). */
   addWeek6Jobs({ PLATFORMS: PLATFORMS, GL: GL, PLAT_KIND: PLAT_KIND, RUNS: RUNS, U: U, D: D, S: S, LOOK: LOOK, esc: esc, notif: notif, myMatch: myMatch,
     WEEK: WEEK, LEAGUE: LEAGUE, STOPFILE: STOPFILE, standingsNow: standingsNow, addJobs: addJobs, lastFinalWeek: lastFinalWeek, actions: actions });
+  /* Docket K2 (D32): eight iPhone and iPad jobs, HTML apps in Show Web View, a Safari page script and a Siri briefing (app/site-api/jobsios.js). */
+  addIosJobs({ U: U, D: D, LOOK: LOOK, esc: esc, notif: notif, myMatch: myMatch, WEEK: WEEK, LEAGUE: LEAGUE, actions: actions, standingsNow: standingsNow, addJobs: addJobs, RUNS: RUNS });
 
   /* What each job calls itself in name=, read from its own code: Site Backend's Jobs panel counts requests by it. */
   function jobNames() {
