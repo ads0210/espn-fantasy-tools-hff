@@ -2,8 +2,7 @@ import ScrollBox from "../shared/ScrollBox.jsx";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { PALETTES, BASE_CSS, BACKDROP, TEAM_COOKIE, THEME_COOKIE, pts2 } from "../../src/ui.js";
 import TeamSelect from "../shared/TeamSelect.jsx";
-import Instructions from "../shared/Instructions.jsx";
-import SettingsMenu from "../shared/SettingsMenu.jsx";
+import ToolControls from "../shared/ToolControls.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
 import { CHROME_CSS, FT_CSS } from "./css.js";
 import { DIGITS, ordinal, blockOf, classify, placeLabel, standings, brackets, pct } from "./engine.js";
@@ -194,9 +193,6 @@ function useDeclutter(ref, selector, priority, alt, deps) {
 /* The same header, controls, backdrop and footer every tool carries. */
 function Chrome({ leagueName, children }) {
   const [theme, setTheme] = useState(() => document.documentElement.getAttribute("data-theme") || "dark");
-  const [showSettings, setShowSettings] = useState(false);
-  const [showInstr, setShowInstr] = useState(false);
-  const gearRef = useRef(null);
   // The theme is put on the page by the shared settings control (week 6, F4).
   return (
     <React.Fragment>
@@ -214,13 +210,7 @@ function Chrome({ leagueName, children }) {
           </a>
           <div className="toolid"><p className="eyebrow">Fortune Teller</p><div className="toolleague">{leagueName || "\u00a0"}</div></div>
           <div className="toolctl">
-            <button className="ctlbtn" type="button" title="How to use this tool" onClick={() => setShowInstr(true)}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9.4" /><path d="M9.2 9.3a2.8 2.8 0 1 1 3.9 2.9c-.9.5-1.4 1-1.4 2.1" /><circle cx="12" cy="17.2" r=".55" fill="currentColor" stroke="none" /></svg>
-            </button>
-            <button className="ctlbtn" type="button" title="Site settings" ref={gearRef} aria-haspopup="dialog" onClick={() => setShowSettings((s) => !s)}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3.1" /><path d="M19.1 14.6a1.5 1.5 0 0 0 .3 1.7l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.5 1.5 0 0 0-1.7-.3 1.5 1.5 0 0 0-.9 1.4v.2a2 2 0 1 1-4 0v-.1a1.5 1.5 0 0 0-1-1.4 1.5 1.5 0 0 0-1.7.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.5 1.5 0 0 0 .3-1.7 1.5 1.5 0 0 0-1.4-.9H3a2 2 0 1 1 0-4h.1a1.5 1.5 0 0 0 1.4-1 1.5 1.5 0 0 0-.3-1.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.5 1.5 0 0 0 1.7.3H9a1.5 1.5 0 0 0 .9-1.4V3a2 2 0 1 1 4 0v.1a1.5 1.5 0 0 0 .9 1.4 1.5 1.5 0 0 0 1.7-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.5 1.5 0 0 0-.3 1.7V9a1.5 1.5 0 0 0 1.4.9h.2a2 2 0 1 1 0 4h-.1a1.5 1.5 0 0 0-1.4.9z" /></svg>
-            </button>
-            <SettingsMenu open={showSettings} onClose={() => setShowSettings(false)} theme={theme} onTheme={setTheme} anchorRef={gearRef} />
+            <ToolControls steps={INSTRUCTIONS} label="How to use Fortune Teller" theme={theme} onTheme={setTheme} />
           </div>
         </div>
         {children}
@@ -228,7 +218,6 @@ function Chrome({ leagueName, children }) {
         <div className="pageaction"><a className="pagebtn" href="/">&larr; Back to home</a></div>
         <div className="toolfoot"><a className="gh" href="https://github.com/shortcutsbin-netizen" target="_blank" rel="noopener noreferrer">GitHub - shortcutsbin-netizen</a></div>
       </div>
-      <Instructions open={showInstr} steps={INSTRUCTIONS} onClose={() => setShowInstr(false)} label="How to use Fortune Teller" />
     </React.Fragment>
   );
 }
