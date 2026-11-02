@@ -170,7 +170,7 @@ export function visibleSections(cfg) {
   }
   return out;
 }
-const TOOL_NAMES = { 'season-stats': 'Season Statistics', 'matchup-insights': 'Matchup Insights', 'live-matchups': 'Live Matchups', 'hall-of-fame': 'Hall of Fame', 'fortune-teller': 'Fortune Teller', 'trade-analyzer': 'Trade Analyzer', 'draft-helper': 'Draft Helper' };
+const TOOL_NAMES = { 'season-stats': 'Season Statistics', 'matchup-insights': 'Matchup Insights', 'front-office': 'Front Office', 'live-matchups': 'Live Matchups', 'hall-of-fame': 'Hall of Fame', 'fortune-teller': 'Fortune Teller', 'trade-analyzer': 'Trade Analyzer', 'draft-helper': 'Draft Helper' };
 
 /** Every section's reason for being left out of this answer, in order. */
 export function leftOutList(cfg, index, { logos = false } = {}) {
@@ -232,6 +232,7 @@ export function answerParts(epKey, { csv, team, logos, cfg, index, period = 'who
   if (epKey === 'season') return { parts: [csv ? `ec:season:${period}:${table}` : `e:season:${period}`], updatedAt: latest('seasonStats') };
   // /insights: `period` carries the week as wN.
   if (epKey === 'insights') return { parts: [csv ? `ec:insights:${period}` : `e:insights:${period}`], updatedAt: latest('matchupInsights') };
+  if (epKey === 'frontoffice') return { parts: [(csv ? 'ec:frontoffice' : 'e:frontoffice') + (team ? ':' + team : '')], updatedAt: latest('frontOffice') };
   // /full: every section its tools allow, in registry order.
   const keys = SECTIONS.filter((s) => s.key !== 'about' && vis.has(s.key) && (s.key !== 'logos' || logos)).map((s) => s.key);
   return { parts: keys.map((k) => (k === 'standings' ? 's:standings' + sim : 's:' + k)), keys, updatedAt: index.builtAt };
@@ -365,7 +366,7 @@ export async function handleSiteApi(request, env, ctx, { now = Date.now() } = {}
       'Access-Control-Allow-Headers': 'Authorization, If-None-Match, X-Script-Name', 'Access-Control-Max-Age': '86400' }) });
   }
   if (method !== 'GET' && method !== 'HEAD') return fail(cr, 405, 'method_not_allowed', 'The API only reads.', {}, { Allow: 'GET, HEAD, OPTIONS' });
-  if (!m) return fail(cr, 404, 'not_found', 'There’s no endpoint here. The seven are /full, /scoreboard, /standings, /season, /insights, /rosters and /activity.');
+  if (!m) return fail(cr, 404, 'not_found', 'There’s no endpoint here. The eight are /full, /scoreboard, /standings, /season, /insights, /frontoffice, /rosters and /activity.');
 
   let cfg;
   try { cfg = await apiSettings(env, now); } catch { return fail(cr, 500, 'server_error', 'Something went wrong on the site. Try again shortly.'); }
@@ -484,6 +485,11 @@ export async function handleSiteApi(request, env, ctx, { now = Date.now() } = {}
     const wk = wq == null || wq === '' ? (snap.index.insightCurrent || have[have.length - 1]) : Number(wq);
     if (!/^\d+$/.test(String(wk)) || !have.includes(wk)) return fail(cr, 400, 'bad_request', `week must be one of ${have.join(', ')}.`);
     period = `w${wk}`;
+  }
+  // /frontoffice: Front Office's team pages, served only while the tool is visible to members.
+  if (m.ep.key === 'frontoffice') {
+    if (visibilityOf(cfg, 'front-office') !== VISIBILITY.VISIBLE) return fail(cr, 403, 'not_visible', 'Front Office isn’t visible to members, so its data is left out.');
+    if (!snap.index.frontOffice) return fail(cr, 503, 'not_ready', 'Front Office appears once it has read this week’s rosters.');
   }
   const logos = logosQ === 'true';
   const keyInfo = keyMeta(sa, ring, match, now);
