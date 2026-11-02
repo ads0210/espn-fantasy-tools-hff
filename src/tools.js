@@ -52,6 +52,15 @@ export const TOOLS = [
     href: '/apps/matchup-insights/',
     defaultVisibility: VISIBILITY.VISIBLE,
   },
+  /* One team's weekly roster desk (plan D1-D34): who to start, who to pick up and the weeks ahead, for the team chosen
+     on the home page. Built on the backend (src/frontofficestep.js); advice only, nothing is changed in ESPN. */
+  {
+    key: 'front-office',
+    name: 'Front Office',
+    description: 'Your weekly roster desk: who to start, who to pick up, and the weeks ahead.',
+    href: '/apps/front-office/',
+    defaultVisibility: VISIBILITY.VISIBLE,
+  },
   {
     key: 'hall-of-fame',
     name: 'Hall of Fame',
