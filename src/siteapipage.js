@@ -107,6 +107,13 @@ export async function siteApiPageRoute(request, env, cfg0, url, ctx) {
       const wq = Number(q.get('week'));
       tryPeriod = `w${weeks.includes(wq) ? wq : (snap.index.insightCurrent || weeks[weeks.length - 1])}`;
     }
+    // /frontoffice: refused as the API refuses it while the tool is not visible or has no pages yet.
+    if (ep.key === 'frontoffice' && (!visibleSections(cfg).has('frontOffice') || !snap.index.frontOffice)) {
+      const nr = !snap.index.frontOffice;
+      return json({ ok: true, status: nr ? 503 : 403, statusText: nr ? 'Service Unavailable' : 'Forbidden', headers: [['content-type', 'application/json; charset=utf-8']],
+        text: JSON.stringify({ ok: false, error: nr ? { code: 'not_ready', message: 'Front Office appears once it has read this week’s rosters.', docs: `${origin}/apps/site-api/#errors` }
+          : { code: 'not_visible', message: 'Front Office isn’t visible to members, so its data is left out.', docs: `${origin}/apps/site-api/#errors` } }) });
+    }
     const sa = normaliseSiteApi(cfg.siteApi);
     const ring = await keyRing(cfg.sessionSecret, sa);
     const built = buildAnswer({ snap, cfg, epKey: ep.key, team, csv, logos: q.get('logos') === 'true', pretty: false, pace, games, quiet,
@@ -179,7 +186,7 @@ export async function siteApiPageRoute(request, env, cfg0, url, ctx) {
     payload.schemaBytes = (snap.index.at['x:schema'] || [0, 0])[1];
     // Each endpoint's answer as it stands, measured from the snapshot (all teams; /full without logos).
     const partBytes = (names) => names.reduce((n, x) => n + ((snap.index.at[x] || [0, 0])[1]), 0);
-    payload.epSizes = Object.fromEntries(['full', 'scoreboard', 'standings', 'season', 'insights', 'rosters', 'activity'].map((k) => {
+    payload.epSizes = Object.fromEntries(['full', 'scoreboard', 'standings', 'season', 'insights', 'frontoffice', 'rosters', 'activity'].map((k) => {
       const ap = answerParts(k, { csv: false, team: '', logos: false, cfg, index: snap.index, period: k === 'insights' ? `w${snap.index.insightCurrent}` : 'whole' });
       return [k, partBytes(ap.parts) + 600];
     }));
@@ -190,6 +197,7 @@ export async function siteApiPageRoute(request, env, cfg0, url, ctx) {
       headToHead: payload.visible.includes('headToHead') ? part('s:headToHead') : [],
       season: payload.visible.includes('seasonStats') && snap.text('e:season:whole') ? JSON.parse(snap.text('e:season:whole')) : null,
       seasonPeriods: payload.visible.includes('seasonStats') ? (snap.index.seasonPeriods || []) : [],
+      frontOffice: payload.visible.includes('frontOffice') && snap.text('e:frontoffice') ? JSON.parse(snap.text('e:frontoffice')) : null,
       insights: payload.visible.includes('matchupInsights') && snap.index.insightCurrent && snap.text(`e:insights:w${snap.index.insightCurrent}`) ? JSON.parse(snap.text(`e:insights:w${snap.index.insightCurrent}`)) : null,
     };
   }
