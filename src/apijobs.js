@@ -39,7 +39,15 @@ export const JOBS = [
   ["shell","curl and a shell (macOS, Linux)","csv","Keep a standings CSV current"],
   ["iphone","iPhone and iPad","score","My live score as a widget or a notification"],
   ["iphone","iPhone and iPad","left","Who’s left to play"],
-  ["iphone","iPhone and iPad","lineup","Lineup check on Sunday morning"],
+  ["iphone","iPhone and iPad","lineup","Lineup alert on Sunday"],
+  ["iphone","iPhone and iPad","pocket","Pocket matchup: your game live in an app of its own"],
+  ["iphone","iPhone and iPad","frontoffice","Front Office in your pocket"],
+  ["iphone","iPhone and iPad","who","Who’s this about? Your league beside any ESPN article"],
+  ["iphone","iPhone and iPad","siri","A Siri briefing: “Hey Siri, brief me”"],
+  ["iphone","iPhone and iPad","share","Share my week as a picture"],
+  ["iphone","iPhone and iPad","standings","Standings in your pocket, even offline"],
+  ["iphone","iPhone and iPad","board","Game-day board on an iPad (not verified on iPad)"],
+  ["iphone","iPhone and iPad","trade","Copy a trade idea to Trade Analyzer"],
   ["android","Android","tap","My live score with a one-tap shortcut"],
   ["android","Android","tasker","A scheduled check with Tasker"],
   ["android","Android","close","A close-game alert with Tasker"],
@@ -61,6 +69,7 @@ export const JOBS = [
   ["calendar","Calendar","ics","A calendar file of the season"],
   ["ntfy","ntfy (phone alerts)","close","A close-game alert"],
   ["ntfy","ntfy (phone alerts)","injury","An alert when a player’s injury status changes"],
+  ["ntfy","ntfy (phone alerts)","lineup","A lineup alert before kickoff"],
   ["ntfy","ntfy (phone alerts)","drop","A notable drop alert"],
   ["ntfy","ntfy (phone alerts)","decided","A post when a team clinches or is eliminated"],
   ["telegram","Telegram","close","A close-game alert"],
@@ -190,6 +199,30 @@ export const JOB_NAMES = {
   "iphone-lineup": [
     "iphone.lineup"
   ],
+  "pocket-matchup": [
+    "iphone.pocket"
+  ],
+  "front-office-app": [
+    "iphone.frontoffice"
+  ],
+  "whos-this-about": [
+    "iphone.who"
+  ],
+  "siri-briefing": [
+    "iphone.siri"
+  ],
+  "share-my-week": [
+    "iphone.share"
+  ],
+  "standings-app": [
+    "iphone.standings"
+  ],
+  "game-day-board": [
+    "iphone.board"
+  ],
+  "trade-idea": [
+    "iphone.trade"
+  ],
   "android-score": [
     "android.tap"
   ],
@@ -244,6 +277,9 @@ export const JOB_NAMES = {
   ],
   "injury-watch-ntfy": [
     "ntfy.injury"
+  ],
+  "lineup-alert-ntfy": [
+    "ntfy.lineup"
   ],
   "notable-drops-ntfy": [
     "ntfy.drop"
