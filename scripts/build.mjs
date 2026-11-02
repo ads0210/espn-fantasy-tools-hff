@@ -56,6 +56,12 @@ const TOOLS = [
     css: 'app/matchup-insights/styles.css',
   },
   {
+    key: 'front-office',
+    title: 'Front Office',
+    entry: 'app/front-office/main.jsx',
+    css: 'app/front-office/styles.css',
+  },
+  {
     key: 'hall-of-fame',
     title: 'Hall of Fame',
     entry: 'app/hall-of-fame/main.jsx',
