@@ -434,12 +434,12 @@ export function liveDoc(M, series, { now = new Date().toISOString() } = {}) {
 }
 
 /** Every team's home banner this week, from the week's rows and the Live rows (D30, D48, D57). */
-export function bannersOf(doc, live) {
+export function bannersOf(doc, live, now = Date.now()) {
   const out = {};
   for (const g of (doc && doc.games) || []) {
     const rows = [...g.rows, ...((live && live.games && live.games[g.id]) || [])];
     for (const id of [g.home, g.away]) {
-      const b = bannerFor(rows, id, g.round || null, g.state);
+      const b = bannerFor(rows, id, g.round || null, g.state, now);
       out[id] = b ? { tier: b.tier, label: b.label, tone: b.tone, glyph: b.glyph, row: b.row ? { type: b.row.type, cat: b.row.cat, weight: b.row.weight, parts: b.row.parts } : null } : null;
     }
   }
@@ -531,7 +531,7 @@ export async function insightStep(env, mem, { now = Date.now(), brake = 'normal'
     if (changed || anyOn || mem.bannerWeek !== current) {
       const doc = mem.doc && mem.doc.week === current ? mem.doc : await readJson(env, miKey(season, `w${current}.json`));
       if (doc) {
-        const banners = bannersOf(doc, ldoc);
+        const banners = bannersOf(doc, ldoc, now);
         const tag = fingerprint(JSON.stringify(banners));
         if (tag !== mem.bannerTag) {
           await putJson(env, miKey(season, 'banners.json'), { season, week: current, builtAt: iso, byTeam: banners });
