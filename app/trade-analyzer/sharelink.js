@@ -30,13 +30,18 @@ export function parseSharedBuild(search, teamById) {
     const n = Number(v);
     return Number.isFinite(n) && n > 0 ? n : null;
   };
+  // A team D/ST's player id is negative (ESPN's own), so a player id is any whole number but zero.
+  const pid = (v) => {
+    const n = Number(v);
+    return v !== '' && Number.isInteger(n) && n !== 0 ? n : null;
+  };
   const a = num(params.get('a'));
   const b = num(params.get('b'));
   if (!a || !b || a === b) return null;
   const ta = teamById(a);
   const tb = teamById(b);
   if (!ta || !tb) return null;
-  const onRoster = (team, raw) => String(raw || '').split('.').map(num)
+  const onRoster = (team, raw) => String(raw || '').split('.').map(pid)
     .filter((id) => id && (team.roster || []).some((p) => p.id === id));
   return { a, b, aOut: onRoster(ta, params.get('ao')), bOut: onRoster(tb, params.get('bo')) };
 }
