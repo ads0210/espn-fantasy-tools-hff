@@ -17,6 +17,13 @@ export function applyMyTeam(doc, teamId) {
   for (const key of Object.keys(doc)) {
     if (key === 'myTeam') {
       out.myTeam = team ? myTeamBlock(doc, team) : null;
+    } else if (key === 'frontOffice') {
+      // Front Office is advice for one team: the reader's own, and nothing until a team is chosen.
+      const mine = team && (doc.frontOffice.teams || []).find((t) => t.teamId === team.teamId);
+      if (mine) {
+        const { teams, ...rest } = doc.frontOffice;
+        out.frontOffice = { ...rest, ...mine };
+      }
     } else if (key === 'teams') {
       // Flag the reader's team where the rosters are, not only at the top.
       out.teams = doc.teams.map((t) => {
