@@ -54,6 +54,11 @@ export function compactExport(doc) {
         // Each game's headline and its rows of importance 7 or more (of 10); the week's own rows.
         out.matchupInsights = { ...v, games: v.games.map((g) => ({ ...g, insights: g.insights.filter((r) => r.importance >= 7) })) };
         break;
+      case 'frontOffice':
+        // The checklist, the lineup with who to start instead, the three best pickups and any week with a hole.
+        out.frontOffice = v.teams ? v : { ...v, bench: v.bench.filter((p) => p.notes || p.injury), pickups: v.pickups.slice(0, 3),
+          weeksAhead: v.weeksAhead.filter((w) => w.missing), stash: v.stash.slice(0, 2) };
+        break;
       case 'teams':
         out.teams = v.map(({ seasonMoves, roster, ...t }) => ({ ...t, roster: roster.map(slimPlayer) }));
         break;
