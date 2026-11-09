@@ -9,6 +9,7 @@
  * Deliberately absent, for every team: owner names and account ids, pending
  * waiver claims, logos inside the export, and anything from the ESPN session.
  */
+import { oneDecimal } from './round.js';
 import { teamLogoUrl } from './derive.js';
 import { FREE_AGENT_DEPTH } from './datasets.js';
 
@@ -32,7 +33,8 @@ const ACQ = { DRAFT: 'draft', ADD: 'pickup', TRADE: 'trade' };
 /* The site's own words for a trade's outcome: withdrawn, rejected and expired
    are three different things. */
 const TRADE_STATUS = { completed: 'completed', pending_approval: 'pending approval',
-  on_the_table: 'on the table', cancelled: 'withdrawn', rejected: 'rejected', expired: 'expired' };
+  on_the_table: 'on the table', cancelled: 'withdrawn', withdrawn: 'withdrawn', rejected: 'turned down', expired: 'expired',
+  superseded: 'superseded' };
 const TX_KIND = { waiver: 'waiver claim', add: 'free-agent add', swap: 'free-agent add/drop', drop: 'drop' };
 const DAYS = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
 
@@ -69,7 +71,7 @@ export const STAT = {
 };
 
 /* Points as ESPN keeps them: two decimals (PD38; was one, an audit fix of 30 Oct). Ownership keeps one. */
-const pct1 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 10) / 10 : null);
+const pct1 = (n) => (typeof n === 'number' && isFinite(n) ? oneDecimal(n) : null);
 const r1 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 100 + 1e-9) / 100 : null);
 const iso = (ms) => (ms ? new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z') : null);
 const clean = (o) => {
@@ -449,6 +451,7 @@ export async function buildLlmExportDigest(ctx) {
         sides: (it.sides || []).map((x) => ({
           teamId: x.team && x.team.id, team: x.team && x.team.name, sends: (x.players || []).map(pn),
         })),
+        droppedToMakeRoom: (it.drops || []).length ? it.drops.map(pn) : null,
       }));
     } else {
       const team = (it.teams || [])[0];
@@ -460,6 +463,8 @@ export async function buildLlmExportDigest(ctx) {
         team: team ? team.name : null,
         added: (it.adds || []).length ? it.adds.map(pn) : null,
         dropped: (it.drops || []).length ? it.drops.map(pn) : null,
+        // A claim that lost is listed with its own status, never as a move that happened (docket A3).
+        status: it.status === 'claim_lost' ? 'claim lost' : null,
       }));
     }
   }
@@ -479,6 +484,11 @@ export async function buildLlmExportDigest(ctx) {
       postseasonAppearances: r.postseason ? r.postseason.appearances : 0,
       averageFinish: r.avgFinish ?? null,
     })),
+    // Hall of Fame's Record Holders (D41): records held and prestige, every team in order.
+    ...(hof.book && Array.isArray(hof.book.standing) && hof.book.standing.length ? {
+      recordHolders: hof.book.standing.map((r) => ({ record: r.title,
+        teams: (r.entries || []).map((e) => `${nameById[(e.teams || [])[0]] || `Team ${(e.teams || [])[0]}`}: ${e.value > 0 ? '+' : ''}${e.value}`) })),
+    } : {}),
   } : null;
 
   const league = leagueSection(settingsDoc, rosters.teams.length);
@@ -602,10 +612,10 @@ export function applyLiveScoring(digest, live, now = Date.now()) {
  * What the route and the dev preview both send. One function, so a preview
  * cannot show a payload the signed-in page would not.
  */
-export function llmExportPayload(raw, sim = null, season = null, insights = null, frontOffice = null) {
+export function llmExportPayload(raw, sim = null, season = null, insights = null, frontOffice = null, postmortem = null) {
   // Fortune Teller's odds, Season Statistics and Matchup Insights are laid over here, the one shaping function the route
   // and the preview share.
-  const digest = applyFrontOffice(applyInsights(applySeasonStats(applySimOdds(raw, sim), season), insights), frontOffice);
+  const digest = applyPostmortem(applyFrontOffice(applyInsights(applySeasonStats(applySimOdds(raw, sim), season), insights), frontOffice), postmortem);
   if (!digest || !digest.export || !Array.isArray(digest.export.teams) || !digest.export.teams.length) {
     return { ok: true, ready: false };
   }
@@ -715,7 +725,7 @@ export function applyFrontOffice(digest, teams) {
       checklist: t.checklist.map((c) => `${c.level}: ${c.text}`),
       lineup: t.lineup.map(who), bench: t.bench.map(who),
       ...(t.lateSwap ? { lateSwap: t.lateSwap } : {}),
-      pickups: t.pickups.map((x) => ({ player: tag(x), status: x.status, role: x.role, fitPerWeek: x.fitPerWeek, drop: tag(x.drop), ...(x.injury ? { injury: x.injury } : {}), reasons: x.reasons })),
+      pickups: t.pickups.map((x) => ({ player: tag(x), status: x.status, role: x.role, fitPerWeek: x.fitPerWeek, drop: x.drop.moveToIR ? `none needed: move ${tag(x.drop)} to IR` : tag(x.drop), ...(x.injury ? { injury: x.injury } : {}), reasons: x.reasons })),
       waiverPosition: t.waiverPosition,
       weeksAhead: t.weeksAhead.map((w) => ({ week: w.week, ...(w.postseason ? { postseason: w.round || true } : {}), opponent: w.opponentTeam, bestLineup: w.bestLineup, opponentBestLineup: w.opponentBestLineup, ...(w.missing.length ? { missing: w.missing } : {}) })),
       stash: t.stash.map((x) => ({ player: tag(x), nextFourAverage: x.nextFourAverage, postseasonAverage: x.postseasonAverage })),
@@ -732,6 +742,26 @@ export function applyFrontOffice(digest, teams) {
     if (k === after) ex.frontOffice = section;
   }
   if (!('frontOffice' in ex)) ex.frontOffice = section;
+  return { ...digest, export: ex };
+}
+
+/**
+ * Trade Analyzer's Postmortem (Week 10 plan, D11), laid over at request time right after `tradeOffers`: every decided
+ * offer of every season the site holds, newest first, each side's lineup impact to date and still to play, the grade,
+ * ESPN's expected grade and what Trade Analyzer said at the time. `seasons` is [{ season, offers }] with each list as
+ * src/apipostmortem.js postmortemForExport shapes it, or null to leave the section out.
+ */
+export function applyPostmortem(digest, seasons) {
+  if (!digest || !digest.export || !Array.isArray(seasons) || !seasons.length) return digest;
+  const section = seasons.filter((s) => s && Array.isArray(s.offers)).map((s) => ({ season: s.season, offers: s.offers }));
+  if (!section.length) return digest;
+  const after = 'tradeOffers' in digest.export ? 'tradeOffers' : 'transactions';
+  const ex = {};
+  for (const [k, v] of Object.entries(digest.export)) {
+    ex[k] = v;
+    if (k === after) ex.tradePostmortem = section;
+  }
+  if (!('tradePostmortem' in ex)) ex.tradePostmortem = section;
   return { ...digest, export: ex };
 }
 
