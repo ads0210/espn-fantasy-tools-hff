@@ -175,6 +175,19 @@ function reportsBetween(src, from, to, params) {
   return src.deps.q(`${q} ORDER BY hour DESC LIMIT 2000`, ...b);
 }
 
+/** The NFL's game windows this season, kickoff to three and a half hours after, overlapping ones merged: [[from, to]]. */
+export function gameWindowsOf(byes) {
+  const ks = new Set();
+  for (const t of Object.values((byes && byes.kickoffs) || {})) for (const k of Object.values(t || {})) { const ms = Date.parse(k); if (ms) ks.add(ms); }
+  const out = [];
+  for (const k of [...ks].sort((a, b) => a - b)) {
+    const e = k + 3.5 * 3600e3;
+    if (out.length && k <= out[out.length - 1][1]) out[out.length - 1][1] = Math.max(out[out.length - 1][1], e);
+    else out.push([k, e]);
+  }
+  return out;
+}
+
 export function activityFeed(src, params) {
   const now = src.now;
   const since = rangeStart(params, now);
@@ -317,6 +330,14 @@ export async function assembleTab(deps, params = {}) {
         if (!(err && err.logPaused)) throw err;
         payload.visits = { rest: restText(err.tier, err.pct) };
       }
+      // Week 10: the league views beside it (the month's days, each team's sign-ins, copies and shares, the season's
+      // hours for the weekday grid) and the NFL's game windows, all from the small rollups, never the events.
+      try {
+        payload.month = params.vrange === '30d' ? payload.visits : deps.visits('30d');
+        if (typeof deps.teamActs === 'function') payload.acts = deps.teamActs(String(params.vrange));
+        if (typeof deps.visitHours === 'function' && params.vhours) payload.hours = deps.visitHours();
+      } catch (err) { if (!(err && err.logPaused)) throw err; }
+      payload.gameWindows = gameWindowsOf(await src.digest('bye_weeks'));
     }
   } else if (tab === 'data') {
     payload = { ...base, strip: dataStrip(src, ctx), panels: await runPanels(src, ctx, DATA_LAYER, open) };
