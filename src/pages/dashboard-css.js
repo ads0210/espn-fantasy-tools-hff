@@ -184,6 +184,12 @@ ${MATCHUP_CARD_CSS}
        colour, and not nothing either. */
     .txstat.cancelled { color:var(--ink-2); }
     .txstat.expired { color:var(--signal); }
+    .txstat.withdrawn { color:var(--ink-2); }
+    /* Cancelled by ESPN because another deal for the same players went through. */
+    .txstat.superseded { color:var(--signal); }
+    .txstat.claim_lost { color:var(--signal); }
+    .txp.struck { text-decoration:line-through; color:var(--ink-3); }
+    .txfnote { font-size:9px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); white-space:nowrap; }
     .txbid { font-size:9px; font-weight:900; color:var(--signal); white-space:nowrap; }
 
     .txwhen { font-size:10px; font-weight:800; letter-spacing:.1em;
