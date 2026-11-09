@@ -9,6 +9,7 @@
 import { seasonRecordRows } from './apiseason.js';
 import { insightCsvRows } from './apiinsights.js';
 import { foCsvRows } from './apifrontoffice.js';
+import { postmortemCsvRows } from './apipostmortem.js';
 
 /* The tools a section follows. A section is served only while its tool is visible to members. */
 export const SECTION_TOOL = {
@@ -16,7 +17,7 @@ export const SECTION_TOOL = {
   history: 'hall-of-fame', records: 'hall-of-fame', teamHistory: 'hall-of-fame', headToHead: 'hall-of-fame',
   fortuneTeller: 'fortune-teller', fortuneOdds: 'fortune-teller', fortuneFinishes: 'fortune-teller',
   fortuneGames: 'fortune-teller', fortunePaths: 'fortune-teller',
-  tradeAnalysis: 'trade-analyzer', draftOrder: 'draft-helper', seasonStats: 'season-stats', matchupInsights: 'matchup-insights', frontOffice: 'front-office',
+  tradeAnalysis: 'trade-analyzer', draftOrder: 'draft-helper', seasonStats: 'season-stats', matchupInsights: 'matchup-insights', frontOffice: 'front-office', tradePostmortem: 'trade-analyzer',
 };
 
 /* Every section of /full, in the order an answer carries them (about first). `sec` is how often
@@ -45,7 +46,7 @@ export const SECTIONS = [
   { key: 'live', group: 'site', what: 'This week’s matchups in full: every lineup, each player’s points, projection and game state, and the boom and bust calls', refresh: '{live} in games; past weeks fixed', sec: 60, live: true, csv: true, weeks: true, rowWord: 'a row per player' },
   { key: 'timeline', group: 'site', what: 'How each matchup moved through the week: the score and win probability each time either changed. ESPN keeps no history of win probability', refresh: 'Each minute during games', sec: 60, live: true, csv: true, weeks: true, rowWord: 'a row per change' },
   { key: 'history', group: 'site', what: 'Champions by season and the all-time table: record, points, titles, runner-up finishes, postseason appearances, best, worst and average finish, streaks', refresh: '30 min', sec: 1800, csv: true },
-  { key: 'records', group: 'site', what: 'The record book, every holder listed when tied', refresh: '30 min', sec: 1800, csv: true },
+  { key: 'records', group: 'site', what: 'Hall of Fame’s record book: every all-time and season record with its top 10, and Record Holders (records held and prestige), a row per place', refresh: '30 min', sec: 1800, csv: true, rowWord: 'a row per place' },
   { key: 'teamHistory', group: 'site', what: 'Every team’s history, season by season', refresh: '30 min', sec: 1800, csv: true },
   { key: 'headToHead', group: 'site', what: 'Every pair’s all-time meetings, with every game', refresh: '30 min', sec: 1800, csv: true, rowWord: 'a row per game' },
   { key: 'fortuneTeller', group: 'site', what: 'Where the simulation stands, the weeks it covers, and each team’s simulated playoff odds now', refresh: 'Weekly, after each week settles', sec: 604800, csv: true },
@@ -57,6 +58,7 @@ export const SECTIONS = [
   { key: 'seasonStats', group: 'site', what: 'Season Statistics for the whole season, as /season: the standings with all-play, luck and the power ranking, and every record with each holder', refresh: 'When a week settles', sec: 3600, csv: true, rowWord: 'a row per record holder' },
   { key: 'matchupInsights', group: 'site', what: 'Matchup Insights for this week, as /insights: every game with its insights (category, weight from 1 to 10, when, the teams it names and its words, and a prediction’s outcome) and the week’s insights across the league', refresh: '{live} in games, else 5 min', sec: 300, live: true, csv: true, rowWord: 'a row per insight' },
   { key: 'frontOffice', group: 'site', what: 'Front Office for every team, as /frontoffice: this week’s lineup and bench with each player’s projection, lock, game and notes, who to start instead, the checklist before lock, the best pickups with a suggested drop, and each week ahead with its best lineup and missing slots', refresh: '5 min in games, else 15 min', sec: 900, csv: true, rowWord: 'a row per player' },
+  { key: 'tradePostmortem', group: 'site', what: 'Trade Analyzer’s Postmortem for this season, as /postmortem: every decided offer with each side’s lineup impact to date and still to play, ESPN’s expected figure, the grade and what Trade Analyzer said at the time', refresh: 'When a week settles or an offer is decided', sec: 3600, csv: true, rowWord: 'a row per offer per side' },
   { key: 'draftOrder', group: 'site', what: 'The draft’s shape: rounds, snake or linear, pick order, every slot with the team holding it, and the league’s roster shape', refresh: '1 min during a draft', sec: 86400, csv: true },
 ];
 
@@ -66,7 +68,7 @@ export function section(key) { return SECTIONS.find((s) => s.key === key) || nul
 /** A section's refresh figure as the reader receives it: the live parts follow the snapshot's rebuild. */
 export function refreshOf(s, quiet) { return s.refresh.split('{live}').join(quiet ? '15 s' : '1 min'); }
 
-/* The eight endpoints. The refresh words and figures depend on whether games are on and whether the
+/* The nine endpoints. The refresh words and figures depend on whether games are on and whether the
    site is quiet (st = { games, quiet }). */
 export const ENDPOINTS = [
   { key: 'scoreboard', path: '/scoreboard', team: true, csv: true, size: 'About 5 to 10 KB',
@@ -92,6 +94,10 @@ export const ENDPOINTS = [
     madeFor: 'Lineup alerts before kickoff, a weekly roster check in a chat, a sheet of every lineup',
     refreshWords: (st) => (st.games ? 'Every 5 minutes during games' : 'Every 15 minutes'),
     refresh: (st) => (st.games ? 300 : 900) },
+  { key: 'postmortem', path: '/postmortem', csv: true, seasonParam: true, size: 'About 20 to 60 KB',
+    sentence: 'Trade Analyzer’s Postmortem for one season: every decided offer (completed, expired, turned down, withdrawn, superseded) with each side’s lineup impact to date and still to play, ESPN’s expected figure, the grade and what Trade Analyzer said at the time. ?season= any season the site holds (this season by default). As CSV, a row per offer and side.',
+    madeFor: 'A trade sheet, a weekly “how did that deal turn out” post, analysis of the league’s trading',
+    refreshWords: () => 'When a week settles or an offer is decided', refresh: () => 3600 },
   { key: 'rosters', path: '/rosters', team: true, csv: true, size: 'About 60 to 90 KB',
     sentence: 'Every rostered player: fantasy team, slot, position, NFL team, this week’s opponent and game state, points and projection this week, season points and average, injury status, bye.',
     madeFor: 'Lineup checks, “who’s left to play” scripts, sheets',
@@ -102,7 +108,7 @@ export const ENDPOINTS = [
     madeFor: 'Bots and alerts: “a trade was offered”, “waivers ran”',
     refreshWords: () => 'Every 5 minutes', refresh: () => 300 },
   { key: 'full', path: '/full', csv: false, logos: true, size: 'About 0.8 to 1.2 MB of JSON; about 120 to 180 KB sent',
-    sentence: 'Everything: all thirty-four sections below, plus about, in one answer.',
+    sentence: 'Everything: all thirty-five sections below, plus about, in one answer.',
     madeFor: 'Scripts that keep their own copy, analysis, an assistant given one file',
     refreshWords: () => 'Each part as its section; the whole is rebuilt at most once a minute',
     refresh: (st) => (st.games ? 60 : 300) },
@@ -114,7 +120,7 @@ export function endpoint(key) { return ENDPOINTS.find((e) => e.key === key) || n
 export function paramsOf(key) {
   const ep = endpoint(key);
   if (!ep) return [];
-  return ['name', 'pretty'].concat(ep.csv ? ['format'] : [], ep.team ? ['team'] : [], ep.logos ? ['logos'] : [], ep.period ? ['period', 'table'] : [], ep.week ? ['week'] : []);
+  return ['name', 'pretty'].concat(ep.csv ? ['format'] : [], ep.team ? ['team'] : [], ep.logos ? ['logos'] : [], ep.period ? ['period', 'table'] : [], ep.week ? ['week'] : [], ep.seasonParam ? ['season'] : []);
 }
 
 export const CONVENTIONS = ['Times are ISO 8601 in UTC.', 'Odds are fractions from 0 to 1.', 'Ids are ESPN’s own.', 'A missing value is null.'];
@@ -161,6 +167,7 @@ export const CSV_ROWS = {
   seasonStats: (v) => seasonRecordRows(v),
   matchupInsights: (v) => insightCsvRows(v),
   frontOffice: (v) => foCsvRows(v),
+  tradePostmortem: (v) => postmortemCsvRows(v),
   fortuneTeller: (v) => ((v && v.teams) || []).map((t) => ({ state: v.state, simulatedThroughWeek: v.simulatedThroughWeek, ...t })),
   headToHead: (v) => {
     const rows = [];
@@ -216,8 +223,8 @@ export const MEANING = {
   seasonPoints: 'Fantasy points this season', seasonAverage: 'Average points per game this season',
   injuryStatus: 'questionable, doubtful, out, injuredReserve, dayToDay or suspended; null when healthy', bye: 'The NFL bye week',
   id: 'A stable id: the same row keeps it for good', at: 'When it happened', kind: 'add, drop, addDrop, waiver or trade',
-  status: 'completed, onTheTable, pendingApproval, rejected, withdrawn or expired', teams: 'The teams involved',
-  added: 'Players added', dropped: 'Players dropped', bid: 'The FAAB bid, when the league uses a budget', sides: 'For a trade: what each side sends',
+  status: 'completed, onTheTable, pendingApproval, rejected (turned down), withdrawn, superseded (cancelled because another deal went through), expired, or claimLost (a waiver claim that did not go through; never a move)', teams: 'The teams involved',
+  added: 'Players added', dropped: 'Players dropped (on a completed trade: dropped to make room)', bid: 'The FAAB bid, when the league uses a budget', sides: 'For a trade: what each side sends',
   sends: 'The players this side sends', name: 'Name', abbreviation: 'ESPN’s abbreviation', waiverPriority: 'Place in the waiver order',
   acquisitions: 'Players added this season', drops: 'Players dropped this season', trades: 'Trades completed this season',
   pointsByWeek: 'Points by week, keyed by week number', positionRank: 'Rank at his position this season', restOfSeasonProjection: 'ESPN’s rest-of-season projection',
@@ -280,6 +287,18 @@ export const MEANING = {
   winOut: 'Playoff odds if the team wins every game left', biggestGame: 'The game left that moves the team’s odds most',
   rootFor: 'Other games this week whose result moves the team’s odds most: the side to root for and by how much',
   oddsGain: 'How much that result adds to the team’s playoff odds, 0 to 1', againstTeamId: 'The team to root against', againstTeam: 'The team to root against, by name',
+  offeredAt: 'When the offer was made', effectiveAt: 'When the deal counts from: when it went through, or for an offer that never did, when it would have (offered plus the league’s review period)',
+  effectiveWeek: 'The first week the deal counts in', proposerTeamId: 'The team that made the offer', proposerTeam: 'The team that made the offer, by name',
+  lineupImpactToDate: 'Points the deal added to (or took from) this side’s best possible lineups in the weeks played since it counts, against the same weeks without it',
+  stillToPlay: 'The same on ESPN’s projections for the weeks left (postseason included)', lineupImpactTotal: 'To date plus still to play',
+  espnExpected: 'The same measure on ESPN’s projections for every week, as ESPN expected it', pointsReceived: 'Points scored by the players this side received, in the weeks played',
+  startedPoints: 'For a completed trade: points the players received scored in this side’s lineup', weeksCounted: 'Weeks the deal counts in, played and still to play',
+  weeksPlayed: 'Weeks played since the deal counts', byWeek: 'The lineup impact week by week', impact: 'The lineup impact that week',
+  future: 'true for a week not yet played (ESPN’s projection)', droppedToMakeRoom: 'Players dropped to make room on a completed trade (they count against that side)',
+  grade: 'How the deal turned out on lineup impact, in Trade Analyzer’s verdict bands (null when it changes nothing or came too late)',
+  espnExpectedGrade: 'The same grade on ESPN’s projections', tradeAnalyzerVerdict: 'What Trade Analyzer said when it first saw the offer (null for offers before it was stored)',
+  band: 'The verdict band’s key', favorsTeamId: 'The team the deal favours (null when even)', favorsTeam: 'The team the deal favours, by name',
+  gapPerWeek: 'The difference between the sides in points a week', postmortemSeason: 'The season this Postmortem answer covers', better: 'high when the larger value holds the record, low when the smaller does', top: 'The record’s top 10, as its panel’s table shows it, each with its place', endSeason: 'For a streak that ran into another season: the season it ended in', games: 'For a streak or run: every game in it, in order', result: 'W, L or T', opponentPoints: 'The opponent’s points in that game', endWeek: 'For a streak that ran into another season: the week it ended in',
   detail: 'A short note beside the value', weeks: 'The first and last week of a stretch', text: 'The value as words, where a number alone would mislead', opponentName: 'The other team’s name',
 };
 export const NULLTYPE = { decided: 'text or null', simPlayoffOdds: 'number or null', injuryStatus: 'text or null', winnerTeamId: 'number or null',
