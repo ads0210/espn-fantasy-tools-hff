@@ -52,7 +52,7 @@ export function foTeamData(doc) {
       playerId: x.pid, player: x.name, position: x.pos, nflTeam: x.nfl, status: x.status === 'WAIVERS' ? 'on waivers' : 'free agent', injury: x.inj && x.inj !== 'ACTIVE' ? x.inj : null,
       role: x.kind === 'bench' ? 'bench upgrade' : 'would start', fitPerWeek: r2(x.fit), benchGain: r2((x.gain && x.gain.bench) || 0), gainNext3: r2(x.gain.next), gainRestOfSeason: r2(x.gain.rest), gainPostseason: r2(x.gain.post),
       projectedThisWeek: r2(x.next), projectedRestOfSeason: r2(x.ros), owned: x.own, ownedChange: x.chg,
-      drop: { playerId: x.drop.pid, player: x.drop.name, position: x.drop.pos, projectedRestOfSeason: r2(x.drop.ros) }, reasons: x.reasons,
+      drop: { playerId: x.drop.pid, player: x.drop.name, position: x.drop.pos, projectedRestOfSeason: r2(x.drop.ros), moveToIR: Boolean(x.drop.toIR) }, reasons: x.reasons,
     })),
     waiverPosition: (doc.pk && doc.pk.waiverRank) || null,
     weeksAhead: ((doc.wa && doc.wa.cols) || []).map((c) => ({
