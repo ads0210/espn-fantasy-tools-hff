@@ -7,6 +7,8 @@ export const JOBS = [
   ["sheets","Google Sheets","standings","Keep the standings in a sheet"],
   ["sheets","Google Sheets","records","Keep the season’s records in a sheet"],
   ["sheets","Google Sheets","insights","Keep this week’s insights in a sheet"],
+  ["sheets","Google Sheets","postmortem","Keep every trade’s postmortem in a sheet"],
+  ["sheets","Google Sheets","recordbook","Keep Hall of Fame’s record book in a sheet"],
   ["sheets","Google Sheets","left","List who’s left to play"],
   ["sheets","Google Sheets","log","Log league activity as rows"],
   ["sheets","Google Sheets","email","A daily email of the standings (Apps Script)"],
@@ -98,6 +100,12 @@ export const JOB_NAMES = {
   ],
   "insights-sheet": [
     "sheets.insights"
+  ],
+  "postmortem-sheet": [
+    "sheets.postmortem"
+  ],
+  "record-book": [
+    "sheets.recordbook"
   ],
   "left-to-play": [
     "sheets.left"
