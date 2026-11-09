@@ -51,9 +51,11 @@ import { runBatch, readJob, jobStatus } from './history.js';
 import { runPrimeBatch, primeStatus, missingDatasetKeys } from './prime.js';
 import { fetchPart } from './espn.js';
 import { fetchScoringPeriod, readSeasonIndex, readSeasonPart, ssKey } from './seasonstep.js';
-import { readInsightIndex, readInsightWeek, readInsightLive, readInsightBanners } from './insightstep.js';
+import { readInsightIndex, readInsightWeek, readInsightLive, readInsightBanners, storedJson, liveWeekBehind } from './insightstep.js';
+import { readPostmortem, readPostmortemState } from './postmortemstep.js';
 import { readFoIndex, readFoTeam, overlayLive } from './frontofficestep.js';
 import { foTeamData } from './apifrontoffice.js';
+import { postmortemData, postmortemForExport } from './apipostmortem.js';
 import { insightWeek } from './apiinsights.js';
 import { seasonPeriod } from './apiseason.js';
 import { liveWeek as seasonLiveFrom } from './seasonlive.js';
@@ -78,7 +80,7 @@ import { started as startedKey, normaliseSiteApi, replaced as replacedKey, dueCh
 import { RELEASE_NOTE_ITEMS } from './release.js';
 import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r253';
+const BUILD_MARKER = 'r274';
 
 
 
@@ -216,7 +218,18 @@ export async function runMinute(rawEnv, { at = Date.now(), via = 'cron', cron = 
     // inside the dataset coordinator's 'matchup_insights' object (src/insightstep.js). Every 15 minutes the one
     // small source no page keeps fresh (positional ratings) is brought up to date first.
     await timed('insights', async () => {
-      if (new Date(at).getUTCMinutes() % 15 === 3) { try { const c = await loadConfig(env); if (isSetupFinished(c)) await ensureDataset(env, 'positional_ratings', null); } catch { /* read as stored */ } }
+      if (new Date(at).getUTCMinutes() % 15 === 3) {
+        try {
+          const c = await loadConfig(env);
+          if (isSetupFinished(c)) {
+            await ensureDataset(env, 'positional_ratings', null);
+            // Docket A4: Matchup Insights takes its week from the live digest, which only a live page or a game window
+            // refreshes. The season schedule is kept fresh every fifteen minutes; when it has moved on, so does the digest.
+            const [sched, live] = await Promise.all([storedJson(env, 'season_schedule'), storedJson(env, 'live_scoring_digest')]);
+            if (liveWeekBehind(live, sched)) await ensureDataset(env, 'live_scoring_digest', null);
+          }
+        } catch { /* read as stored */ }
+      }
       return insightsTick(env, at);
     }, (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false }));
     // Front Office: every team's page worked out again (every five minutes around games, fifteen otherwise; written only
@@ -231,6 +244,10 @@ export async function runMinute(rawEnv, { at = Date.now(), via = 'cron', cron = 
       }
       return frontOfficeTick(env, at);
     }, (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false }));
+    // Trade Analyzer's Postmortem: a few ESPN reads a minute until every season is read, then this season kept up to
+    // date, a season rebuilt when its reads changed, and Trade Analyzer's verdict kept for each new offer
+    // (src/postmortemstep.js, in the dataset coordinator's 'trade_postmortem' object).
+    await timed('postmortem', () => postmortemTick(env, at), (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false }));
     // Week 6 (F2): the hourly reachability check, one dataset a minute (src/datacheck.js).
     await timed('check', async () => {
       const cfg = await loadConfig(env);
@@ -283,6 +300,16 @@ export async function frontOfficeTick(env, at = Date.now(), reason = 'minute', f
   if (!isSetupFinished(cfg)) return null;
   const stub = env.COORDINATOR.get(env.COORDINATOR.idFromName('front_office'));
   const r = await stub.fetch(`https://coordinator/front-office?brake=${encodeURIComponent(brakeNow(at).brake)}&reason=${encodeURIComponent(reason)}${force ? '&force=1' : ''}`);
+  try { return await r.json(); } catch { return { ok: false, error: `status ${r.status}` }; }
+}
+
+/** Ask the Postmortem's backend step to do this minute's share (src/postmortemstep.js). */
+export async function postmortemTick(env, at = Date.now(), reason = 'minute', force = false) {
+  if (!env.COORDINATOR) return null;
+  const cfg = await loadConfig(env);
+  if (!isSetupFinished(cfg)) return null;
+  const stub = env.COORDINATOR.get(env.COORDINATOR.idFromName('trade_postmortem'));
+  const r = await stub.fetch(`https://coordinator/postmortem?brake=${encodeURIComponent(brakeNow(at).brake)}&reason=${encodeURIComponent(reason)}${force ? '&force=1' : ''}`);
   try { return await r.json(); } catch { return { ok: false, error: `status ${r.status}` }; }
 }
 
@@ -690,6 +717,7 @@ async function route(request, env, ctx) {
 
   if (path === '/api/hof') return hallOfFame(env, ctx);
   if (path === '/api/trade') return tradeAnalyzer(env, ctx);
+  if (path === '/api/trade/postmortem') return json(await postmortemPayload(env, url));
   if (path === '/api/llm-export') return llmExport(env, ctx, url);
   if (path === '/api/fortune-teller') {
     // The page before a map exists is built from the standings and the league's rules.
@@ -1852,6 +1880,22 @@ async function tradeAnalyzer(env, ctx) {
 }
 
 /**
+ * Trade Analyzer's Postmortem: one season's document (src/postmortemstep.js) and the seasons that have one. The
+ * newest built season opens first; `?season=` picks another.
+ */
+export async function postmortemPayload(env, url) {
+  const cfg = await loadConfig(env);
+  const st = (await readPostmortemState(env)) || { seasons: {} };
+  const seasons = Object.entries(st.seasons || {}).filter(([, s]) => s && s.builtAt && !s.absent)
+    .map(([y, s]) => ({ season: Number(y), decided: s.offers || 0 })).sort((a, b) => b.season - a.season);
+  const want = Number(url && url.searchParams.get('season')) || null;
+  const season = seasons.some((s) => s.season === want) ? want : seasons.some((s) => s.season === Number(cfg.season)) ? Number(cfg.season) : (seasons[0] || {}).season || null;
+  const doc = season ? await readPostmortem(env, season) : null;
+  if (doc) { const s = seasons.find((x) => x.season === season); if (s) s.decided = doc.offers.length; }
+  return { ok: true, ready: Boolean(doc), season, seasons, doc };
+}
+
+/**
  * The LLM Data Export's document.
  *
  * One league-wide digest, served as built. The reader's team and the compact
@@ -1882,13 +1926,29 @@ async function llmExportRoute(env, ctx, wantFresh = false) {
   const season = await seasonForExport(env);
   const insights = await insightsForExport(env);
   const fo = await frontOfficeForExport(env, ctx);
-  if (!wantFresh || !digest) return json(llmExportPayload(digest, sim, season, insights, fo));
+  const pm = await postmortemForLlm(env);
+  if (!wantFresh || !digest) return json(llmExportPayload(digest, sim, season, insights, fo, pm));
   const obj = await ensureDataset(env, 'live_scoring_digest', ctx);
   let live = null;
   if (obj) {
     try { live = await obj.json(); } catch { live = null; }
   }
-  return json(llmExportPayload(applyLiveScoring(digest, live), sim, season, insights, fo));
+  return json(llmExportPayload(applyLiveScoring(digest, live), sim, season, insights, fo, pm));
+}
+
+/** Trade Analyzer's Postmortem for the LLM export: every season it holds, newest first; null while none or not visible. */
+export async function postmortemForLlm(env) {
+  try {
+    const cfg = await loadConfig(env);
+    if (visibilityOf(cfg, 'trade-analyzer') !== VISIBILITY.VISIBLE) return null;
+    const st = (await readPostmortemState(env)) || { seasons: {} };
+    const years = Object.entries(st.seasons || {}).filter(([, s]) => s && s.builtAt && !s.absent).map(([y]) => Number(y)).sort((a, b) => b - a);
+    const docs = (await Promise.all(years.map((y) => readPostmortem(env, y)))).filter((d) => d && Array.isArray(d.offers));
+    if (!docs.length) return null;
+    // Today's names: the newest season's teams.
+    const names = Object.fromEntries((docs[0].teams || []).map((t) => [t.id, t.name]));
+    return docs.map((d) => ({ season: d.season, offers: postmortemForExport(postmortemData(d, names)) }));
+  } catch { return null; }
 }
 
 /** Season Statistics' Whole season for the LLM export, shaped as Site API carries it; null while not built or not visible. */
