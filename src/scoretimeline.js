@@ -27,6 +27,8 @@
  * that spans four days, and it bounds a week at well under the row cap even if
  * the cron fires every minute for the entire span.
  */
+import { roundPts } from './round.js';
+
 export const MIN_GAP_MS = 60 * 1000;
 
 /**
@@ -331,14 +333,14 @@ export class ScoreTimelineDO {
       if (!Number.isFinite(val)) continue;
       const before = this.last[pid];
       if (before === undefined) { this.last[pid] = val; continue; }
-      const delta = Math.round((val - before) * 10) / 10;
+      const delta = roundPts(val - before);
       if (Math.abs(delta) < MIN_DELTA) continue;
       this.last[pid] = val;
       fresh.push({
         t: stamp,
         p: pid,                                   // ESPN player id
         d: delta,                                 // what they just scored
-        v: Math.round(val * 10) / 10,             // their total after it
+        v: roundPts(val),                         // their total after it
         m: (body.pm && body.pm[pid]) || null,     // which matchup it belongs to
       });
     }
