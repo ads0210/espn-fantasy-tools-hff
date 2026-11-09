@@ -405,14 +405,16 @@ var TX_STATUS = {
   completed: 'Completed',
   on_the_table: 'On the table',
   pending_approval: 'Pending approval',
-  rejected: 'Rejected',
+  rejected: 'Turned down',
   cancelled: 'Withdrawn',
+  withdrawn: 'Withdrawn',
+  superseded: 'Superseded',
   expired: 'Expired'
 };
 var TX_KIND = { trade: 'Trade', waiver: 'Waiver', swap: 'Move', add: 'Add', drop: 'Drop' };
 
-function txPlayer(p, sign) {
-  return '<span class="txp' + (sign ? ' ' + sign : '') + '">' +
+function txPlayer(p, sign, struck) {
+  return '<span class="txp' + (sign ? ' ' + sign : '') + (struck ? ' struck' : '') + '">' +
     (sign === 'add' ? '<span class="txsign">+</span>'
       : sign === 'drop' ? '<span class="txsign">&minus;</span>' : '') +
     // Week 6 (A6): a defence's name already says D/ST, so its tag is not repeated.
@@ -435,11 +437,17 @@ function txRow(t) {
       return '<span class="txgroup">' +
         side.players.map(function (p) { return txPlayer(p, null); }).join('') + '</span>';
     }).join('<span class="txswap">&#8644;</span>');
+    // The players the receiving side dropped to make room ride on the completed trade.
+    if (t.drops && t.drops.length) {
+      body += '<span class="txgroup txforced">' +
+        t.drops.map(function (p) { return txPlayer(p, 'drop'); }).join('') +
+        '<span class="txfnote">to make room</span></span>';
+    }
   } else {
     who = (t.teams || []).map(txTeam).join('');
     body = '<span class="txgroup">' +
-      (t.adds || []).map(function (p) { return txPlayer(p, 'add'); }).join('') +
-      (t.drops || []).map(function (p) { return txPlayer(p, 'drop'); }).join('') +
+      (t.adds || []).map(function (p) { return txPlayer(p, 'add', t.status === 'claim_lost'); }).join('') +
+      (t.drops || []).map(function (p) { return txPlayer(p, 'drop', t.status === 'claim_lost'); }).join('') +
       '</span>';
   }
 
@@ -450,6 +458,8 @@ function txRow(t) {
   if (t.kind === 'trade' && TX_STATUS[t.status]) {
     tags += '<span class="txstat ' + esc(t.status) + '">' + esc(TX_STATUS[t.status]) + '</span>';
   }
+  // A claim that lost is never made to look like one that went through.
+  if (t.status === 'claim_lost') tags += '<span class="txstat claim_lost">Claim lost</span>';
   if (t.bid) tags += '<span class="txbid">$' + esc(String(t.bid)) + '</span>';
 
   return '<div class="txrow">' +
