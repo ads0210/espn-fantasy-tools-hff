@@ -100,7 +100,7 @@ h1 .cur { display:inline-block; width:.55em; height:1.05em; margin-left:3px; ver
 
 /* ---- the log is saving its reads: a notice above the tab, and the same words in a resting feed ---- */
 .restbar { margin:12px 0 0; padding:9px 12px; border:1px solid var(--amber); background:var(--t-amber); border-radius:6px; color:var(--ink); }
-.restbar b { color:var(--amber); font-weight:700; }
+.restbar b { color:var(--signal); font-weight:700; }
 .restnote { margin:0 0 10px; padding:9px 12px; border:1px dashed var(--amber); border-radius:6px; color:var(--ink); }
 
 /* ---- paused bar ---- */
