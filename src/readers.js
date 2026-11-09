@@ -105,7 +105,7 @@ const TOOL_READS = {
     datasets: ['league_history_digest', 'h2h_full_digest'],
   },
   'trade-analyzer': {
-    routes: [['GET', '/apps/trade-analyzer/', 'document'], ['GET', '/api/trade', 'on load'],
+    routes: [['GET', '/apps/trade-analyzer/', 'document'], ['GET', '/api/trade', 'on load'], ['GET', '/api/trade/postmortem', 'on load and on season change'],
       ['POST', '/api/site-log/event', 'on share']],
     datasets: ['trade_digest'],
   },
@@ -172,7 +172,7 @@ export function pageForRoute(routeKey) {
   if (path === '/api/data' || path.startsWith('/api/data/')) return 'draft-helper';
   if (path.startsWith('/api/live/')) return 'live-matchups';
   if (path === '/api/hof') return 'hall-of-fame';
-  if (path === '/api/trade') return 'trade-analyzer';
+  if (path === '/api/trade' || path === '/api/trade/postmortem') return 'trade-analyzer';
   if (path.startsWith('/api/fortune-teller')) return 'fortune-teller';
   if (path === '/api/llm-export') return 'llm-export';
   if (path === '/api/tools/unlock') return 'site-backend';
