@@ -232,6 +232,7 @@ export function answerParts(epKey, { csv, team, logos, cfg, index, period = 'who
   if (epKey === 'season') return { parts: [csv ? `ec:season:${period}:${table}` : `e:season:${period}`], updatedAt: latest('seasonStats') };
   // /insights: `period` carries the week as wN.
   if (epKey === 'insights') return { parts: [csv ? `ec:insights:${period}` : `e:insights:${period}`], updatedAt: latest('matchupInsights') };
+  if (epKey === 'postmortem') return { parts: [`${csv ? 'ec' : 'e'}:postmortem:${period}`], updatedAt: latest('tradePostmortem') };
   if (epKey === 'frontoffice') return { parts: [(csv ? 'ec:frontoffice' : 'e:frontoffice') + (team ? ':' + team : '')], updatedAt: latest('frontOffice') };
   // /full: every section its tools allow, in registry order.
   const keys = SECTIONS.filter((s) => s.key !== 'about' && vis.has(s.key) && (s.key !== 'logos' || logos)).map((s) => s.key);
@@ -287,6 +288,7 @@ export function buildAnswer({ snap, cfg, epKey, team = '', csv = false, logos = 
     endpoint: epKey, apiVersion: 1, league: snap.index.leagueName, season: snap.index.season, week: snap.index.week,
     ...(epKey === 'season' ? { period } : {}),
     ...(epKey === 'insights' ? { insightsWeek: Number(String(period).slice(1)) || null } : {}),
+    ...(epKey === 'postmortem' ? { postmortemSeason: Number(period) || null } : {}),
     updatedAt, refreshEverySeconds: refreshEvery,
     pace: { askEverySeconds: pace.header, site: pace.level, note: pace.note },
     docs: `${origin}/apps/site-api/#${epKey}`,
@@ -366,7 +368,7 @@ export async function handleSiteApi(request, env, ctx, { now = Date.now() } = {}
       'Access-Control-Allow-Headers': 'Authorization, If-None-Match, X-Script-Name', 'Access-Control-Max-Age': '86400' }) });
   }
   if (method !== 'GET' && method !== 'HEAD') return fail(cr, 405, 'method_not_allowed', 'The API only reads.', {}, { Allow: 'GET, HEAD, OPTIONS' });
-  if (!m) return fail(cr, 404, 'not_found', 'There’s no endpoint here. The eight are /full, /scoreboard, /standings, /season, /insights, /frontoffice, /rosters and /activity.');
+  if (!m) return fail(cr, 404, 'not_found', 'There’s no endpoint here. The nine are /full, /scoreboard, /standings, /season, /insights, /frontoffice, /postmortem, /rosters and /activity.');
 
   let cfg;
   try { cfg = await apiSettings(env, now); } catch { return fail(cr, 500, 'server_error', 'Something went wrong on the site. Try again shortly.'); }
@@ -490,6 +492,16 @@ export async function handleSiteApi(request, env, ctx, { now = Date.now() } = {}
   if (m.ep.key === 'frontoffice') {
     if (visibilityOf(cfg, 'front-office') !== VISIBILITY.VISIBLE) return fail(cr, 403, 'not_visible', 'Front Office isn’t visible to members, so its data is left out.');
     if (!snap.index.frontOffice) return fail(cr, 503, 'not_ready', 'Front Office appears once it has read this week’s rosters.');
+  }
+  // /postmortem: Trade Analyzer's Postmortem, served only while Trade Analyzer is visible to members, for a season it holds.
+  if (m.ep.key === 'postmortem') {
+    if (visibilityOf(cfg, 'trade-analyzer') !== VISIBILITY.VISIBLE) return fail(cr, 403, 'not_visible', 'Trade Analyzer isn’t visible to members, so its Postmortem is left out.');
+    const have = snap.index.postmortemSeasons || [];
+    if (!have.length) return fail(cr, 503, 'not_ready', 'The Postmortem appears once it has read the season’s trades.');
+    const sq = url.searchParams.get('season');
+    const yr = sq == null || sq === '' ? (snap.index.postmortemCurrent || have[0]) : Number(sq);
+    if (!/^\d+$/.test(String(yr)) || !have.includes(yr)) return fail(cr, 400, 'bad_request', `season must be one of ${have.join(', ')}.`);
+    period = String(yr);
   }
   const logos = logosQ === 'true';
   const keyInfo = keyMeta(sa, ring, match, now);
