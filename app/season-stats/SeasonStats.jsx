@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { PALETTES, BASE_CSS, BACKDROP, pts2, ptsSigned, dateText } from "../../src/ui.js";
+import { PALETTES, BASE_CSS, BACKDROP, dateText } from "../../src/ui.js";
 import { STANDINGS_CSS } from "../../src/standingstable.js";
 import ToolControls from "../shared/ToolControls.jsx";
 import { noteBrake, pollDelay } from "../shared/brake.js";
-import { TeamStrip, SecHead, Placeholder, UI_FONT, HOF_CSS } from "../hall-of-fame/HallOfFame.jsx";
+import { SecHead, Placeholder, UI_FONT, HOF_CSS } from "../hall-of-fame/HallOfFame.jsx";
 import { SS_CSS } from "./css.js";
+import { RecordGrid, RECORD_CSS } from "../shared/RecordPanel.jsx";
 import { liveOverlay } from "../../src/seasonlive.js";
 
 /**
@@ -20,8 +21,6 @@ import { liveOverlay } from "../../src/seasonlive.js";
  */
 
 const THEME_COOKIE = "eft_theme";
-const COUNTS = new Set(["n", "wks", "teams"]);
-const pct1 = (x) => `${(Math.round(Number(x || 0) * 1000 + 1e-6) / 10).toFixed(1)}%`;
 const readCookie = (name) => {
   try { const m = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`)); return m ? decodeURIComponent(m[1]) : null; } catch { return null; }
 };
@@ -30,159 +29,17 @@ const IDLE_LIMIT_MS = 4 * 60 * 60 * 1000;
 const HELP_STEPS = [
   [1, "Choose a period", "The rail under the title sets what every section counts: the whole season, the regular season, the postseason once it starts, or the season as it stood after any week played. Tap a week on the rail to go back to it."],
   [2, "Standings", "The league table, the same one the home page can show, with all-play, luck and the power ranking beside the usual columns. Tap a column's heading to sort by it, and the small i beneath it for what it means."],
-  [3, "Read a record", "Each panel is one record: its value, and the team or player holding it below. A tie lists everyone sharing it. The i in a panel's corner says how the record is counted and who is next."],
+  [3, "Read a record", "Each panel is one record: its value, and the team or player holding it below. A tie lists everyone sharing it. The i in a panel's corner says how the record is counted and who is next. Show top N at a panel's foot opens it across the page with the whole top ten; it stays open until you close it with the same bar."],
   [4, "See every record", "Each section shows its headline records first. The bar beneath them opens the rest of the section."],
   [5, "Scoring", "The highest and lowest weeks, the season's shootout and slog, and the most points from each position."],
   [6, "Lineups and projections", "Bench points, best possible lineups, and how teams did against ESPN's projections."],
   [7, "Games and players", "Blowouts, close games, comebacks and streaks; the season's best players and best moves, free agents included."],
-  [8, "Moves, history and fun", "Who has been busiest, whose draft is paying off, anything Hall of Fame has never seen, and the frauds and heartbreaks."],
+  [8, "Moves and fun", "Who has been busiest, whose draft is paying off, the most lopsided trade, and the frauds and heartbreaks. The best start in league history sits with the standings."],
   [9, "Record Holders", "The last section counts the page itself: a point for every good record a team holds, a point off for every bad one."],
   [10, "While games are on", "Records marked Live can change during the games; everything else, and the standings, moves only when a matchup ends."],
 ];
 
-/* ------------------------------------------------------------------ formatting */
-function fmt(rec, e) {
-  const v = e.value;
-  switch (rec.unit) {
-    case "pts": return pts2(v);
-    case "diff": return ptsSigned(v);
-    case "diff1": return `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v).toFixed(2)}`;
-    case "pct": return pct1(v);
-    case "wp": return `${Number(v).toFixed(0)}%`;
-    case "rec": return e.text || String(v);
-    case "power": return Number(v).toFixed(1);
-    case "places": return rec.id === "S79" ? String(Math.abs(v)) : `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v)}`;
-    case "net": return `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v)}`;
-    default: return String(v);
-  }
-}
-const unitWord = (rec, e) => {
-  if (rec.id.startsWith("S11.")) return e.value === 1 ? "game in a row" : "games in a row";
-  if (rec.unit === "wks") return "weeks in a row";
-  if (rec.unit === "teams") return e.value === 1 ? "team" : "teams";
-  if (rec.id === "S79") return "places down at his position";
-  if (rec.unit === "places") return rec.kind === "player" ? "places at his position" : Math.abs(e.value) === 1 ? "place" : "places";
-  if (rec.unit === "diff1") return Math.abs(e.value) === 1 ? "win" : "wins";
-  if (rec.unit === "n" && rec.id === "S113") return e.value === 1 ? "record" : "records";
-  if (rec.id === "S110" && e.text) { const n = e.text.split("-").reduce((x, y) => Number(x) + Number(y), 0); return n === 1 ? "after week 1" : `after ${n} weeks`; }
-  return "";
-};
-const weekLabel = (e) => (e.span ? `Weeks ${e.span[0]}–${e.span[1]}` : e.week ? `Week ${e.week}` : "");
-function holders(rec) {
-  if (!rec.entries.length) return [];
-  const top = rec.entries[0].value;
-  return rec.entries.filter((e) => e.value === top);
-}
-/* When tied holders set the record in different weeks, each holder carries its own week and the shared week label
-   above the strip is left out (a team can even tie itself, in two weeks). */
-const weeksDiffer = (list) => new Set(list.map(weekLabel)).size > 1;
-const emptyOf = (rec) => {
-  if (rec.empty) return rec.empty;
-  if (!rec.entries.length) return { title: "Not yet", note: "Nothing to show for this period yet." };
-  if (COUNTS.has(rec.unit) && rec.entries[0].value === 0 && rec.better !== "low") return { title: "None yet", note: rec.info };
-  return null;
-};
-
-/* ------------------------------------------------------------------ one record panel (Hall of Fame's anatomy) */
-function RecordTile({ rec, live, T }) {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    if (!open) return undefined;
-    const close = () => setOpen(false);
-    const esc = (e) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("click", close);
-    document.addEventListener("keydown", esc);
-    return () => { document.removeEventListener("click", close); document.removeEventListener("keydown", esc); };
-  }, [open]);
-  const team = (id) => T[id] || { name: "Unknown team", logo: null };
-  const chipTeam = (id) => ({ teamId: id, name: team(id).name, logo: team(id).logo });
-  const empty = emptyOf(rec);
-  const hs = empty ? [] : holders(rec);
-  const first = hs[0];
-  const text = first ? fmt(rec, first) : "—";
-  const auto = text.length > 9 ? "small" : text.length > 6 ? "med" : "";
-  const runner = !empty && rec.entries.find((e) => e.value !== (first && first.value));
-  const match = rec.kind === "match" || rec.kind === "pair";
-  // Who an entry names: a matchup's two teams (winner first), a player, or every team sharing it.
-  const entryName = (e) => {
-    if (!e) return "";
-    if (e.player) return e.player.name;
-    if (e.vs) return `${team(e.vs[0]).name} vs ${team(e.vs[1]).name}`;
-    return (e.teams || []).map((id) => team(id).name).join(" & ");
-  };
-  const isLive = live && rec.live;
-  const wk = first && !weeksDiffer(hs) ? weekLabel(first) : "";
-  const unit = first ? unitWord(rec, first) : "";
-  const net = rec.unit === "net" && first;
-  const tally = net && hs.every((e) => e.good === first.good && e.bad === first.bad);
-  // A matchup entry with a winner: the winner's chip outlined green, the other red (D63, and every neutral matchup
-  // record too). A tie, or a pair with no side ahead (trade partners), has neither.
-  const decided = (e) => Boolean(e.vs && e.teams && e.teams.length === 1 && e.teams[0] === e.vs[0]);
-  const good = rec.tone > 0;
-  const own = weeksDiffer(hs);
-  let names = [];
-  let vs = null;
-  if (!empty) {
-    if (rec.kind === "player") {
-      names = hs.map((e, i) => ({ teamId: `${e.player.name}-${e.team}-${i}`, name: `${e.player.name} · ${e.player.pos}`,
-        logo: e.team ? team(e.team).logo : null,
-        owner: [e.against ? `against ${team(e.team).name}` : e.team ? team(e.team).name : "Free agent", own ? weekLabel(e) : ""].filter(Boolean).join(" · ") }));
-    } else if (match) {
-      vs = hs.map((e) => (decided(e)
-        ? [{ ...chipTeam(e.vs[0]), cls: "sswin" }, { ...chipTeam(e.vs[1]), cls: "sslose" }]
-        : [chipTeam(e.vs[0]), chipTeam(e.vs[1])]));
-    } else {
-      names = hs.flatMap((e) => e.teams.map((id) => ({ ...chipTeam(id), owner: own ? weekLabel(e) : undefined })));
-    }
-  }
-  const sub = !empty && (unit || (net && !tally) || first.sub || tally);
-  return (
-    <div className={`tile ssrec${isLive ? " sslive" : ""}${rec.tone < 0 ? " ssbad" : ""}${rec.unit === "net" && rec.better === "low" ? " ssbad" : ""}`}>
-      <button className="tinfo" type="button" aria-expanded={open ? "true" : "false"} aria-label={`About ${rec.title}`}
-        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}>i</button>
-      {open && (
-        <div className="tnote" onClick={(e) => e.stopPropagation()}>
-          {rec.info}
-          {rec.since && <span className="ssnext"><b>Recorded</b> from week {rec.since}, when the site began recording games as they were played</span>}
-          {match && hs.filter(decided).map((e, i) => (
-            <span className="ssnext" key={`m${i}`}><b>{good ? "For" : "Won"}</b> {team(e.vs[0]).name} <b className="ssagainst">{good ? "Against" : "Lost"}</b> {team(e.vs[1]).name}</span>
-          ))}
-          {net && hs.map((e) => <span className="ssnext" key={e.teams[0]}><b>{team(e.teams[0]).name}</b> {e.good} good, {e.bad} bad</span>)}
-          {runner && <span className="ssnext"><b>Next</b> {fmt(rec, runner)}{entryName(runner) ? ` · ${entryName(runner)}` : ""}</span>}
-        </div>
-      )}
-      {/* Fixed areas, each centred in its own band, so a wrapped title or a smaller value never moves the rest. */}
-      <div className="tlabel ssarea-t"><div className="sstbox"><i className="ssfl" aria-hidden="true" /><i className="ssfr" aria-hidden="true" /><span className="sstitle">{rec.title}</span></div></div>
-      {empty ? <div className="ssarea-e"><Placeholder title={empty.title} /></div> : (
-        <>
-          <div className="ssarea-v"><div className={`tvalue gradv ${auto}`}>{text}</div></div>
-          <div className="ssarea-s">
-            {sub && (
-              <span className="ssline">
-                {unit && <span className="ssunit">{unit}</span>}
-                {net && !tally && <span className="ssunit">{hs.length} teams level</span>}
-                {first.sub && <span className="ssmeta">{first.sub}</span>}
-                {tally && (
-                  <span className="sstally" aria-label={`${first.good} good, ${first.bad} bad`}>
-                    <span className="sstallybar" aria-hidden="true">
-                      <i className="g" style={{ flexGrow: first.good }} /><i className="b" style={{ flexGrow: first.bad }} />
-                    </span>
-                    <span className="sstallytxt"><b className="g">{first.good}</b> good <b className="b">{first.bad}</b> bad</span>
-                  </span>
-                )}
-              </span>
-            )}
-          </div>
-          <div className="ssarea-w">
-            {isLive && <span className="sslivechip">Live</span>}
-            {wk && <span className="sswk">{wk}</span>}
-          </div>
-        </>
-      )}
-      <div className="ssarea-n">{empty ? <div className="tfootnames" /> : <TeamStrip teams={names} vs={vs} />}</div>
-    </div>
-  );
-}
+/* Every record panel is the shared one (app/shared/RecordPanel.jsx), with Hall of Fame. */
 
 /* ------------------------------------------------------------------ the standings: the one shared table */
 function Standings({ data }) {
@@ -281,7 +138,8 @@ function Section({ id, title, recs, live, T, children, fixed }) {
   const [open, setOpen] = useState(false);
   const head = fixed ? recs : recs.filter((r) => r.headline);
   const rest = fixed ? [] : recs.filter((r) => !r.headline);
-  const grid = (list, cls = "") => <div className={`rowgrid ${cls}`}>{list.map((r) => <RecordTile key={r.id} rec={r} live={live} T={T} />)}</div>;
+  const TF = (id) => T[id] || { name: "Unknown team", logo: null };
+  const grid = (list, cls = "") => <RecordGrid recs={list} T={TF} liveOn={live} cls={cls} />;
   return (
     <section className="sssec" id={`sec-${id}`}>
       <SecHead>{title}</SecHead>
@@ -391,6 +249,7 @@ export default function SeasonStats() {
 ${HOF_CSS}
 ${STANDINGS_CSS}
 ${SS_CSS}
+${RECORD_CSS}
       `}</style>
       <div className="wrap scr-ss">
         <div className="toolhead">
