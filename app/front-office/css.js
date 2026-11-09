@@ -44,7 +44,7 @@ export const FO_CSS = `
 .fotab[aria-selected="true"] { color:var(--ink); background:color-mix(in srgb,var(--accent) 12%,var(--panel-2)); }
 .fotab[aria-selected="true"]::after { content:""; position:absolute; left:0; right:0; top:0; height:3px; background:var(--accent); box-shadow:0 0 12px var(--accent-glow); }
 .fotab .c { display:inline-block; margin-left:6px; min-width:18px; padding:1px 5px; font-size:10px; letter-spacing:0; border-radius:9px; background:var(--flag); color:#fff; }
-.fotab .c.amber { background:var(--signal); color:#1A1300; }
+.fotab .c.amber { background:var(--signal); color:var(--panel); }
 .fotab:focus-visible { outline:2px solid var(--sky); outline-offset:-2px; }
 
 /* ---- the checklist ----------------------------------------------------------------------------------------------- */

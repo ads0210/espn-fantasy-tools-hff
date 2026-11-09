@@ -5,6 +5,7 @@ import ScrollBox from "../shared/ScrollBox.jsx";
 import { noteBrake, pollDelay } from "../shared/brake.js";
 import { Ctx, Blocks, Feed, KV, Heartbeat, Dot, Time, useNow } from "./blocks.jsx";
 import VisitsChart from "./VisitsChart.jsx";
+import LeagueViews, { LEAGUE_VIEWS_CSS } from "./LeagueViews.jsx";
 import { setZone, readZone, localMidnight, clockText, num, toMs } from "./format.js";
 
 /* ==========================================================================
@@ -59,8 +60,11 @@ export default function SiteBackend() {
   const [problem, setProblem] = useState(null);
   const [act, setAct] = useState({ page: "", kind: "", sev: "", team: "all", q: "", range: "7d", season: null });
   // Week 6 (N7): Visits over time, shut until opened; its range and page go with the Activity tab's request.
-  const [vis, setVis] = useState({ open: false, range: "7d", page: "", hidden: [] });
+  const [vis, setVis] = useState({ open: false, range: "7d", page: "", hidden: [], jump: null });
   const visRef = useRef(vis); visRef.current = vis;
+  // Week 10: the league views under Visits over time (each starts shut; the rollups are asked for only while one is open).
+  const [lv, setLv] = useState(() => new Set());
+  const lvRef = useRef(lv); lvRef.current = lv;
   const [feed, setFeed] = useState({ items: [], newestId: null, newestHour: null, oldestId: null, oldestAt: null, more: false, loaded: false });
   const [fresh, setFresh] = useState(() => new Set());
   const [pendingJump, setPendingJump] = useState(null);
@@ -107,7 +111,8 @@ export default function SiteBackend() {
       for (const k of ["page", "kind", "sev", "q", "range"]) if (a[k]) q.set(k, a[k]);
       if (a.team && a.team !== "all") q.set("team", a.team);
       if (a.season) q.set("season", String(a.season));
-      if (visRef.current.open) q.set("vrange", visRef.current.range);
+      if (visRef.current.open || lvRef.current.size) q.set("vrange", visRef.current.range);
+      if (lvRef.current.has("p-when")) q.set("vhours", "1");
     }
     for (const [k, v] of Object.entries(extra)) if (v != null && v !== "") q.set(k, String(v));
     return `${API}?${q.toString()}`;
@@ -330,7 +335,7 @@ export default function SiteBackend() {
         {d && d.rest ? <div className="restbar" role="status"><b>Saving reads</b> {d.rest.text}</div> : null}
         <main>
           {!d ? <div className="empty" style={{ marginTop: 14 }}>{problem ? "Nothing to show until the site can be reached." : "Reading the site…"}</div>
-            : tab === "activity" ? <Activity d={d} act={act} setAct={setAct} feed={feed} fresh={fresh} older={() => load("activity", "older")} vis={vis} setVis={setVis} />
+            : tab === "activity" ? <Activity d={d} act={act} setAct={setAct} feed={feed} fresh={fresh} older={() => load("activity", "older")} vis={vis} setVis={setVis} lv={lv} setLv={setLv} />
               : <TabBody d={d} tab={tab} openSet={openSet} setPanelOpen={setPanelOpen} jump={jump} allPanels={allPanels} beatFresh={beatFresh} />}
         </main>
         <div className="toolfoot">
@@ -495,7 +500,7 @@ function Panel({ p, at, open, onToggle }) {
   );
 }
 
-function Activity({ d, act, setAct, feed, fresh, older, vis, setVis }) {
+function Activity({ d, act, setAct, feed, fresh, older, vis, setVis, lv, setLv }) {
   const teams = Object.entries(d.teams || {}).map(([id, t]) => ({ value: String(id), label: t.name }));
   const teamOpts = [{ value: "all", label: "All teams" }, ...teams, { value: "none", label: "No team chosen" }];
   const pageOpts = [{ value: "", label: "All pages" }, ...(d.pages || []).map(([k, n]) => ({ value: k, label: n }))];
@@ -507,6 +512,8 @@ function Activity({ d, act, setAct, feed, fresh, older, vis, setVis }) {
     <>
       <Hero d={d} />
       <VisitsChart d={d} vis={vis} setVis={setVis} />
+      <style dangerouslySetInnerHTML={{ __html: LEAGUE_VIEWS_CSS }} />
+      <LeagueViews d={d} lv={lv} setLv={setLv} />
       <section className="panel" id="p-feed">
         <div className="ph">
           <span className="tog" style={{ cursor: "default" }}>
@@ -527,7 +534,9 @@ function Activity({ d, act, setAct, feed, fresh, older, vis, setVis }) {
           {!feed.loaded ? <div className="loading">Reading the log…</div> : <>
             {feed.rest ? <div className="restnote">{feed.rest}</div> : null}
             <p className="note" style={{ margin: "0 0 8px" }}>{num(feed.items.length)} {feed.items.length === 1 ? "entry" : "entries"} shown{feed.more ? ", more below" : ""}.</p>
-            <Feed items={feed.items} fresh={fresh} />
+            {vis.jump ? <div className="chips"><button type="button" className="chip" aria-pressed="true" onClick={() => setVis((s) => ({ ...s, jump: null }))}>
+              {new Intl.DateTimeFormat("en-US", vis.jump.hourly ? { weekday: "short", month: "short", day: "numeric", hour: "numeric" } : { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }).format(vis.jump.from)} · picked on Visits over time ✕</button></div> : null}
+            <Feed items={vis.jump ? feed.items.filter((x) => { const t = Date.parse(x.at || "") || Number(x.at) || 0; return t >= vis.jump.from && t < vis.jump.to; }) : feed.items} fresh={fresh} />
             {feed.more ? <button className="more" type="button" onClick={older}>Show older entries</button> : null}
           </>}
         </div>

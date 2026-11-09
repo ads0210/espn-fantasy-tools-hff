@@ -13,14 +13,18 @@
  * updated, which is the honest thing to say about a build whose changes nobody
  * outside the repo would notice.
  */
-/* Front Office: drafted at the user's request and approved by the user as written (30 October 2026). It replaces
-   the Matchup Insights list (v1.241). */
+/* Week 10: drafted for review on 5 November 2026 and approved by the user as written on 6 November. Replaces the
+   Front Office list (v1.253). */
 export const RELEASE_NOTE_ITEMS = [
-  'New tool: Front Office. Your weekly roster desk, with who to start, a checklist before lock, free agents ranked by '
-  + 'how much they\u2019d help your lineup (each with a player to drop), and the weeks ahead.',
-  'Matchup Insights keeps what still matters on screen once a game starts.',
-  'Site API: Front Office for any team, a lineup alert, and eight new iPhone and iPad jobs.',
-  'LLM Data Export includes your Front Office.',
+  'Trade Analyzer\u2019s new Postmortem judges every trade offer of every season in hindsight: what each deal did to '
+  + 'both sides\u2019 best lineups, beside what ESPN expected and what Trade Analyzer said at the time.',
+  'Hall of Fame\u2019s record book is rebuilt: a top 10 on every record, season records, Record Holders, and a glow on '
+  + 'records set this season.',
+  'Season Statistics adds top 10 tables, Records held and Prestige, and counts Hall of Fame records once this season '
+  + 'can no longer lose them.',
+  'Matchup Insights calls out games that climb a record\u2019s top 10. League activity shows each trade offer once, '
+  + 'with how it really ended, and marks waiver claims that didn\u2019t go through.',
+  'Site API: a Postmortem address and sheets for the trades and the record book. LLM Data Export includes the Postmortem.',
   'Various bug fixes and performance improvements.',
 ];
 
@@ -33,5 +37,5 @@ export const RELEASE_NOTE_ITEMS = [
  * production package's Step 0): the list is reviewed with the notes, and like them it is cleared or rewritten for the
  * next release. Keys are those in src/tools.js; a test holds every one to a registered tool.
  */
-/* Front Office's release: the new tool carries the tag. */
-export const NEW_TOOLS = ['front-office'];
+/* Week 10's release: no new tool. */
+export const NEW_TOOLS = [];

@@ -117,7 +117,7 @@ and (when the home page shows them) your row in the standings all follow it. Eve
 | **Standings** | Only when whoever administers the site turns them on here (they always live on [Season Statistics](#season-statistics)). The same table: sortable on any column, with ESPN's **Playoff %**, **Sim %** once [Fortune Teller](#fortune-teller) has run, all-play, luck and the power ranking. Your own row is highlighted |
 | **Tools** | One tile per tool. A tool kept for admins shows a lock |
 | **Injury watch** | Injuries on your own roster, using whichever of ESPN's two reports is newer |
-| **League activity** | Every completed add, drop and trade, one line per transaction, and every trade offer with where it stands. Starts at the last seven days |
+| **League activity** | Every completed add, drop and trade, one line per transaction, and every trade offer once, with how it ended (completed, expired, turned down, withdrawn, or superseded by another deal). A waiver claim that lost out is marked **Claim lost**, never shown as a move. Starts at the last seven days |
 | **Around the league** | Headlines from across the NFL |
 
 - **When the site is updated**, a short note says what changed, once per browser.
@@ -227,12 +227,18 @@ hundred and twenty of this season's records, each with the team or player who ho
   **as it stood after any week** played.
 - **Standings**: the league table, sortable on any column, with **all-play** (your record had you played everyone every
   week), **luck** and the **power ranking**. The small **i** under each heading says how a column is counted.
-- **Records** in sections: standings, scoring, lineups and projections, games, players, moves, history and fun. Each
-  section shows its headline records; the bar beneath opens the rest. A record held by several teams lists them all.
-  The **i** on a panel says how it is counted and who is next (both teams, for a matchup record).
+- **Records** in sections: standings, scoring, lineups and projections, games, players, moves and fun. Each section
+  shows its headline records; the bar beneath opens the rest. A record held by several teams lists them all. The **i**
+  on a panel says how it is counted and who is next (both teams, for a matchup record).
+- **Show top 10** at the foot of a panel opens its table in place, right down the list; open as many as you like. The
+  table ranks what happened, not teams: the ten longest streaks, the ten biggest games, so one team can hold several
+  places, each with its weeks. Tap a streak's value to see every game in it; a value with a dotted underline opens a
+  note on what it is made of (the weeks behind a count, for instance).
 - **Matchup records** show both teams: the winner outlined in green and the other team in red, and the **i** names
   them again. A tie, or a record with no side ahead (like the most frequent trade partners), marks neither.
-- **Record Holders**: a point for every good record a team holds, a point off for every bad one.
+- **Record Holders**: **Records held** gives a point for every good record a team holds and takes one off for every
+  bad one; **Prestige** counts every top-ten place on those records, more for higher places. Hall of Fame's all-time
+  records count here too once this season can no longer lose them.
 - **While games are on**, records marked **Live** can change; the standings move only when a matchup ends.
 
 **For whoever administers the site**
@@ -266,15 +272,16 @@ missing, records within reach, ESPN's projection, what happens live and what it 
   an all-time record from [Hall of Fame](#hall-of-fame) or the title itself; a season record is eight) and the logos
   of every team it names. A game shows its five weightiest rows first; **Show all** opens the rest.
 - **Records**: a record within reach is flagged while the game is on, and a record that falls leads the game once it
-  is over, unless something bigger happened. Hall of Fame's all-time records count for more than this season's.
+  is over, unless something bigger happened. Hall of Fame's all-time records count for more than this season's. A
+  game that climbs into a record's top ten (the second-highest score in league history, say) says so too.
 - **Narrow it down** with the control deck: search any word, tap categories on the colour bar, pick **Any time**,
   **Before**, **Live** or **After**, or show only rows about your team. On a phone the filters sit behind **Filters**.
 - **Before, during and after**: rows written before kickoff are kept as they stood at each team's first kickoff; live
   rows appear while games are on; once a game ends, what happened takes over, counted at once rather than when ESPN
   settles the week (the standings everywhere else still follow ESPN). A prediction is judged **Held** or **Broke** once
   the game is final.
-- **Across the league**: facts about the whole week (the closest projected week, who can clinch, the week's big game)
-  and, once games are over, one row for every record that fell.
+- **Across the league**: facts about the whole week (the closest projected week, who can clinch, the week's big game,
+  the last week to trade before the league's deadline) and, once games are over, one row for every record that fell.
 - Your team is the one chosen on the home page; rows naming it carry a small **You** mark.
 
 **For whoever administers the site**
@@ -305,11 +312,12 @@ place, worked out from ESPN's projections for every week left, your league's lin
   Open any card with the arrow at its foot for his season so far against his projections, this week's game in full,
   the next three weeks and how he compares with everyone who could play his slot.
 - **Before lock**: a checklist, most urgent first: a starter ruled out or on a bye, an empty slot, a game moved, a
-  better start on the bench, an open IR spot. Once the first game kicks off, the slots still open for a late swap are
-  listed with the next lock.
+  better start on the bench, an open IR spot, and the league's trade deadline when it is close. Once the first game
+  kicks off, the slots still open for a late swap are listed with the next lock.
 - **Pickups**: free agents ranked by how much they would add to *your* lineups, weighted towards the next three weeks,
   then the rest of the season and the postseason weeks. Each comes with the player to drop for him (the least valuable
-  one who leaves no hole in the next three weeks) and your place in the waiver order. After them come **bench
+  one who leaves no hole in the next three weeks, or, when your IR spot is free and a player can go there, a move to
+  IR so no drop is needed) and your place in the waiver order. After them come **bench
   upgrades**: players who would not start for you but project better than a bench player at their position, who is
   the suggested drop. They rank below pickups that would start.
 - **Weeks ahead**: every week left, with the best lineup your roster can field against your opponent's, the slots you
@@ -338,7 +346,14 @@ played.
 
 - **Champions**: one plaque per completed season, newest first.
 - **League records**: every all-time superlative (highest and lowest scores, biggest blowouts, closest games, longest
-  streaks and more) and who holds it. When teams are tied, all of them are listed.
+  streaks and more) and who holds it, on the same panels as [Season Statistics](#season-statistics): **Show top 10**
+  opens each record's table in place, ranking streaks and games rather than teams, with the season and weeks of each.
+  When teams are tied, all of them are listed.
+- **Season records**: the best and worst whole seasons (most points, best record, best all-play and more), with the
+  season being played shown as it goes.
+- **Record Holders**: records held and prestige across the whole record book.
+- **A golden glow** marks a record held from the season being played, and a fainter one a record whose top ten it has
+  reached; the rows from this season glow in each table too.
 - **All-time standings**: every team that has ever played in the league, sortable on any column, with the regular
   season and the postseason shown separately.
 - **Team records**: open any team for its season-by-season history and its head-to-head record against every other
@@ -399,6 +414,12 @@ played.
 - **The balance meter** leans toward the side the deal favours; **suggestions** offer up to three changes that bring a
   lopsided deal closer to even.
 - **Copy link** hands someone the exact trade on screen.
+- **Postmortem**, at the foot of the page: every trade offer the league has decided, in every season, judged in
+  hindsight. Each side's **lineup impact** is what the deal added to (or took from) its best possible lineups week by
+  week since it counted, then what is still to play on ESPN's projections. It is graded in the same words as a deal on
+  the table, beside what ESPN expected and, from now on, what Trade Analyzer said when the offer was first seen.
+  Completed trades are listed apart from offers that never went through (expired, turned down, withdrawn, or
+  superseded by another deal).
 
 **For whoever administers the site**
 
@@ -421,6 +442,8 @@ chat assistant how to read it.
 - **Full or compact**: compact keeps what a weekly decision needs at well under half the size.
 - **This season's records ride along** while [Season Statistics](#season-statistics) is visible: every team's all-play
   record, luck and power ranking, and every record with who holds it (the compact file keeps the headline records).
+- **Trade Analyzer's Postmortem** rides along too: every decided offer of every season, with each side's lineup impact
+  (the compact file keeps this season's completed trades).
 - **Copy or download**, then paste the prompt into a new chat and attach the file. Each copy or download is brought up
   to date first.
 
@@ -441,13 +464,13 @@ a page that shows how to use it on the tools people already have.
 **For members**
 
 - **The league's key** opens the API and nothing else on the site. It shows behind dots until you press **Show**.
-- **Eight addresses** answer everything: the scoreboard, the standings, [Season Statistics](#season-statistics) for any
-  period, [Matchup Insights](#matchup-insights) for any week, [Front Office](#front-office) for any team, the rosters,
-  league activity, and one for all of it. **Try it** shows exactly what a program gets.
-- **Guides for sixteen platforms and eighty-two jobs**: Google Sheets, Excel, Python, JavaScript, PowerShell, a Mac or
+- **Nine addresses** answer everything: the scoreboard, the standings, [Season Statistics](#season-statistics) for any
+  period, [Matchup Insights](#matchup-insights) for any week, [Front Office](#front-office) for any team,
+  [Trade Analyzer](#trade-analyzer)'s Postmortem for any season, the rosters, league activity, and one for all of it. **Try it** shows exactly what a program gets.
+- **Guides for sixteen platforms and eighty-four jobs**: Google Sheets, Excel, Python, JavaScript, PowerShell, a Mac or
   Linux shell, iPhone and iPad, Android, Home Assistant, Discord or Slack, your calendar, **ntfy** phone alerts,
   Telegram, GroupMe, desk and TV displays, and dashboards and SQL. Close-game alerts, lineup alerts before kickoff, apps of your own on an iPhone (your matchup live, Front Office, the standings offline, a picture of your week to share, a Siri briefing), injury changes, notable drops,
-  clinched and eliminated posts, weekly awards, a desk scoreboard, a bye-week planner and more. Each job has its steps,
+  clinched and eliminated posts, weekly awards, a sheet of every trade's postmortem, Hall of Fame's record book in a sheet, a desk scoreboard, a bye-week planner and more. Each job has its steps,
   its code with the key and your team filled in, and a picture of it working.
 - **How often to ask.** Programs should ask about once a minute; the site slows that when it is busy and says so in
   every answer. Every example on the page pauses or stops itself when told to.
@@ -476,8 +499,11 @@ a page that shows how to use it on the tools people already have.
 
 - **Overview**: one word for how the site is doing, a heartbeat of the site's once-a-minute work, anything that needs a
   look, and the site's use of its free daily allowance.
-- **Activity**: the site's log, and **Visits over time**, a chart by page and by team. Visits and sign-ins name the team
-  chosen on that browser and nothing else about a visitor. Errors a browser hits are recorded too.
+- **Activity**: the site's log, and **Visits over time**, a chart by page and by team with the NFL's game windows
+  shaded; tap a point to narrow the log to that time. Then the league's views: **Teams active per day**, **Tool
+  reach** (how many teams use each page), **When the league visits** (by day and hour) and a card per team with its
+  last thirty days. Visits and sign-ins name the team chosen on that browser and nothing else about a visitor. Errors a
+  browser hits are recorded too.
 - **Data Layer**: every part of the league's data, how fresh it is, whether ESPN is answering for it, and which pages
   use it.
 - **A tab for every page**: what it reads, who visited, and its part of the log. The Site API tab shows who is asking

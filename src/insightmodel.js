@@ -213,6 +213,8 @@ export function buildInsightModel(inp) {
     depthBefore: depthBefore(inp.depthWeeks, now.week),
     hof: { records: history.records || {} }, champions: history.champions || [], oddsWeeks, past: inp.past || {},
     capturedAt: inp.now || new Date(0).toISOString(),
+    // TD: the league's trade deadline, in milliseconds, or null for a league without one (never assumed).
+    deadline: Number(((settings && settings.settings && settings.settings.tradeSettings) || {}).deadlineDate) || null,
   };
 }
 

@@ -3,6 +3,8 @@ import ToolControls from "../shared/ToolControls.jsx";
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { PALETTES, BASE_CSS, BACKDROP, pts2, ptsSigned } from "../../src/ui.js";
 import TeamLogo from "../shared/TeamLogo.jsx";
+import { RecordGrid, RECORD_CSS } from "../shared/RecordPanel.jsx";
+import { SS_CSS } from "../season-stats/css.js";
 
 /**
  * Hall of Fame — the league's record book.
@@ -822,119 +824,41 @@ function Champions({ champions, byId }) {
   );
 }
 
-/* Records that describe a fixture rather than a team: shown as logo / name /
-   vs / name / logo rather than as a list of chips. */
-const VS_RECORDS = new Set(["biggestBlowout", "closestGame", "mostLopsidedMatchup", "closestMatchup"]);
-
-const RECORD_ORDER = [
-  ["mostChampionships", "Most Championships", (v) => String(v.value)],
-  ["highestWinPct", "Highest Win %", (v) => pct(v.value)],
-  ["bestAvgFinish", "Best Avg Finish", (v) => Number(v.value).toFixed(1)],
-  ["mostPoints", "Most Points (Career)", (v) => num1(v.value)],
-  ["bestDiff", "Best Point Diff (Career)", (v) => signed(v.value)],
-  ["mostPlayoffApps", "Most Playoff Apps", (v) => String(v.value)],
-  ["longestWinStreak", "Longest Win Streak (Games)", (v) => String(v.value)],
-  ["longestLossStreak", "Longest Losing Streak (Games)", (v) => String(v.value)],
-  ["highestSingleGame", "Highest Matchup Score", (v) => num1(v.points)],
-  ["lowestSingleGame", "Lowest Matchup Score", (v) => num1(v.points)],
-  ["biggestBlowout", "Biggest Blowout (Margin)", (v) => num1(v.margin)],
-  ["closestGame", "Closest Game (Margin)", (v) => num1(v.margin)],
-  ["mostLopsidedMatchup", "Most Lopsided Matchup", (v) => pct(v.winPct)],
-  ["closestMatchup", "Closest Matchup", (v) => pct(v.winPct)],
-  ["mostTransactions", "Most Transactions (Career)", (v) => String(v.value)],
-  ["mostTrades", "Most Trades (Career)", (v) => String(v.value)],
+/* -------------------------------------------------------- the record book (Week 10, D13–D17, D43) ---- */
+/* Every record is the shared record panel (app/shared/RecordPanel.jsx), built by the backend (src/hofrecords.js):
+   League Records in groups, Season Records (regular season), and Record Holders. A record whose holder is from the
+   season being played glows gold; one with that season anywhere in its top ten glows faintly. */
+const BOOK_GROUPS = [
+  ["Titles and finishes", ["mostChampionships", "highestWinPct", "lowestWinPct", "bestAvgFinish", "mostPlayoffApps"]],
+  ["Points", ["mostPoints", "bestDiff", "worstDiff", "highestSingleGame", "lowestSingleGame"]],
+  ["Games", ["biggestBlowout", "closestGame", "highestInLoss", "lowestInWin"]],
+  ["Streaks", ["longestWinStreak", "longestLossStreak"]],
+  ["Moves", ["mostTransactions", "mostTrades"]],
 ];
-
-function recordNote(key, holders) {
-  const n = holders.length;
-  const tie = n > 1 ? `${n === 2 ? "Two" : n === 3 ? "Three" : n}-way tie. ` : "";
-  const h = holders[0];
-  switch (key) {
-    case "bestAvgFinish": return `${tie}Mean final placement. Floor: minimum 2 completed seasons.`;
-    case "longestWinStreak": case "longestLossStreak":
-      return h.at ? `${tie}${h.at.season} Wk ${h.at.week} – ${h.at.endSeason} Wk ${h.at.endWeek}. Streaks run continuously across season boundaries.` : tie || null;
-    // A playoff matchup in this league can span two scoring periods, so its
-    // total is a two-week figure. Saying "matchup" rather than "game", and
-    // saying so here, is what keeps the number honest against the one-week
-    // regular-season scores sitting beside it.
-    case "highestSingleGame": case "lowestSingleGame":
-      return `${tie}${h.season} Wk ${h.week}. Playoff matchups can run two weeks, so a postseason total may cover both.`;
-    case "biggestBlowout": case "closestGame":
-      return `${tie}${h.season} Wk ${h.week}. Margins are per matchup; a playoff matchup can run two weeks.`;
-    case "mostLopsidedMatchup":
-      return `${tie}Leads the all-time series ${h.record}. Floor: minimum 3 meetings.`;
-    case "closestMatchup":
-      return `${tie}All-time series stands at ${h.record}. Floor: minimum 3 meetings.`;
-    default: return tie || null;
-  }
-}
-function recordTeams(key, holders, byId) {
-  const ids = [];
-  for (const h of holders) {
-    if (h.teamId != null) ids.push(h.teamId);
-    else if (key === "biggestBlowout") { ids.push(h.winner); ids.push(h.loser); }
-    else if (key === "closestGame") { ids.push(h.teamA); ids.push(h.teamB); }
-    else if (h.dominantTeam != null) {
-      ids.push(h.dominantTeam);
-      ids.push(h.dominantTeam === h.teamA ? h.teamB : h.teamA);
-    }
-  }
-  const seen = new Set();
-  return ids.filter((id) => (seen.has(id) ? false : seen.add(id)))
-    .map((id) => byId[id]).filter(Boolean);
-}
-
-/** Fixture records as ordered pairs — winner or dominant side first. */
-function recordPairs(key, holders, byId) {
-  if (!VS_RECORDS.has(key)) return null;
-  const out = [];
-  for (const h of holders) {
-    let a = null, b = null;
-    if (key === "biggestBlowout") { a = h.winner; b = h.loser; }
-    else if (key === "closestGame") { a = h.teamA; b = h.teamB; }
-    else if (h.dominantTeam != null) {
-      a = h.dominantTeam;
-      b = h.dominantTeam === h.teamA ? h.teamB : h.teamA;
-    }
-    if (byId[a] && byId[b]) out.push([byId[a], byId[b]]);
-  }
-  return out.length ? out : null;
-}
-
-function LeagueRecords({ records, byId }) {
-  const present = RECORD_ORDER.filter(([key]) => (records[key] || []).length);
-  if (!present.length) {
-    return (
-      <>
-        <SecHead>League Records</SecHead>
-        <Placeholder title="No records yet" note="Records appear once a season has been played." />
-      </>
-    );
-  }
+function RecordBook({ book, byId }) {
+  const now = book.currentSeason;
+  const T = (id, season) => {
+    const cur = byId[id], then = season && book.names && book.names[season] ? book.names[season][id] : null;
+    return { name: cur ? cur.name : then || `Team ${id}`, logo: cur ? cur.logo || null : null, then: cur && then && then !== cur.name ? then : null };
+  };
+  const byRec = Object.fromEntries((book.league || []).map((r) => [r.id, r]));
   return (
-    <>
+    <div className="scr-ss hofbook">
       <SecHead>League Records</SecHead>
-      <div className="rowgrid">
-        {RECORD_ORDER.map(([key, label, fmt]) => {
-          const holders = records[key] || [];
-          if (!holders.length) {
-            return (
-              <div className="tile" key={key}>
-                <div className="tlabel">{label}</div>
-                <div className="tbody"><Placeholder title="Not enough data" /></div>
-                <div className="tfootnames" />
-              </div>
-            );
-          }
-          return (
-            <Tile key={key} label={label} value={fmt(holders[0])}
-              note={recordNote(key, holders)}
-              names={recordTeams(key, holders, byId)}
-              vs={recordPairs(key, holders, byId)} />
-          );
-        })}
-      </div>
-    </>
+      {BOOK_GROUPS.map(([g, ids]) => {
+        const recs = ids.map((k) => byRec[k]).filter(Boolean);
+        return recs.length ? (
+          <div className="hofgroup" key={g}>
+            <div className="hofgh">{g}</div>
+            <RecordGrid recs={recs} T={T} glowSeason={now} />
+          </div>
+        ) : null;
+      })}
+      <SecHead>Season Records</SecHead>
+      <RecordGrid recs={book.season || []} T={T} glowSeason={now} />
+      <SecHead>Record Holders</SecHead>
+      <RecordGrid recs={book.standing || []} T={T} />
+    </div>
   );
 }
 
@@ -1599,9 +1523,11 @@ function TeamCard({ row, rows, pairs, seasonMeta, openId, setOpenId, expandAll }
 
 const HELP_STEPS = [
   [1, "Champions", "One plaque per completed season, newest first. The season being played shows as in progress until a champion is crowned."],
-  [2, "League records", "Every all-time superlative and who holds it. Where teams are tied, all of them are listed. Tap the small i on a panel for the detail behind the number."],
-  [3, "All-time standings", "Every team that has ever been in the league. Tap any column heading to sort by it; tap again to reverse."],
-  [4, "Team records", "Tap a card to open a team's full record, including its head-to-head history against every other team that has ever played here. Tap an opponent to open that series."],
+  [2, "League records", "Every all-time superlative and who holds it, in groups. Where teams are tied, all of them are listed. Tap the small i on a panel for how it is counted and who is next. Show top N at a panel's foot opens its top ten; a value with a dotted underline has more to tell. A record set this season glows gold, and faintly when this season is anywhere in its top ten."],
+  [3, "Season records", "The best and worst single regular seasons. The season being played shows as In play until it is complete, or until it can no longer lose the record."],
+  [4, "Record holders", "How many of the records above each team holds, good ones counting for and bad ones against, and Prestige, the same idea down every top ten. Tap a team's figure for what counted."],
+  [5, "All-time standings", "Every team that has ever been in the league. Tap any column heading to sort by it; tap again to reverse."],
+  [6, "Team records", "Tap a card to open a team's full record, including its head-to-head history against every other team that has ever played here. Tap an opponent to open that series."],
 ];
 
 export default function HallOfFame() {
@@ -1656,7 +1582,6 @@ export default function HallOfFame() {
 
   const rows = (data && data.rows) || [];
   const pairs = (data && data.pairs) || {};
-  const records = (data && data.records) || {};
   const seasonMeta = (data && data.seasonMeta) || {};
   const champions = (data && data.champions) || [];
   const byId = useMemo(() => {
@@ -1674,6 +1599,10 @@ export default function HallOfFame() {
         ${PALETTES}
         ${BASE_CSS}
 ${HOF_CSS}
+${SS_CSS}
+${RECORD_CSS}
+.hofgroup { margin-bottom:6px; }
+.hofgh { font-size:var(--fs-micro); font-weight:900; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-3); margin:6px 0 8px; }
       `}</style>
 
       <div className="wrap">
@@ -1724,7 +1653,7 @@ ${HOF_CSS}
         ) : (
           <>
             <Champions champions={champions} byId={byId} />
-            <LeagueRecords records={records} byId={byId} />
+            {data.book ? <RecordBook book={data.book} byId={byId} /> : <><SecHead>League Records</SecHead><Placeholder title="The record book is being rebuilt" note="It returns in a few minutes, with every record's top ten." /></>}
             <Standings rows={rows} seasonMeta={seasonMeta} />
             <SecHead>Team Records</SecHead>
             <div className="rowgrid teamgrid">

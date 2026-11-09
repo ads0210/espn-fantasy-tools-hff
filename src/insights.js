@@ -11,6 +11,7 @@
  */
 import { bestLineup, POS_ID, allTimeBefore } from './insightmodel.js';
 
+import { PLACEMENT_TYPE_ENTRIES } from './placements.js';
 export const CATS = {
   stakes: { label: 'Stakes', order: 1 }, race: { label: 'The race', order: 2 }, rivalry: { label: 'Rivalry and history', order: 3 },
   form: { label: 'Form', order: 4 }, players: { label: 'Players and lineups', order: 5 }, avail: { label: 'Availability', order: 6 },
@@ -20,6 +21,8 @@ export const CATS = {
 
 /* Every kept type: category, label (D41), base weight (D18), phase. Ids never change. */
 export const TYPES = {
+  // Record placements, I232 to I289 (src/placements.js): rows carry their own weight by place.
+  ...PLACEMENT_TYPE_ENTRIES,
   I1: ['stakes', "Win and You're In", 3, 'pre'], I2: ['stakes', 'Must Win', 3, 'pre'], I3: ['stakes', 'Odds on the line', 3, 'pre'],
   I4: ['stakes', 'Most critical game', 2, 'pre'], I5: ['stakes', 'Watched from afar', 2, 'pre'], I6: ['stakes', 'Game of the week', 2, 'pre'],
   I7: ['stakes', 'Rooting guide', 2, 'pre'], I8: ['stakes', 'Season on the line', 2, 'pre'], I9: ['stakes', 'Nothing at stake', 1, 'pre'],
@@ -74,7 +77,7 @@ export const TYPES = {
   I201: ['after', 'Kickers decided it', 1, 'post'], I202: ['after', 'Against the odds', 2, 'post'], I203: ['after', 'Against projection', 1, 'post'],
   I204: ['after', 'Standings move', 2, 'post'], I205: ['after', 'Streak update', 1, 'post'], I206: ['after', 'Head to head now', 1, 'post'],
   I207: ['after', 'Bad beat', 2, 'post'], I208: ['after', 'Lucky win', 1, 'post'], I209: ['after', 'Lineup grades', 1, 'post'], I220: ['after', 'Bench star', 1, 'post'],
-  I221: ['stakes', 'Clinch day', 2, 'pre'], I222: ['proj', 'Close week', 1, 'pre'], I223: ['stakes', "Week's big game", 2, 'pre'],
+  I290: ['stakes', 'Trade deadline', 2, 'pre'], I221: ['stakes', 'Clinch day', 2, 'pre'], I222: ['proj', 'Close week', 1, 'pre'], I223: ['stakes', "Week's big game", 2, 'pre'],
   I224: ['live', 'Scoring pace', 1, 'live'], I225: ['after', 'Week in review', 2, 'post'], I226: ['race', 'Everyone alive', 1, 'pre'],
   I227: ['race', 'Field set', 2, 'post'], I228: ['race', 'Season milestone', 1, 'pre'],
   // Round 8 (27 Oct): Hall of Fame's all-time records, broken after the final and within reach while the game is on.
@@ -118,7 +121,7 @@ const TEN = {
   I41: 4, I79: 4, I80: 4, I163: 4, I102: 4, I27: 6, I28: 6, I115: 6, I129: 7,
 };
 /* The rules' version: raise it with any change to what a row says or weighs, so played weeks are rebuilt once with it. */
-export const RULES_VERSION = 11;
+export const RULES_VERSION = 15;
 export const WEIGHT_MAX = 10;
 export const BANNER_MIN = 7;
 const CAP = new Set(['I132', 'I186', 'I178', 'I59']);
@@ -261,8 +264,11 @@ export function preRows(M, week, fx, opts = {}) {
         }
       }
       const up = [h, a].map((id) => S[id].seed - best[id]).reduce((x, y) => Math.max(x, y), 0);
+      // Docket A6: a team whose place cannot move this week is said plainly, not as "as high as 10th … drop to 10th".
+      const half = (id) => (best[id] === worst[id] ? [T(id), ` stays ${ord(best[id])} whatever happens this week`]
+        : ['a win could lift ', T(id), ` as high as ${ord(best[id])}, a loss drop them to ${ord(worst[id])}`]);
       if (up >= 2 || worst[h] - S[h].seed >= 2 || worst[a] - S[a].seed >= 2) out.push(row('I33', { teams: [h, a],
-        parts: ['Rise or fall: a win could lift ', T(h), ` as high as ${ord(best[h])} and `, T(a), ` as high as ${ord(best[a])}; a loss could drop them to ${ord(worst[h])} and ${ord(worst[a])}.`] }));
+        parts: ['Rise or fall: ', ...half(h), '; ', ...half(a), '.'] }));
     }
     // Top four all season, from every "after week N" part.
     for (const s of [sh, sa]) {
@@ -944,6 +950,12 @@ export function leagueRows(M, week, kind, facts) {
   if (kind === 'post' && facts.review) {
     const r = facts.review;
     out.push(row('I225', { teams: r.close.w ? [r.high.team, r.close.w] : [r.high.team], about: 'league', parts: ['Week in review: ', T(r.high.team), "'s ", V(pts(r.high.pts)), ...(r.close.w ? [' was the top score; the closest game went to ', T(r.close.w), ' by ', V(pts(r.close.m))] : [' was the top score; the closest game was a tie']), `; ${r.upsets ? `${num(r.upsets)} projected favourite${r.upsets === 1 ? '' : 's'} lost` : 'every projected favourite won'}.`] }));
+  }
+  // TD: the league's own trade deadline (tradeSettings.deadlineDate), in the week it falls; none for a league without one.
+  // Shown while the deadline is ahead and within seven days (the week's rows before kickoff).
+  if (kind === 'pre' && M.deadline) {
+    const nowMs = Date.parse(M.capturedAt || '') || Date.now();
+    if (M.deadline > nowMs && M.deadline - nowMs <= 7 * 864e5) out.push(row('I290', { about: 'league', parts: ['Trade deadline this week: ', { d: new Date(M.deadline).toISOString() }, '.'] }));
   }
   if (facts.fieldSet) out.push(row('I227', { teams: facts.fieldSet, about: 'league', parts: ['The playoff field is set: ', ...facts.fieldSet.flatMap((id, i) => [i ? ', ' : '', T(id)]), '.'] }));
   return out.sort(byOrder).slice(0, 6);

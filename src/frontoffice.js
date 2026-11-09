@@ -8,7 +8,7 @@
  *   pickups(M, teamId)    free agents ranked by fit, each with its suggested drop
  *   weeksAhead(M, teamId) the roster x weeks grid, each week's best lineup, the fantasy schedule, stash candidates
  */
-export const RULES_VERSION = 4;
+export const RULES_VERSION = 5;
 export const MARGIN = 2;                  // D12: A7/A8 and a bench alternative
 export const HOT = 15;                    // D25: L1/L2, combined over three weeks
 export const SPREAD_X = 1.5;              // D25: L15
@@ -297,6 +297,8 @@ function checks(M, teamId, T) {
   if (dst) for (const s of T.starters) if (s !== dst && s.opp === dst.nfl) add('facesOwnDefence', 'info', `${name(s)} plays against your own D/ST.`);
   const open = T.starters.filter((s) => !s.locked);
   if (T.starters.some((s) => s.locked) && open.length) add('unlocked', 'info', `${open.length} starter${open.length > 1 ? 's' : ''} still unlocked; the next lock is`, open.map((s) => s.kickoff).filter(Boolean).sort()[0] || null);
+  // TD: the league's own trade deadline, from a week before it until it passes (none for a league without one).
+  if (M.deadline && M.deadline > M.now && M.deadline - M.now <= 8 * 864e5) add('tradeDeadline', 'info', 'Trade deadline: offers must be accepted and through the league\'s review by', new Date(M.deadline).toISOString());
   if (T.oppProj != null && T.oppProj - T.lineupNow >= 15) add('trailing', 'info', `You trail by ${(T.oppProj - T.lineupNow).toFixed(2)} projected points: upside plays matter this week.`);
   const rank = { red: 0, amber: 1, info: 2 };
   return out.sort((a, b) => rank[a.tone] - rank[b.tone]);
@@ -317,11 +319,17 @@ export function pickups(M, teamId, opts = {}) {
   const counts = {};
   for (const id of ids) { const p = M.players[id]; counts[p.posId] = (counts[p.posId] || 0) + 1; }
   const benchIds = roster.filter((e) => e.slot === 20).map((e) => e.pid).filter((id) => M.players[id].droppable !== false);
+  // Docket A7: with the IR spot free and a player who can go there (out or on injured reserve), the move is "put him
+  // on IR", not "drop him": he leaves the active roster either way, so the lineup sums are the same, but nobody is
+  // cut. The one ESPN projects least for the rest of the season is the one named.
+  const restW = []; for (let w = w0; w <= M.regLast; w++) restW.push(w);
+  const irCand = irFree ? roster.filter((e) => e.slot !== 21 && ['OUT', 'INJURY_RESERVE'].includes(M.players[e.pid].inj)).map((e) => e.pid)
+    .sort((a, b) => sum(restW.map((w) => projOf(M.players[a], w))) - sum(restW.map((w) => projOf(M.players[b], w))))[0] ?? null : null;
   const opp = (() => { const fx = (M.schedule[w0] || []).find((m) => m.home === teamId || m.away === teamId); return fx ? (fx.home === teamId ? fx.away : fx.home) : null; })();
   const out = [];
   for (const fa of Object.values(M.players).filter((p) => p.status === 'FREEAGENT' || p.status === 'WAIVERS')) {
     const stash = ['OUT', 'DOUBTFUL', 'INJURY_RESERVE'].includes(fa.inj);
-    if (stash && !(irFree && projOf(fa, Math.min(w0 + 3, M.regLast)) > 0)) continue;
+    if (stash && !(irFree && irCand == null && projOf(fa, Math.min(w0 + 3, M.regLast)) > 0)) continue;
     const atCap = M.caps[fa.posId] > 0 && (counts[fa.posId] || 0) >= M.caps[fa.posId];
     const drops = benchIds.filter((id) => !atCap || M.players[id].posId === fa.posId);
     // The suggested drop (plan, Tab 2; D31): the bench player with the lowest rest-of-season projection whose loss leaves
@@ -331,7 +339,8 @@ export function pickups(M, teamId, opts = {}) {
     const holesAfter = (after) => next3.some((w) => solve(after.map((id) => M.players[id]), slotList(M), weekValue(M, w)).assign.some((x) => x == null));
     const holesNow = holesAfter(ids);
     const ordered = [...drops].sort((a, b) => rosVal(a) - rosVal(b));
-    const chosen = ordered.find((d) => holesNow || !holesAfter(ids.filter((x) => x !== d).concat(fa.pid))) ?? ordered[0];
+    const useIR = irCand != null && !atCap;
+    const chosen = useIR ? irCand : ordered.find((d) => holesNow || !holesAfter(ids.filter((x) => x !== d).concat(fa.pid))) ?? ordered[0];
     let best = null;
     for (const d of chosen != null ? [chosen] : []) {
       const after = ids.filter((x) => x !== d).concat(fa.pid);
@@ -361,24 +370,24 @@ export function pickups(M, teamId, opts = {}) {
     // D31: the adjustments only refine a player who would actually start somewhere in the
     // window; one who never would keeps a fit of zero however hot or popular he is, and sits under Show all.
     let fit = best.core >= 0.05 ? best.core + sum(adj.map((a) => a[1])) : Math.min(0, best.core);
-    let kind = best.core >= 0.05 ? 'start' : null, depth = 0;
+    let kind = best.core >= 0.05 ? 'start' : null, depth = 0, benchVs = null;
     // Not a starter anywhere ahead: is he still better than a bench player at his position the team could drop? Then
     // he is named as a bench upgrade, that bench player is the drop, and his fit is the depth gain at a quarter weight.
     if (!kind && !stash) {
       const streamer = fa.posId === 5 || fa.posId === 16;
       const dv = (p) => (streamer ? projOf(p, w0) : 0.5 * avg(next3.map((w) => projOf(p, w))) + 0.5 * avg(rest.map((w) => projOf(p, w))));
       const mine = dv(fa);
-      const worse = benchIds.filter((id) => M.players[id].posId === fa.posId)
+      const worse = benchIds.filter((id) => M.players[id].posId === fa.posId && id !== irCand)
         .map((id) => [id, mine - dv(M.players[id])]).filter(([, g]) => g >= BENCH_MIN)
         .filter(([id]) => holesNow || !holesAfter(ids.filter((x) => x !== id).concat(fa.pid)))
         .sort((a, b) => b[1] - a[1]);
-      if (worse.length) { kind = 'bench'; depth = worse[0][1]; best.drop = worse[0][0]; fit = BENCH_W * depth; }
+      if (worse.length) { kind = 'bench'; depth = worse[0][1]; benchVs = worse[0][0]; if (!useIR) best.drop = worse[0][0]; fit = BENCH_W * depth; }
     }
     if (fa.status === 'WAIVERS' && fit > 0) fit *= 0.9;
     fit = r2(fit);
     // Reasons a member reads: the lineup gain first, then schedule, depth chart, streamer, the adjustments.
     if (best.gN > 0.01) reasons.unshift(`Would start for you: +${r2(best.gN).toFixed(2)} a week over the next ${fa.posId === 5 || fa.posId === 16 ? 'game' : '3 weeks'}.`);
-    if (kind === 'bench') reasons.unshift(`Better than your bench: projects ${r2(depth).toFixed(2)} a week more than ${M.players[best.drop].name}${fa.posId === 5 || fa.posId === 16 ? ' this week' : ' over the weeks ahead'}.`);
+    if (kind === 'bench') reasons.unshift(`Better than your bench: projects ${r2(depth).toFixed(2)} a week more than ${M.players[benchVs].name}${fa.posId === 5 || fa.posId === 16 ? ' this week' : ' over the weeks ahead'}.`);
     const soft = next3.filter((w) => { const o = (M.nfl[fa.nfl] || {}).opp || {}; const r = (M.ratings[fa.posId] || {})[o[w]]; return r >= 25; }).length;
     if (soft >= 2) reasons.push(`Soft schedule: ${soft} of his next 3 opponents rank in the bottom 8 against ${POS[fa.posId]}s.`);
     if (d && d.d === 1 && [1, 2, 4].includes(fa.posId)) reasons.push(`First on ${fa.nfl}'s depth chart.`);
@@ -392,7 +401,8 @@ export function pickups(M, teamId, opts = {}) {
       own: fa.own, chg, next: projOf(fa, w0), ros: r2(sum(rest.map((w) => projOf(fa, w)))), form: fw.length ? r2(avg(fw.map((w) => fa.act[w]))) : null,
       opps: next3.map((w) => { const o = ((M.nfl[fa.nfl] || {}).opp || {})[w] || null; return { w, opp: o, p: r2(projOf(fa, w)), bye: onBye(M, fa, w), rank: o ? (M.ratings[fa.posId] || {})[o] || null : null }; }),
       tape: tapeOf(M, fa), fit, kind, gain: { next: r2(best.gN), rest: r2(best.gR), post: r2(best.gP), bench: r2(depth) }, adj: adj.map(([k, v]) => [k, r2(v)]), block,
-      reasons: reasons.slice(0, 3), drop: { pid: dp.pid, name: dp.name, pos: POS[dp.posId], nfl: dp.nfl, next: projOf(dp, w0), ros: r2(sum(rest.map((w) => projOf(dp, w)))) },
+      reasons: reasons.slice(0, 3), drop: { pid: dp.pid, name: dp.name, pos: POS[dp.posId], nfl: dp.nfl, next: projOf(dp, w0), ros: r2(sum(rest.map((w) => projOf(dp, w)))), ...(useIR && best.drop === irCand ? { toIR: true } : {}) },
+      ...(benchVs != null ? { benchVs: { pid: benchVs, name: M.players[benchVs].name } } : {}),
     });
   }
   // Bench upgrades are kept to the best BENCH_PER_POS at each position; the rest go back among the players who would

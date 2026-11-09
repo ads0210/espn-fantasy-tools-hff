@@ -114,6 +114,17 @@ export async function siteApiPageRoute(request, env, cfg0, url, ctx) {
         text: JSON.stringify({ ok: false, error: nr ? { code: 'not_ready', message: 'Front Office appears once it has read this week’s rosters.', docs: `${origin}/apps/site-api/#errors` }
           : { code: 'not_visible', message: 'Front Office isn’t visible to members, so its data is left out.', docs: `${origin}/apps/site-api/#errors` } }) });
     }
+    // /postmortem: a season it holds; refused as the API refuses it while Trade Analyzer is not visible or it has none yet.
+    if (ep.key === 'postmortem') {
+      const years = snap.index.postmortemSeasons || [];
+      if (!visibleSections(cfg).has('tradePostmortem') || !years.length) {
+        return json({ ok: true, status: !years.length ? 503 : 403, statusText: !years.length ? 'Service Unavailable' : 'Forbidden', headers: [['content-type', 'application/json; charset=utf-8']],
+          text: JSON.stringify({ ok: false, error: !years.length ? { code: 'not_ready', message: 'The Postmortem appears once it has read the season’s trades.', docs: `${origin}/apps/site-api/#errors` }
+            : { code: 'not_visible', message: 'Trade Analyzer isn’t visible to members, so its Postmortem is left out.', docs: `${origin}/apps/site-api/#errors` } }) });
+      }
+      const yq = Number(q.get('season'));
+      tryPeriod = String(years.includes(yq) ? yq : (snap.index.postmortemCurrent || years[0]));
+    }
     const sa = normaliseSiteApi(cfg.siteApi);
     const ring = await keyRing(cfg.sessionSecret, sa);
     const built = buildAnswer({ snap, cfg, epKey: ep.key, team, csv, logos: q.get('logos') === 'true', pretty: false, pace, games, quiet,
@@ -186,8 +197,8 @@ export async function siteApiPageRoute(request, env, cfg0, url, ctx) {
     payload.schemaBytes = (snap.index.at['x:schema'] || [0, 0])[1];
     // Each endpoint's answer as it stands, measured from the snapshot (all teams; /full without logos).
     const partBytes = (names) => names.reduce((n, x) => n + ((snap.index.at[x] || [0, 0])[1]), 0);
-    payload.epSizes = Object.fromEntries(['full', 'scoreboard', 'standings', 'season', 'insights', 'frontoffice', 'rosters', 'activity'].map((k) => {
-      const ap = answerParts(k, { csv: false, team: '', logos: false, cfg, index: snap.index, period: k === 'insights' ? `w${snap.index.insightCurrent}` : 'whole' });
+    payload.epSizes = Object.fromEntries(['full', 'scoreboard', 'standings', 'season', 'insights', 'frontoffice', 'postmortem', 'rosters', 'activity'].map((k) => {
+      const ap = answerParts(k, { csv: false, team: '', logos: false, cfg, index: snap.index, period: k === 'insights' ? `w${snap.index.insightCurrent}` : k === 'postmortem' ? String(snap.index.postmortemCurrent) : 'whole' });
       return [k, partBytes(ap.parts) + 600];
     }));
     const part = (n) => { const t = snap.text(n); return t == null ? [] : JSON.parse(t); };
@@ -197,6 +208,9 @@ export async function siteApiPageRoute(request, env, cfg0, url, ctx) {
       headToHead: payload.visible.includes('headToHead') ? part('s:headToHead') : [],
       season: payload.visible.includes('seasonStats') && snap.text('e:season:whole') ? JSON.parse(snap.text('e:season:whole')) : null,
       seasonPeriods: payload.visible.includes('seasonStats') ? (snap.index.seasonPeriods || []) : [],
+      postmortem: payload.visible.includes('tradePostmortem') && snap.index.postmortemCurrent && snap.text(`e:postmortem:${snap.index.postmortemCurrent}`) ? JSON.parse(snap.text(`e:postmortem:${snap.index.postmortemCurrent}`)) : null,
+      postmortemSeasons: payload.visible.includes('tradePostmortem') ? (snap.index.postmortemSeasons || []) : [],
+      records: payload.visible.includes('records') ? part('s:records') : [],
       frontOffice: payload.visible.includes('frontOffice') && snap.text('e:frontoffice') ? JSON.parse(snap.text('e:frontoffice')) : null,
       insights: payload.visible.includes('matchupInsights') && snap.index.insightCurrent && snap.text(`e:insights:w${snap.index.insightCurrent}`) ? JSON.parse(snap.text(`e:insights:w${snap.index.insightCurrent}`)) : null,
     };

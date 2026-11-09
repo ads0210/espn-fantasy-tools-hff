@@ -5,6 +5,9 @@
  * overlay never reaches either. Team names come from the period's own index; owner names never appear.
  */
 
+import { oneDecimal } from './round.js';
+
+
 const r2 = (x) => (x == null || !Number.isFinite(Number(x)) ? null : Math.round(Number(x) * 100 + 1e-9) / 100);
 const r4 = (x) => (x == null || !Number.isFinite(Number(x)) ? null : Math.round(Number(x) * 10000 + 1e-9) / 10000);
 
@@ -30,7 +33,7 @@ export function seasonStandings(part, names) {
   }));
 }
 
-const VALUE_ROUND = { pts: r2, diff: r2, diff1: r2, pct: r4, rec: r4, power: (x) => (x == null ? null : Math.round(x * 10) / 10) };
+const VALUE_ROUND = { pts: r2, diff: r2, diff1: r2, pct: r4, rec: r4, power: (x) => (x == null ? null : oneDecimal(x)) };
 const valueOf = (rec, e) => (VALUE_ROUND[rec.unit] ? VALUE_ROUND[rec.unit](e.value) : (Number.isFinite(e.value) ? r4(e.value) : e.value));
 const COUNTS = new Set(['n', 'wks', 'teams']);
 
@@ -74,6 +77,8 @@ export function seasonRecord(rec, names) {
     recordedFromWeek: rec.since || null,
     holders,
     empty: holders.length ? null : ((rec.empty && rec.empty.note) || 'No holder yet.'),
+    // The record's top 10 as its panel's table shows it (D24), each with its place (level values share one).
+    top: holders.length ? (rec.entries || []).slice(0, 10).map((e, i, es) => ({ place: es.findIndex((x) => x.value === e.value) + 1, ...holder(e) })) : [],
   };
 }
 

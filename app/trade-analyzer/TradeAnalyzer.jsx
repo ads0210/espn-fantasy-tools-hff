@@ -2,6 +2,7 @@ import React, {
   useState, useEffect, useMemo, useRef, useCallback, useDeferredValue,
 } from "react";
 import { PALETTES, BASE_CSS, BACKDROP, TEAM_COOKIE, pts2 } from "../../src/ui.js";
+import Postmortem, { PM_CSS } from "./Postmortem.jsx";
 import ToolControls from "../shared/ToolControls.jsx";
 import TeamLogo from "../shared/TeamLogo.jsx";
 import { createEngine } from "./engine.js";
@@ -144,7 +145,9 @@ html[data-theme="light"] .pos-DST, html[data-theme="light"] .pos-FLEX { color:#5
   background:none; border:0; color:inherit; font:inherit; cursor:pointer;
   padding:var(--sp-2) var(--sp-2) 28px;
   transition:background var(--dur-1) var(--ease-out); }
-.offercard:hover, .offer.open > .offercard { background:var(--accent-glow); }
+.offercard:hover { background:var(--accent-glow); }
+/* An open card keeps a lighter tint than the hover's, so its muted words stay at 4.5:1 in the dark theme. */
+.offer.open > .offercard { background:color-mix(in srgb,var(--accent) 6%,transparent); }
 .offercard > .chev { position:absolute; left:50%; bottom:10px; margin-left:-5px;
   color:var(--accent-deep); }
 .offercard:hover > .chev { color:var(--accent); }
@@ -156,7 +159,7 @@ html[data-theme="light"] .pos-DST, html[data-theme="light"] .pos-FLEX { color:#5
 .octeam { display:flex; align-items:center; gap:var(--sp-1); min-width:0; }
 .octeam .lgo { width:24px; height:24px; flex:none; }
 .octeam b { display:block; min-width:0; font-size:var(--fs-base); font-weight:900;
-  letter-spacing:-.01em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  letter-spacing:-.01em; overflow-wrap:anywhere; }
 .ocgives { display:block; margin:9px 0 5px; font-size:var(--fs-micro); font-weight:900;
   letter-spacing:.16em; text-transform:uppercase; color:var(--ink-3); }
 .ocside.b .octeam { flex-direction:row-reverse; }
@@ -604,6 +607,7 @@ const INSTRUCTIONS = [
   ["07", "Suggestions aim at fairness", "Where a deal leans far enough to be worth fixing, up to three single changes are offered that bring it closer to even. One of them may make the trade worse for you. That is the point of them."],
   ["08", "Some rows have nothing to say yet", "A few need about three games played. Until then they show greyed and contributing nothing, rather than quietly disappearing."],
   ["09", "Share what you are looking at", "Copy link hands someone the exact trade on screen, whether it is a standing offer or one you built. Opening that link brings it up for them just as it is for you."],
+  ["10", "Postmortem", "Every decided offer, judged in hindsight by what it did, or would have done, to both teams' best possible lineups week by week: Completed first, then everything that did not go through. Pick a season, or show only your team's. Weeks still to play use ESPN's projections. Trade Analyzer's own verdict shows for offers it saw on the table; older ones show what ESPN's projections expected instead."],
 ];
 
 /* ==========================================================================
@@ -1436,7 +1440,7 @@ export default function TradeAnalyzer() {
   if (engine) engine.setWeights(weights.source, weights.session);
 
   const styleTag = (
-    <style dangerouslySetInnerHTML={{ __html: `${PALETTES}\n${BASE_CSS}\n${CSS}` }} />
+    <style dangerouslySetInnerHTML={{ __html: `${PALETTES}\n${BASE_CSS}\n${CSS}\n${PM_CSS}` }} />
   );
 
   const Header = (
@@ -1643,6 +1647,8 @@ export default function TradeAnalyzer() {
             </div>
           </div>
         </div>
+
+        <Postmortem teams={engine ? engine.DATA.teams : []} me={myTeam} />
 
         <div className="grow" />
         <div className="pageaction">

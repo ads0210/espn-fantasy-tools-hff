@@ -29,6 +29,9 @@ import { seasonPeriod, seasonPeriodKeys, seasonRecordRows, seasonExtras } from '
 import { insightWeek, insightCsvRows } from './apiinsights.js';
 import { foTeamData, foCsvRows } from './apifrontoffice.js';
 import { overlayLive } from './frontofficestep.js';
+import { postmortemData, postmortemCsvRows } from './apipostmortem.js';
+/* Trade Analyzer's Postmortem (src/postmortemstep.js pmKey, PM_STATE_KEY). */
+const pmKey = (season, rest) => `postmortem/${season}/${rest}`;
 /* Front Office's stored pages (src/frontofficestep.js foKey). */
 const foKey = (season, rest) => `front-office/${season}/${rest}`;
 /* Matchup Insights' stored weeks (src/insightstep.js miKey; repeated here so this module stays free of the step). */
@@ -401,21 +404,24 @@ export function shapeDraftOrder(draftDoc, names) {
 
 /* ---- league activity -------------------------------------------------------------------------------- */
 const KIND = { add: 'add', drop: 'drop', swap: 'addDrop', waiver: 'waiver', trade: 'trade' };
-const TSTATUS = { completed: 'completed', on_the_table: 'onTheTable', pending_approval: 'pendingApproval', rejected: 'rejected', cancelled: 'withdrawn', withdrawn: 'withdrawn', expired: 'expired' };
+const TSTATUS = { completed: 'completed', on_the_table: 'onTheTable', pending_approval: 'pendingApproval', rejected: 'rejected', cancelled: 'withdrawn', withdrawn: 'withdrawn', expired: 'expired',
+  superseded: 'superseded', claim_lost: 'claimLost' };
 const pl = (p) => ({ playerId: p.id, player: p.name, position: p.pos, nflTeam: p.nfl });
 export function shapeActivity(txDoc) {
   const transactions = [], trades = [], activity = [];
   for (const t of (txDoc && txDoc.items) || []) {
-    if (t.kind !== 'trade' && t.status !== 'completed') continue;   // a failed claim is not a move; pending claims are never listed
+    // Pending claims are never in the digest. A claim that lost is listed with status claimLost and is never a move,
+    // so it stays out of `transactions` (moves) but shows in `activity` (docket A3).
+    if (t.kind !== 'trade' && t.status !== 'completed' && t.status !== 'claim_lost') continue;
     const row = { id: String(t.id), at: isoOf(t.date), week: t.scoringPeriod ?? null, kind: KIND[t.kind] || t.kind,
       status: TSTATUS[t.status] || t.status, teams: (t.teams || []).map((x) => ({ teamId: x.id, team: x.name })) };
     if (t.kind === 'trade') {
       row.sides = (t.sides || []).map((s) => ({ teamId: s.team && s.team.id, team: s.team && s.team.name, sends: (s.players || []).map(pl) }));
-      row.added = []; row.dropped = []; row.bid = null;
+      row.added = []; row.dropped = (t.drops || []).map((p) => ({ ...pl(p), teamId: p.teamId ?? null })); row.bid = null;
       trades.push({ id: row.id, at: row.at, week: row.week, status: row.status, teams: row.teams, sides: row.sides });
     } else {
       row.added = (t.adds || []).map(pl); row.dropped = (t.drops || []).map(pl); row.sides = []; row.bid = t.bid ?? null;
-      transactions.push({ id: row.id, at: row.at, week: row.week, kind: row.kind, teams: row.teams, added: row.added, dropped: row.dropped, bid: row.bid });
+      if (t.status !== 'claim_lost') transactions.push({ id: row.id, at: row.at, week: row.week, kind: row.kind, teams: row.teams, added: row.added, dropped: row.dropped, bid: row.bid });
     }
     activity.push({ id: row.id, at: row.at, week: row.week, kind: row.kind, status: row.status, teams: row.teams, added: row.added, dropped: row.dropped, sides: row.sides, bid: row.bid });
   }
@@ -471,6 +477,29 @@ const REC = { mostChampionships: 'Most championships', highestWinPct: 'Highest w
   longestWinStreak: 'Longest winning streak', longestLossStreak: 'Longest losing streak', highestSingleGame: 'Highest single game',
   lowestSingleGame: 'Lowest single game', biggestBlowout: 'Biggest blowout', closestGame: 'Closest game',
   mostLopsidedMatchup: 'Most lopsided rivalry', closestMatchup: 'Closest rivalry', mostTransactions: 'Most transactions', mostTrades: 'Most trades' };
+/** Hall of Fame's record book as rows: every record's top 10 (Record Holders: every team), a row per entry with its place. */
+export function recordBookRows(rb, nm) {
+  const rows = [];
+  const groups = [['allTime', rb.league], ['season', rb.season], ['recordHolders', rb.standing]];
+  for (const [group, list] of groups) for (const r of list || []) {
+    const es = r.entries || [];
+    es.forEach((e, i) => {
+      const place = es.findIndex((x) => x.value === e.value) + 1;
+      const tid = e.vs ? e.vs[0] : (e.teams || [])[0] ?? null;
+      const other = e.vs ? e.vs[1] : (e.teams || [])[1] ?? null;
+      const v = typeof e.value === 'number' ? (r.unit === 'pct' || r.unit === 'rec' ? Math.round(e.value * 1e6) / 1e6 : r2(e.value)) : e.value ?? null;
+      rows.push({ group, record: r.id, label: r.title, better: r.better || 'high', place, teamId: tid, team: nm(tid), value: v,
+        ...(e.text ? { text: e.text } : {}), season: e.season ?? null, week: e.week ?? null,
+        ...(e.span ? { weeks: [e.span[0], e.span[1]] } : {}), ...(e.endSeason != null && e.endSeason !== e.season ? { endSeason: e.endSeason, endWeek: e.endWeek ?? null } : {}),
+        opponentTeamId: other ?? null,
+        tied: es.filter((x) => x.value === e.value).length > 1 || (e.teams || []).length > 1 && !e.vs,
+        ...(e.detail && e.detail.kind === 'games'
+          ? { games: e.detail.games.map((g) => ({ when: g.label, season: g.season ?? e.season ?? null, result: g.res, opponentTeamId: g.opp, opponent: nm(g.opp), points: r2(g.own), opponentPoints: r2(g.op) })) }
+          : e.detail ? { detail: e.detail } : {}) });
+    });
+  }
+  return rows;
+}
 export function shapeHallOfFame(book, pairs, names) {
   const nm = (id) => names[id] || ((book.rows || []).find((r) => r.teamId === id) || {}).name || null;
   const history = {
@@ -483,8 +512,10 @@ export function shapeHallOfFame(book, pairs, names) {
       longestWinStreak: r.bestWinStreak ? r.bestWinStreak.length : null, longestLossStreak: r.worstLossStreak ? r.worstLossStreak.length : null,
     })),
   };
-  const records = [];
-  for (const [k, holders] of Object.entries(book.records || {})) {
+  // The record book in Hall of Fame's own shape (src/hofrecords.js, D41): every top 10, season records and Record
+  // Holders, a row per place. The older holders-only form remains for a digest built before it.
+  const records = book.book ? recordBookRows(book.book, nm) : [];
+  if (!book.book) for (const [k, holders] of Object.entries(book.records || {})) {
     for (const h of holders || []) {
       const tid = h.teamId ?? h.winner ?? h.dominantTeam ?? null;
       const other = h.opponent ?? h.loser ?? (h.teamA != null ? (h.teamA === tid ? h.teamB : h.teamA) : null);
@@ -685,7 +716,15 @@ export function shapeAll(src, { now = Date.now() } = {}) {
     seasonStats: seasonPeriods.whole || null,
     matchupInsights: null,
     frontOffice: null,
+    tradePostmortem: null,
   };
+  // Trade Analyzer's Postmortem (src/postmortemstep.js): every season it holds, with today's team names.
+  const pmSeasons = {};
+  const pm = src.postmortem || null;
+  if (pm && pm.seasons) for (const [y, doc] of Object.entries(pm.seasons)) { try { pmSeasons[y] = postmortemData(doc, names); } catch { /* left out */ } }
+  const pmYears = Object.keys(pmSeasons).map(Number).sort((a, b) => b - a);
+  const pmCurrent = pmYears.includes(Number(sections.league.season)) ? Number(sections.league.season) : pmYears[0] || null;
+  sections.tradePostmortem = pmCurrent ? pmSeasons[pmCurrent] : null;
   // Front Office's stored team pages (src/frontofficestep.js), with the live overlay laid over as the page does.
   const foTeams = {};
   const fo = src.frontOffice || null;
@@ -712,13 +751,14 @@ export function shapeAll(src, { now = Date.now() } = {}) {
     ...(seasonPeriods.whole ? {} : { seasonStats: 'Appears once the first week of the season has settled.' }),
     ...(insightCurrent ? {} : { matchupInsights: 'Appears once Matchup Insights has read this week’s games.' }),
     ...(foList.length ? {} : { frontOffice: 'Appears once Front Office has read this week’s rosters.' }),
+    ...(pmCurrent ? {} : { tradePostmortem: 'Appears once Trade Analyzer’s Postmortem has read the season’s trades.' }),
   };
   const detail = (draftDoc && draftDoc.draftDetail) || {};
   return {
     ready: true,
     leagueName: sections.league.name, season: sections.league.season, week, matchupPeriod, phase: sections.league.phase,
     teams: Object.keys(names).map(Number).sort((a, b) => a - b), names,
-    sections, standingsNoSim, rosterRows: rosters.base, activity: act.activity, leftOut, seasonPeriods, insightWeeks, insightCurrent, foTeams,
+    sections, standingsNoSim, rosterRows: rosters.base, activity: act.activity, leftOut, seasonPeriods, insightWeeks, insightCurrent, foTeams, pmSeasons, pmCurrent,
     windows: gameWindows(src.scoreboard_digest), draftLive: Boolean(detail.inProgress),
   };
 }
@@ -792,6 +832,8 @@ export function snapshotParts(shape) {
     put('e:frontoffice', shape.sections.frontOffice); csv('ec:frontoffice', foCsvRows(shape.sections.frontOffice));
     for (const [id, t] of Object.entries(shape.foTeams || {})) { put('e:frontoffice:' + id, [t]); csv('ec:frontoffice:' + id, foCsvRows([t])); }
   }
+  // /postmortem: every season it holds, whole and as CSV (a row per offer and side).
+  for (const [y, list] of Object.entries(shape.pmSeasons || {})) { put('e:postmortem:' + y, list); csv('ec:postmortem:' + y, postmortemCsvRows(list)); }
   // The description file, from this league's own data; its address is filled in when handed over.
   const sampleMeta = { endpoint: 'standings', apiVersion: 1, league: shape.leagueName, season: shape.season, week: shape.week,
     updatedAt: '2026-09-28T14:15:08Z', refreshEverySeconds: 300, pace: { askEverySeconds: 60, site: 'normal', note: 'Please ask at most once a minute.' },
@@ -802,7 +844,7 @@ export function snapshotParts(shape) {
     conventions: ['Times are ISO 8601 in UTC.'] };
   parts.push(['x:schema', JSON.stringify(schemaDoc({ leagueName: shape.leagueName, values: shape.sections, about: sampleAbout, meta: sampleMeta,
     rows: { scoreboard: shape.sections.scoreboard, standings: shape.sections.standings, rosters: shape.rosterRows, activity: shape.activity,
-      season: [shape.sections.seasonStats || {}], insights: [shape.sections.matchupInsights || {}], frontoffice: shape.sections.frontOffice || [] } }), null, 2) + '\n']);
+      season: [shape.sections.seasonStats || {}], insights: [shape.sections.matchupInsights || {}], frontoffice: shape.sections.frontOffice || [], postmortem: shape.sections.tradePostmortem || [] } }), null, 2) + '\n']);
   for (const id of shape.teams) {
     const sb = shape.sections.scoreboard.filter((m) => m.home.teamId === id || m.away.teamId === id);
     put('e:scoreboard:' + id, sb); csv('ec:scoreboard:' + id, sb);
@@ -860,7 +902,7 @@ export const SECTION_SOURCES = {
   nflScoreboard: ['scoreboard_digest'], injuries: ['injuries_digest'], news: ['nfl_news'], pointsAllowed: ['llm_export_digest'],
   live: ['live_scoring_digest'], timeline: ['timeline'], history: ['league_history_digest'], records: ['league_history_digest'],
   teamHistory: ['league_history_digest'], headToHead: ['h2h_full_digest'], fortuneTeller: ['ft'], fortuneOdds: ['ft'], fortuneFinishes: ['ft'],
-  fortuneGames: ['ft'], fortunePaths: ['ft'], tradeAnalysis: ['trade_digest'], draftOrder: ['draft_results'], seasonStats: ['season'], matchupInsights: ['insights'], frontOffice: ['frontOffice'],
+  fortuneGames: ['ft'], fortunePaths: ['ft'], tradeAnalysis: ['trade_digest'], draftOrder: ['draft_results'], seasonStats: ['season'], matchupInsights: ['insights'], frontOffice: ['frontOffice'], tradePostmortem: ['postmortem'],
 };
 const LIVE_SOURCES = new Set(['live_scoring_digest', 'scoreboard_digest']);
 export const REFRESH_FLOOR_MS = 15 * 60000;
@@ -988,6 +1030,17 @@ export async function buildSnapshot(env, mem, opts = {}) {
       at.frontOffice = Math.max(0, ...Object.values(teams).map((d) => Date.parse(d.builtAt) || 0)) || null;
     }
   } catch { src.frontOffice = null; }
+  // Trade Analyzer's Postmortem: the seasons its state lists as built, each read again only when it has changed.
+  try {
+    const st = await readR2('postmortem/state.json');
+    const years = Object.entries((st && st.seasons) || {}).filter(([, x]) => x && x.builtAt && !x.absent).map(([y]) => y);
+    if (years.length) {
+      const seasons = {};
+      await Promise.all(years.map(async (y) => { const d = await readR2(pmKey(y, 'season.json')); if (d && Array.isArray(d.offers)) seasons[y] = d; }));
+      src.postmortem = { seasons };
+      at.postmortem = Math.max(0, ...Object.values(seasons).map((d) => Date.parse(d.builtAt) || 0)) || null;
+    }
+  } catch { src.postmortem = null; }
   // The league's own weighting, for Trade Analyzer's breakdown.
   try { src.tradeWeights = (await loadConfig(env)).tradeWeights || {}; } catch { src.tradeWeights = {}; }
   at.ft = Math.max(0, ...[FT_SUMMARY_KEY, FT_PIPELINE_STATUS_KEY, FT_ESPN_ODDS_KEY].map((k) => (mem.docs.get(k) || {}).at || 0)) || null;
@@ -1040,6 +1093,7 @@ export async function buildSnapshot(env, mem, opts = {}) {
     seasonPeriods: Object.keys(shape.seasonPeriods || {}),
     insightWeeks: Object.keys(shape.insightWeeks || {}).map(Number), insightCurrent: shape.insightCurrent || null,
     frontOffice: Boolean(shape.sections && shape.sections.frontOffice),
+    postmortemSeasons: Object.keys(shape.pmSeasons || {}).map(Number).sort((a, b) => b - a), postmortemCurrent: shape.pmCurrent || null,
   };
   const parts = shape.ready ? snapshotParts(shape) : [];
   index.buildMs = Date.now() - t0;

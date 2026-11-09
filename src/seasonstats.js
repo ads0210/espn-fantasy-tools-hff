@@ -16,6 +16,7 @@
  * season a view that includes the postseason keeps the final regular-season seed and reads Clinched / Eliminated
  * (D72); a record from the score timeline says "since week N" when the site did not record every week (D16).
  */
+import { standingPanels } from './standing.js';
 
 export const POS = { 1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K', 16: 'D/ST' };
 export const SLOT_POS = { 0: [1], 2: [2], 4: [3], 6: [4], 23: [2, 3, 4], 16: [16], 17: [5] };
@@ -187,7 +188,7 @@ export function buildSeasonModel(inp) {
   return {
     season, regWeeks, playoffTeams, startSlots, teams, games, settledWeeks, teamWeeks, players, heldBy, draft, rounds, txs,
     tl: inp.tl || {}, tlWeeks: new Set((inp.tlWeeks || []).map(Number)), past: inp.past || {}, hof: inp.hof || null,
-    espnOddsAfter, elimAfter: eliminationsOf(inp.teams || []),
+    espnOddsAfter, elimAfter: eliminationsOf(inp.teams || []), pmTrades: inp.postmortem || null,
   };
 }
 
@@ -201,7 +202,7 @@ const share = (w, l, t) => (w + l + t ? (w + 0.5 * t) / (w + l + t) : 0);
 
 export const SECTIONS = [
   ['standings', 'Standings'], ['scoring', 'Scoring'], ['lineups', 'Lineups and projections'], ['games', 'Games'],
-  ['players', 'Players'], ['moves', 'Moves, trades and the draft'], ['history', 'History and pace'], ['fun', 'Fun'],
+  ['players', 'Players'], ['moves', 'Moves, trades and the draft'], ['fun', 'Fun'],
   ['holders', 'Record Holders'],
 ];
 
@@ -358,8 +359,11 @@ export function compute(model, view) {
   const st = Object.fromEntries(standings.map((s) => [s.team, s]));
 
   // ------------------------------------------------------------- builders
+  // A count of weeks names its weeks in the value's note (o.weeks: { teamId: [week…] }).
+  const weeksPop = (list) => (list && list.length ? [[list.length === 1 ? 'Week' : 'Weeks', [...new Set(list)].sort((a, b) => a - b).join(', ')]] : undefined);
   const teamRec = (o, valueOf, textOf) => {
-    const entries = ids.map((id) => ({ teams: [id], value: valueOf(id), text: textOf ? textOf(id) : undefined }))
+    const wks = o.weeks; delete o.weeks;
+    const entries = ids.map((id) => ({ teams: [id], value: valueOf(id), text: textOf ? textOf(id) : undefined, ...(wks && weeksPop(wks[id]) ? { pop: weeksPop(wks[id]) } : {}) }))
       .filter((e) => e.value != null && !Number.isNaN(e.value));
     entries.sort((a, b) => (o.better === 'low' ? a.value - b.value : b.value - a.value));
     add({ kind: 'team', ...o, entries });
@@ -409,13 +413,18 @@ export function compute(model, view) {
   teamRec({ id: 'S22.best', sec: sc, title: 'Most consistent scorer', unit: 'pts', better: 'low', info: 'The smallest spread (standard deviation) of weekly scores.' }, (id) => sds[id]);
   teamRec({ id: 'S22.worst', sec: sc, title: 'Least consistent scorer', unit: 'pts', info: 'The largest spread (standard deviation) of weekly scores.' }, (id) => sds[id]);
   const topCount = Object.fromEntries(ids.map((id) => [id, 0])), botCount = { ...topCount }, aboveAvg = { ...topCount };
+  const W = {}; const mark = (key, id, w) => { ((W[key] = W[key] || {})[id] = W[key][id] || []).push(w); };
   for (const list of Object.values(byPeriod)) {
     const mx = Math.max(...list.map((x) => x.pts)), mn = Math.min(...list.map((x) => x.pts)), av = mean(list.map((x) => x.pts));
-    for (const tw of list) { if (tw.pts === mx) topCount[tw.team]++; if (tw.pts === mn) botCount[tw.team]++; if (tw.pts > av) aboveAvg[tw.team]++; }
+    for (const tw of list) {
+      if (tw.pts === mx) { topCount[tw.team]++; mark('S23', tw.team, tw.period); }
+      if (tw.pts === mn) { botCount[tw.team]++; mark('S24', tw.team, tw.period); }
+      if (tw.pts > av) { aboveAvg[tw.team]++; mark('S25', tw.team, tw.period); }
+    }
   }
-  teamRec({ id: 'S23', sec: sc, title: 'Most weeks as the week\'s top scorer', unit: 'n', info: 'Weeks in which the team scored more than anyone else.' }, (id) => topCount[id]);
-  teamRec({ id: 'S24', sec: sc, title: 'Most weeks as the week\'s lowest scorer', unit: 'n', info: 'Weeks in which the team scored less than anyone else.' }, (id) => botCount[id]);
-  teamRec({ id: 'S25', sec: sc, title: 'Most weeks above the league average', unit: 'n', info: 'Weeks in which the team beat the league\'s average score.' }, (id) => aboveAvg[id]);
+  teamRec({ id: 'S23', weeks: W.S23, sec: sc, title: 'Most weeks as the week\'s top scorer', unit: 'n', info: 'Weeks in which the team scored more than anyone else.' }, (id) => topCount[id]);
+  teamRec({ id: 'S24', weeks: W.S24, sec: sc, title: 'Most weeks as the week\'s lowest scorer', unit: 'n', info: 'Weeks in which the team scored less than anyone else.' }, (id) => botCount[id]);
+  teamRec({ id: 'S25', weeks: W.S25, sec: sc, title: 'Most weeks above the league average', unit: 'n', info: 'Weeks in which the team beat the league\'s average score.' }, (id) => aboveAvg[id]);
   const stretch = [];
   for (const id of ids) {
     const s = [...line[id].scores].sort((a, b) => a.period - b.period);
@@ -427,9 +436,10 @@ export function compute(model, view) {
   for (const id of ids) {
     const p = line[id].scores.map((s) => s.pts), m = mean(p), d = sd(p);
     boom[id] = p.filter((x) => x > m + d).length; bust[id] = p.filter((x) => x < m - d).length;
+    for (const sc2 of line[id].scores) { if (sc2.pts > m + d) mark('S32.boom', id, sc2.period); if (sc2.pts < m - d) mark('S32.bust', id, sc2.period); }
   }
-  teamRec({ id: 'S32.boom', sec: sc, title: 'Most boom weeks', unit: 'n', info: 'Weeks more than one standard deviation above the team\'s own average.' }, (id) => boom[id]);
-  teamRec({ id: 'S32.bust', sec: sc, title: 'Most bust weeks', unit: 'n', info: 'Weeks more than one standard deviation below the team\'s own average.' }, (id) => bust[id]);
+  teamRec({ id: 'S32.boom', weeks: W['S32.boom'], sec: sc, title: 'Most boom weeks', unit: 'n', info: 'Weeks more than one standard deviation above the team\'s own average.' }, (id) => boom[id]);
+  teamRec({ id: 'S32.bust', weeks: W['S32.bust'], sec: sc, title: 'Most bust weeks', unit: 'n', info: 'Weeks more than one standard deviation below the team\'s own average.' }, (id) => bust[id]);
   for (const [slot, label] of [[0, 'QBs'], [2, 'RBs'], [4, 'WRs'], [6, 'TEs'], [23, 'the FLEX'], [16, 'D/ST'], [17, 'kickers']]) {
     const v = Object.fromEntries(ids.map((id) => [id, 0]));
     for (const tw of tws) for (const x of tw.starters) if (x.slot === slot) v[tw.team] += x.pts;
@@ -460,16 +470,16 @@ export function compute(model, view) {
       return { vs: [g.winner, loser], teams: [g.winner], value: (projOf[`${g.period}:${loser}`] || 0) - (projOf[`${g.period}:${g.winner}`] || 0), week: g.week };
     }).filter((e) => e.value > 0));
   teamRec({ id: 'S43', sec: lu, title: 'Highest points possible', unit: 'pts', info: 'Total points had the team started its best lineup every week.' }, (id) => opt[id]);
-  teamRec({ id: 'S44', sec: lu, title: 'Most perfect-lineup weeks', unit: 'n', info: 'Weeks in which the team started its best possible lineup.' }, (id) => tws.filter((t) => t.team === id && t.optimal - t.pts < 0.005).length);
+  teamRec({ id: 'S44', weeks: Object.fromEntries(ids.map((id) => [id, tws.filter((t) => t.team === id && t.optimal - t.pts < 0.005).map((t) => t.period)])), sec: lu, title: 'Most perfect-lineup weeks', unit: 'n', info: 'Weeks in which the team started its best possible lineup.' }, (id) => tws.filter((t) => t.team === id && t.optimal - t.pts < 0.005).length);
   const benchLoss = Object.fromEntries(ids.map((id) => [id, 0])), gifted = { ...benchLoss };
   for (const g of meetings) {
     if (!g.winner) continue;
     const loser = g.winner === g.home ? g.away : g.home;
     const lw = tws.find((t) => t.period === g.period && t.team === loser), ww = tws.find((t) => t.period === g.period && t.team === g.winner);
-    if (lw && ww && lw.optimal > ww.pts) { benchLoss[loser]++; gifted[g.winner]++; }
+    if (lw && ww && lw.optimal > ww.pts) { benchLoss[loser]++; gifted[g.winner]++; mark('S45', loser, g.period); mark('S46', g.winner, g.period); }
   }
-  teamRec({ id: 'S45', sec: lu, title: 'Most losses the bench could have won', unit: 'n', info: 'Losses in which the team\'s best possible lineup would have outscored the opponent.' }, (id) => benchLoss[id]);
-  teamRec({ id: 'S46', sec: lu, title: 'Most wins handed over by the opponent\'s bench', unit: 'n', info: 'Wins in which the opponent\'s best possible lineup would have won.' }, (id) => gifted[id]);
+  teamRec({ id: 'S45', weeks: W.S45, sec: lu, title: 'Most losses the bench could have won', unit: 'n', info: 'Losses in which the team\'s best possible lineup would have outscored the opponent.' }, (id) => benchLoss[id]);
+  teamRec({ id: 'S46', weeks: W.S46, sec: lu, title: 'Most wins handed over by the opponent\'s bench', unit: 'n', info: 'Wins in which the opponent\'s best possible lineup would have won.' }, (id) => gifted[id]);
   const benchWeeks = [];
   for (const tw of tws) for (const x of tw.bench) benchWeeks.push({ kind: 'player', player: { name: x.name, pos: x.pos }, team: tw.team, teams: [tw.team], value: x.pts, week: tw.period });
   listRec({ id: 'S48', kind: 'player', sec: lu, title: 'Best bench week by a player', unit: 'pts', info: 'The most points scored by a player sitting on a bench.' }, benchWeeks);
@@ -492,10 +502,10 @@ export function compute(model, view) {
     const s = tws.filter((t) => t.team === id).sort((a, b) => a.period - b.period);
     for (let i = 1; i < s.length; i++) {
       const a = s[i - 1].starters.map((x) => x.pid).sort().join(), b = s[i].starters.map((x) => x.pid).sort().join();
-      if (a === b) same[id]++;
+      if (a === b) { same[id]++; mark('S57', id, s[i].period); }
     }
   }
-  teamRec({ id: 'S57', sec: lu, title: 'Most weeks with an unchanged lineup', unit: 'n', info: 'Weeks the team started exactly the same players as the week before.' }, (id) => same[id]);
+  teamRec({ id: 'S57', weeks: W.S57, sec: lu, title: 'Most weeks with an unchanged lineup', unit: 'n', info: 'Weeks the team started exactly the same players as the week before.' }, (id) => same[id]);
 
   // ============================================================= 4. Games
   const gm = 'games';
@@ -512,16 +522,26 @@ export function compute(model, view) {
   const tlMatch = (valueOf) => decided.filter((g) => tl[g.id]).map((g) => ({ vs: [g.winner, g.winner === g.home ? g.away : g.home], teams: [g.winner], value: valueOf(g, tl[g.id]), week: g.week }));
   listRec({ id: 'S60', kind: 'match', sec: gm, title: 'Biggest comeback', unit: 'pts', headline: true, timeline: true, info: 'The largest deficit a winner came back from, read from the score timeline.' },
     tlMatch((g, f) => (g.winner === g.home ? f.maxAwayLead : f.maxHomeLead)).filter((e) => e.value > 0));
-  const streaks = (want) => ids.map((id) => {
-    const r = [...line[id].res].sort((a, b) => a.week - b.week);
-    let best = 0, from = null, to = null, n = 0, start = null;
-    for (const x of r) { if (x.r === want) { if (!n) start = x.week; n++; if (n > best) { best = n; from = start; to = x.week; } } else n = 0; }
-    return { teams: [id], value: best, span: best ? [from, to] : null };
-  });
+  // Every run is an entry (a team can hold two places); its note lists each game. A team with no run still appears,
+  // at zero, so a record nobody holds yet reads as such.
+  const streaks = (want) => {
+    const out = [];
+    for (const id of ids) {
+      const r = [...line[id].res].sort((a, b) => a.week - b.week);
+      let cur = null; const mine = [];
+      for (const x of r) { if (x.r === want) { if (!cur) { cur = []; mine.push(cur); } cur.push(x); } else cur = null; }
+      if (!mine.length) out.push({ teams: [id], value: 0, span: null });
+      for (const run of mine) out.push({ teams: [id], value: run.length, span: [run[0].week, run[run.length - 1].week],
+        detail: { kind: 'games', games: run.map((x) => ({ label: `Week ${x.week}`, res: x.r, opp: x.op, own: Math.round(x.mp * 100) / 100, op: Math.round(x.opp * 100) / 100 })) } });
+    }
+    // One game is not a streak: runs of two or more fill the table once any exist.
+    const longer = out.some((e) => e.value >= 2);
+    return out.filter((e) => !longer || e.value >= 2).sort((a, b) => b.value - a.value || (a.span ? a.span[0] : 99) - (b.span ? b.span[0] : 99));
+  };
   listRec({ id: 'S11.win', kind: 'team', sec: gm, title: 'Longest win streak', unit: 'n', headline: true, info: 'The most wins in a row.' }, streaks('W'));
   listRec({ id: 'S11.loss', kind: 'team', sec: gm, title: 'Longest losing streak', unit: 'n', info: 'The most losses in a row.' }, streaks('L'));
-  teamRec({ id: 'S8.wins', sec: gm, title: 'Most blowout wins', unit: 'n', info: 'Wins by more than 30 points.' }, (id) => mres[id].filter((x) => x.r === 'W' && x.margin > 30).length);
-  teamRec({ id: 'S8.losses', sec: gm, title: 'Most blowout losses', unit: 'n', info: 'Losses by more than 30 points.' }, (id) => mres[id].filter((x) => x.r === 'L' && -x.margin > 30).length);
+  teamRec({ id: 'S8.wins', weeks: Object.fromEntries(ids.map((id) => [id, mres[id].filter((x) => x.r === 'W' && x.margin > 30).map((x) => x.period)])), sec: gm, title: 'Most blowout wins', unit: 'n', info: 'Wins by more than 30 points.' }, (id) => mres[id].filter((x) => x.r === 'W' && x.margin > 30).length);
+  teamRec({ id: 'S8.losses', weeks: Object.fromEntries(ids.map((id) => [id, mres[id].filter((x) => x.r === 'L' && -x.margin > 30).map((x) => x.period)])), sec: gm, title: 'Most blowout losses', unit: 'n', info: 'Losses by more than 30 points.' }, (id) => mres[id].filter((x) => x.r === 'L' && -x.margin > 30).length);
   listRec({ id: 'S62', kind: 'match', sec: gm, title: 'Unlikeliest win', unit: 'wp', better: 'low', timeline: true, info: 'The lowest win chance a winner came back from, from ESPN\'s live win probability.' }, tlMatch((g, f) => f.minWinWp));
   listRec({ id: 'S63', kind: 'match', sec: gm, title: 'Most lead changes in a game', unit: 'n', live: true, timeline: true, info: 'Times the lead changed hands in one matchup.' }, tlMatch((g, f) => f.changes));
   const leadMs = Object.fromEntries(ids.map((id) => [id, 0])), gameMs = { ...leadMs }, wire = { ...leadMs }, garb = { ...leadMs }, mon = { ...leadMs };
@@ -529,22 +549,22 @@ export function compute(model, view) {
     const f = tl[g.id];
     leadMs[g.home] += f.homeLeadMs; leadMs[g.away] += f.awayLeadMs;
     gameMs[g.home] += f.homeLeadMs + f.awayLeadMs; gameMs[g.away] += f.homeLeadMs + f.awayLeadMs;
-    if (f.wire) wire[g.winner]++;
+    if (f.wire) { wire[g.winner]++; mark('S65', g.winner, g.week); }
     garb[g.home] += f.garbH; garb[g.away] += f.garbA;
-    if (f.monday) mon[g.winner]++;
+    if (f.monday) { mon[g.winner]++; mark('S67', g.winner, g.week); }
   }
   teamRec({ id: 'S64.most', sec: gm, title: 'Most time spent leading', unit: 'pct', timeline: true, info: 'Share of game time the team was ahead, read from the score timeline.' }, (id) => (gameMs[id] ? leadMs[id] / gameMs[id] : null));
   teamRec({ id: 'S64.least', sec: gm, title: 'Least time spent leading', unit: 'pct', better: 'low', timeline: true, info: 'Share of game time the team was ahead, read from the score timeline.' }, (id) => (gameMs[id] ? leadMs[id] / gameMs[id] : null));
-  teamRec({ id: 'S65', sec: gm, title: 'Most wire-to-wire wins', unit: 'n', timeline: true, info: 'Wins in which the team never trailed once scoring began.' }, (id) => wire[id]);
+  teamRec({ id: 'S65', weeks: W.S65, sec: gm, title: 'Most wire-to-wire wins', unit: 'n', timeline: true, info: 'Wins in which the team never trailed once scoring began.' }, (id) => wire[id]);
   listRec({ id: 'S66', kind: 'match', sec: gm, title: 'Biggest win-chance swing in an hour', unit: 'wp', live: true, timeline: true, info: 'The largest change in ESPN\'s win probability within one hour.' }, tlMatch((g, f) => f.swing));
-  teamRec({ id: 'S67', sec: gm, title: 'Most wins settled on Monday night', unit: 'n', timeline: true, info: 'Wins in which the team took the lead for good during Monday\'s games.' }, (id) => mon[id]);
+  teamRec({ id: 'S67', weeks: W.S67, sec: gm, title: 'Most wins settled on Monday night', unit: 'n', timeline: true, info: 'Wins in which the team took the lead for good during Monday\'s games.' }, (id) => mon[id]);
   const kick = Object.fromEntries(ids.map((id) => [id, 0]));
   for (const g of decidedM) {
     const loser = g.winner === g.home ? g.away : g.home;
     const kp = (team) => sum(tws.filter((t) => t.period === g.period && t.team === team).flatMap((t) => t.starters.filter((x) => x.slot === 17).map((x) => x.pts)));
-    if (kp(g.winner) - kp(loser) > margin(g)) kick[g.winner]++;
+    if (kp(g.winner) - kp(loser) > margin(g)) { kick[g.winner]++; mark('S68', g.winner, g.period); }
   }
-  teamRec({ id: 'S68', sec: gm, title: 'Most wins decided by the kickers', unit: 'n', info: 'Wins in which the kickers\' difference was bigger than the final margin.' }, (id) => kick[id]);
+  teamRec({ id: 'S68', weeks: W.S68, sec: gm, title: 'Most wins decided by the kickers', unit: 'n', info: 'Wins in which the kickers\' difference was bigger than the final margin.' }, (id) => kick[id]);
 
   // ============================================================= 5. Players
   const pl = 'players';
@@ -606,7 +626,23 @@ export function compute(model, view) {
   }
   listRec({ id: 'S76', kind: 'player', sec: pl, title: 'Best trade acquisition', unit: 'pts', info: 'Points a player scored while started for the team that traded for him, since the trade.' },
     tradeIn.map((a) => ({ kind: 'player', player: { name: nameOf(a.pid).name, pos: nameOf(a.pid).pos }, team: a.team, teams: [a.team], value: startedFor(a.pid, a.team, a.period) })));
-  listRec({ id: 'S77', kind: 'pair', sec: pl, title: 'Most lopsided trade', unit: 'pts', info: 'Started points each side has had from what it received; the record is the gap, held by the side ahead.' }, ledger);
+  // D21: once the Postmortem has worked the season out, the same measure as Trade Analyzer's Postmortem: each side's
+  // lineup impact to date (its best possible lineup with the deal against without it, week by week), so the two pages
+  // never disagree. Until then, the started points each side has had from what it received.
+  if (model.pmTrades) {
+    const inP = new Set(tws.map((t) => t.period));
+    ledger.length = 0;
+    for (const x of model.pmTrades) {
+      if (x.teams.length !== 2) continue;
+      const got = Object.fromEntries(x.teams.map((t) => [t, sum((x.rows[t] || []).filter(([w]) => inP.has(w)).map(([, v]) => v))]));
+      if (!x.teams.some((t) => (x.rows[t] || []).some(([w]) => inP.has(w)))) continue;
+      const [a, b] = [...x.teams].sort((p, q) => got[q] - got[p]);
+      ledger.push({ kind: 'pair', vs: [a, b], teams: Math.abs(got[a] - got[b]) < 0.005 ? [a, b] : [a], value: got[a] - got[b], week: x.effWeek });
+    }
+  }
+  listRec({ id: 'S77', kind: 'pair', sec: pl, title: 'Most lopsided trade', unit: 'pts', info: model.pmTrades
+    ? 'Lineup impact to date, as Trade Analyzer\'s Postmortem measures it: each side\'s best possible lineup with the deal against without it, week by week. The record is the gap, held by the side ahead.'
+    : 'Started points each side has had from what it received; the record is the gap, held by the side ahead.' }, ledger);
   const early = draftRows.filter((r) => r.d.round <= 3);
   listRec({ id: 'S79', kind: 'player', sec: pl, title: 'Biggest draft bust', unit: 'places', info: 'Among picks from the first three rounds: places a player has fallen at his position since the draft.' },
     early.map((r) => ({ kind: 'player', player: { name: r.name, pos: r.pos }, team: r.d.team, teams: [r.d.team], value: (r.fr === 999 ? 99 : r.fr) - r.dr, sub: `Drafted ${r.pos}${r.dr} · now ${r.pos}${r.fr === 999 ? '—' : r.fr}` })));
@@ -664,16 +700,9 @@ export function compute(model, view) {
   const firstPick = Object.fromEntries(model.draft.filter((d) => d.round === 1).map((d) => [d.team, d.pick]));
   teamRec({ id: 'S96', sec: mv, title: 'Biggest climb from draft slot', unit: 'places', info: 'First-round draft position minus current place in the standings.' }, (id) => (firstPick[id] ? firstPick[id] - st[id].seed : null));
 
-  // ============================================================= 7. History and pace
-  const hi = 'history';
-  const hof = (model.hof && model.hof.records) || {};
-  const broken = Object.entries(hof).filter(([, v]) => (v || []).some((e) => e.season === model.season));
-  const brokeBy = {};
-  for (const [, v] of broken) for (const e of v.filter((x) => x.season === model.season)) for (const t of [e.teamId, e.winner].filter(Boolean)) brokeBy[t] = (brokeBy[t] || 0) + 1;
-  add({ id: 'S113', sec: hi, kind: 'team', title: 'Hall of Fame records set this season', unit: 'n', headline: true,
-    info: 'All-time records in Hall of Fame that a team set or matched this season.',
-    entries: Object.entries(brokeBy).map(([t, n]) => ({ teams: [Number(t)], value: n })).sort((a, b) => b.value - a.value),
-    empty: broken.length ? null : { title: 'None yet', note: 'No Hall of Fame record has fallen this season.' } });
+  // ============================================================= 7. Best start (D19: the History and pace section is gone;
+  // Best start sits with the standings, and the all-time records a team sets count in Record Holders).
+  const hi = 'standings';
   const n = Math.max(0, ...games.map((g) => g.week).filter((w) => w <= model.regWeeks));
   const bestAfter = (list) => { const w = {}; for (const g of list.filter((x) => x.week <= n)) if (g.winner) w[g.winner] = (w[g.winner] || 0) + 1; return Math.max(0, ...Object.values(w)); };
   const pastBest = Object.entries(model.past).map(([yr, list]) => ({ yr, best: bestAfter(list) })).sort((a, b) => b.best - a.best);
@@ -681,15 +710,15 @@ export function compute(model, view) {
   const leaders = ids.filter((id) => line[id].res.filter((r) => r.week <= n && r.r === 'W').length === nowBest);
   // Best start counts from week 4 (D73): after one or two weeks every season has unbeaten teams.
   if (n && n < BEST_START_FROM) {
-    add({ id: 'S110', sec: hi, kind: 'team', title: 'Best start in league history', unit: 'rec', headline: true, entries: [],
+    add({ id: 'S110', sec: hi, kind: 'team', title: 'Best start in league history', unit: 'rec', headline: false, entries: [],
       info: 'The best record after this many weeks in any season of the league.',
       empty: { title: `From week ${BEST_START_FROM}`, note: `Compared with past seasons from week ${BEST_START_FROM}, when a start has had time to mean something.` } });
   } else if (n && pastBest.length && nowBest >= pastBest[0].best) {
-    add({ id: 'S110', sec: hi, kind: 'team', title: 'Best start in league history', unit: 'rec', headline: true,
+    add({ id: 'S110', sec: hi, kind: 'team', title: 'Best start in league history', unit: 'rec', headline: false,
       info: `The best record after ${n} weeks in any season. The previous best: ${pastBest[0].best} wins (${pastBest[0].yr}).`,
       entries: leaders.map((id) => ({ teams: [id], value: nowBest, text: `${nowBest}-${n - nowBest}` })) });
   } else {
-    add({ id: 'S110', sec: hi, kind: 'team', title: 'Best start in league history', unit: 'rec', headline: true, entries: [],
+    add({ id: 'S110', sec: hi, kind: 'team', title: 'Best start in league history', unit: 'rec', headline: false, entries: [],
       empty: { title: 'Not this season', note: pastBest.length ? `This season's best after ${n} weeks is ${nowBest}-${n - nowBest}; the league's best is ${pastBest[0].best}-${n - pastBest[0].best} (${pastBest[0].yr}).` : 'No past seasons to compare.' } });
   }
 
@@ -697,34 +726,41 @@ export function compute(model, view) {
   const fn = 'fun';
   const pfRank = Object.fromEntries([...ids].sort((a, b) => line[b].pf - line[a].pf).map((id, i) => [id, i + 1]));
   teamRec({ id: 'S121', sec: fn, title: 'Fraud watch', unit: 'places', headline: true, info: 'The team placed highest relative to its points: its points-for rank minus its place in the standings.' }, (id) => pfRank[id] - st[id].seed);
-  teamRec({ id: 'S122', sec: fn, title: 'Most heartbreak losses', unit: 'n', headline: true, info: 'Losses by less than 1 point.' }, (id) => mres[id].filter((r) => r.r === 'L' && -r.margin < 1).length);
+  teamRec({ id: 'S122', weeks: Object.fromEntries(ids.map((id) => [id, mres[id].filter((r) => r.r === 'L' && -r.margin < 1).map((x) => x.period)])), sec: fn, title: 'Most heartbreak losses', unit: 'n', headline: true, info: 'Losses by less than 1 point.' }, (id) => mres[id].filter((r) => r.r === 'L' && -r.margin < 1).length);
   const badBeat = Object.fromEntries(ids.map((id) => [id, 0])), lucky = { ...badBeat };
   for (const list of Object.values(byPeriod)) {
     const sorted = [...list].sort((a, b) => b.pts - a.pts), med = median(list.map((x) => x.pts));
     for (const tw of list) {
       const r = mres[tw.team].find((x) => x.period === tw.period);
       if (!r) continue;
-      if (tw === sorted[1] && r.r === 'L') badBeat[tw.team]++;
-      if (r.r === 'W' && tw.pts < med) lucky[tw.team]++;
+      if (tw === sorted[1] && r.r === 'L') { badBeat[tw.team]++; mark('S128', tw.team, tw.period); }
+      if (r.r === 'W' && tw.pts < med) { lucky[tw.team]++; mark('S129', tw.team, tw.period); }
     }
   }
-  teamRec({ id: 'S128', sec: fn, title: 'Most bad beats', unit: 'n', headline: true, info: 'Weeks with the league\'s second-highest score, and a loss.' }, (id) => badBeat[id]);
-  teamRec({ id: 'S129', sec: fn, title: 'Most lucky wins', unit: 'n', headline: true, info: 'Wins with a score below the week\'s median.' }, (id) => lucky[id]);
+  teamRec({ id: 'S128', weeks: W.S128, sec: fn, title: 'Most bad beats', unit: 'n', headline: true, info: 'Weeks with the league\'s second-highest score, and a loss.' }, (id) => badBeat[id]);
+  teamRec({ id: 'S129', weeks: W.S129, sec: fn, title: 'Most lucky wins', unit: 'n', headline: true, info: 'Wins with a score below the week\'s median.' }, (id) => lucky[id]);
   // A spoiler win: a regular-season win by a team already out of the playoff race, against a team still in it.
   const elimAt = model.elimAfter || {};
   const outBy = (id, week) => elimAt[id] != null && week > elimAt[id];
   teamRec({ id: 'S123', sec: fn, title: 'Most spoiler wins', unit: 'n', info: 'Regular-season wins by a team already out of the playoff race, against a team still in it.' },
     (id) => line[id].res.filter((r) => r.r === 'W' && r.week <= model.regWeeks && outBy(id, r.week) && !outBy(r.op, r.week)).length);
-  const survivor = Object.fromEntries(ids.map((id) => [id, { n: 0 }]));
+  // Every run is an entry, as for streaks: a team can hold two places.
+  const survivorRuns = [];
   for (const id of ids) {
-    let run = 0, best = 0;
-    for (const p of Object.keys(byPeriod).map(Number).sort((a, b) => a - b)) {
+    let run = 0, from = null;
+    const close = (to) => { if (run) survivorRuns.push({ teams: [id], value: run, span: [from, to] }); run = 0; };
+    const ps = Object.keys(byPeriod).map(Number).sort((a, b) => a - b);
+    let last = null;
+    for (const p of ps) {
       const sorted = [...byPeriod[p]].sort((a, b) => a.pts - b.pts).slice(0, 3).map((x) => x.team);
-      if (sorted.includes(id)) run = 0; else { run++; best = Math.max(best, run); }
+      if (sorted.includes(id)) close(last); else { if (!run) from = p; run++; }
+      last = p;
     }
-    survivor[id] = best;
+    close(last);
+    if (!survivorRuns.some((x) => x.teams[0] === id)) survivorRuns.push({ teams: [id], value: 0, span: null });
   }
-  teamRec({ id: 'S130', sec: fn, title: 'Longest run without a bottom-three score', unit: 'wks', info: 'Weeks in a row without finishing among the league\'s three lowest scores.' }, (id) => survivor[id]);
+  if (survivorRuns.some((e) => e.value >= 2)) survivorRuns.splice(0, survivorRuns.length, ...survivorRuns.filter((e) => e.value >= 2));
+  listRec({ id: 'S130', kind: 'team', sec: fn, title: 'Longest run without a bottom-three score', unit: 'wks', info: 'Weeks in a row without finishing among the league\'s three lowest scores.' }, survivorRuns);
   teamRec({ id: 'S132', sec: fn, title: 'Most garbage-time points', unit: 'pts', timeline: true, info: 'Points scored after the matchup was decided (once the winner\'s win chance reached 99%), read from the score timeline.' }, (id) => garb[id]);
 
   for (const r of R) r.entries = (r.entries || []).map((e) => ({ ...e, value: typeof e.value === 'number' ? r2Keep(e.value) : e.value }));
@@ -738,29 +774,33 @@ export function compute(model, view) {
   }
 
   // ============================================================= 9. Record Holders (records about the records above)
-  const tally = Object.fromEntries(ids.map((id) => [id, { good: 0, bad: 0 }]));
-  for (const r of R) {
-    const tone = toneOf(r.id);
-    if (!tone) continue;
-    r.tone = tone;
-    const credited = new Set(holdersOf(r).flatMap((e) => (r.kind === 'player' ? (e.team ? [e.team] : []) : (e.teams || []))));
-    for (const id of credited) if (tally[id]) tally[id][tone > 0 ? 'good' : 'bad']++;
-    // A good matchup record is bad for the other side (D63): the beaten team in a blowout, a comeback, an upset,
-    // an unlikeliest win, and the side behind in a lopsided trade each take a point off.
-    if (tone > 0 && (r.kind === 'match' || r.kind === 'pair')) {
-      const against = new Set(holdersOf(r).map((e) => e.vs && e.vs[1]).filter((id) => id != null && !credited.has(id)));
-      for (const id of against) if (tally[id]) tally[id].bad++;
+  // One shared rule with Hall of Fame (src/standing.js, D29): Records held counts each record's holders; Prestige the
+  // whole top ten, 15 down to 1 (D27). Each value opens what counted (entry.detail).
+  for (const r of R) { const tone = toneOf(r.id); if (tone) r.tone = tone; }
+  const counted = R.filter((r) => r.tone && !r.empty);
+  // D18 (H3): an all-time record this season set or matched counts too, in the views that cover the whole regular
+  // season: a weekly score or blowout once set, a season record once its season is complete or it can no longer be
+  // lost (Hall of Fame's book lists this season's entry only then). Only this season's share of the top place counts.
+  const book = model.hof && model.hof.book;
+  const allTime = [];
+  if (book && (view.key === 'whole' || view.key === 'regular')) {
+    for (const r of [...(book.league || []).filter((x) => ['highestSingleGame', 'lowestSingleGame', 'biggestBlowout'].includes(x.id)), ...(book.season || [])]) {
+      if (!r.tone || !r.entries.length) continue;
+      const mine = r.entries.filter((e) => e.value === r.entries[0].value && e.season === model.season);
+      if (mine.length) allTime.push({ ...r, id: `hof.${r.id}`, title: `${r.title} (all time)`, entries: mine });
     }
   }
-  const net = (id) => tally[id].good - tally[id].bad;
-  const ofTally = (id) => ({ teams: [id], value: net(id), good: tally[id].good, bad: tally[id].bad });
-  const counted = R.filter((r) => r.tone).length;
-  const hInfo = `Every record on this page except these two, ${counted} in all: +1 for each good one a team holds, −1 for each bad one, and −1 to the team on the wrong end of a good matchup record (a shared record counts for everyone sharing it). Records that are neither, like Closest game or Most moves, count nothing.`;
-  add({ id: 'S140', sec: 'holders', kind: 'team', title: 'Most records held', unit: 'net', headline: true, info: hInfo,
-    entries: ids.map(ofTally).sort((a, b) => b.value - a.value || b.good - a.good) });
-  add({ id: 'S141', sec: 'holders', kind: 'team', title: 'Least records held', unit: 'net', better: 'low', headline: true, info: hInfo,
-    entries: ids.map(ofTally).sort((a, b) => a.value - b.value || b.bad - a.bad) });
+  counted.push(...allTime);
+  const panels = standingPanels(counted, ids, {
+    ids: { 'held.most': 'S140', 'held.least': 'S141', 'prestige.high': 'S142', 'prestige.low': 'S143' },
+    infoHeld: (n) => `Every record on this page except these four, ${n} in all that are good or bad: +1 for each good one a team holds, −1 for each bad one, and −1 to the team on the wrong end of a good matchup record (a shared record counts for everyone sharing it). Hall of Fame records count too once this season sets them: a weekly score or a blowout at once, a season record once the season is complete or can no longer lose it. Records that are neither, like Closest game or Most moves, count nothing. Tap a team's figure for what counted.`,
+    infoPrestige: (n) => `Records held, all the way down each top 10. On each of the ${n} good or bad records on this page, the top ten places earn 15, 12, 9, 7, 6, 5, 4, 3, 2 and 1 on a good record, and lose as much on a bad one; the team on the wrong end of a good matchup entry loses that entry's points. A team counts once per record, at its best place on a good record and its worst on a bad one; a player record counts for the team he played for. Tap a team's figure for what counted.`,
+  });
+  for (const p of panels) add({ ...p, sec: 'holders', headline: true, tone: 0 });
   return { standings, records: R };
 }
 const r2Keep = (x) => Math.round(x * 10000) / 10000;
 export const BEST_START_FROM = 4;
+/* The records' version: raise it with any change to what a record says or counts, so every stored period is rebuilt
+   once (src/seasonstep.js puts it in its fingerprint). 2: History and pace dissolved, Prestige added (week 10). */
+export const SS_VERSION = 4;

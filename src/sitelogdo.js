@@ -27,6 +27,17 @@ import { BYTE_BUDGET } from './scoretimeline.js';
 import { levelFrom, BRAKE_OF, BRAKE_WORDS, LIMIT_WORDS } from './budget.js';
 import { likelyTeams } from './sources.js';
 import { visitWindow, VISIT_HOURLY_DAYS, NO_TEAM } from '../app/site-backend/visits.js';
+
+/** Hourly visit rows are kept this long (a season and its off-season) before they become daily rows (week 10, G10). */
+export const VISIT_KEEP_DAYS = 400;
+/** Which of a team's entries the per-team counts keep (week 10, G11). */
+export function teamActOf(e) {
+  const text = String(e.text || '');
+  if (e.kind === 'sign-in' && text === 'Signed in') return 'signin';
+  if (/^Exported league data/.test(text)) return 'copy';
+  if (/^Shared a /.test(text)) return 'share';
+  return null;
+}
 const LEVEL_RANK = { quiet: 0, normal: 1, busy: 2, verybusy: 3, resting: 4 };
 
 export const LOG_BUDGET = LOG_BUDGET_REF;
@@ -203,7 +214,9 @@ export class SiteLogDO {
       CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, hour INTEGER NOT NULL, sub TEXT, sev TEXT, text TEXT);
       CREATE INDEX IF NOT EXISTS reports_hour ON reports(hour);
       CREATE TABLE IF NOT EXISTS visits (b INTEGER NOT NULL, d INTEGER NOT NULL, page TEXT NOT NULL, team INTEGER NOT NULL,
-        n INTEGER NOT NULL, PRIMARY KEY (b, d, page, team)) WITHOUT ROWID;`);
+        n INTEGER NOT NULL, PRIMARY KEY (b, d, page, team)) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS teamacts (day INTEGER NOT NULL, team INTEGER NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL,
+        PRIMARY KEY (day, team, kind)) WITHOUT ROWID;`);
     const m = this.sql.exec("SELECT v FROM meta WHERE k = 'meter'").toArray()[0];
     try { this.meter = m ? JSON.parse(m.v) : null; } catch { this.meter = null; }
     if (!this.sql.exec("SELECT v FROM meta WHERE k = 'schema'").toArray()[0]) {
@@ -243,9 +256,9 @@ export class SiteLogDO {
     this.visitMemo = null;
   }
 
-  /** Hours older than 8 days become one row per UTC day (a few days per tick at most, oldest first). */
+  /** Hourly rows are kept all season (week 10, G10); only hours older than VISIT_KEEP_DAYS become daily rows. */
   condenseVisits(now = Date.now()) {
-    const cutoff = Math.floor(now / 86400000) * 86400000 - VISIT_HOURLY_DAYS * 86400000;
+    const cutoff = Math.floor(now / 86400000) * 86400000 - VISIT_KEEP_DAYS * 86400000;
     for (let k = 0; k < 3; k++) {
       const r = this.one('SELECT MIN(b) AS b FROM visits WHERE d = 0');
       if (!r || r.b == null || r.b >= cutoff) return;
@@ -277,6 +290,32 @@ export class SiteLogDO {
           FROM visits WHERE b >= ? GROUP BY 1, 2, 3`, w.from);
     const out = { ...w, since: this.getMeta('visitsSince', null), rows: rows.map((r) => [r.t, r.page, r.team, r.n]) };
     memo[w.range] = { at: now, out };
+    return out;
+  }
+
+  /** Every hourly visit row the season holds, for the weekday-and-hour grid (week 10). Read at most every 5 minutes. */
+  visitHours(now = Date.now()) {
+    const tier = this.readTier();
+    if (tier >= 2) throw this.restError(tier);
+    if (this.hourMemo && now - this.hourMemo.at < 300000) return this.hourMemo.out;
+    const rows = this.run('SELECT b, page, team, n FROM visits WHERE d = 0').map((r) => [r.b, r.page, r.team, r.n]);
+    const out = { since: this.getMeta('visitsSince', null), rows };
+    this.hourMemo = { at: now, out };
+    return out;
+  }
+
+  /** Each team's sign-ins, copies and shares over a range (week 10, G11): { team: { signin, copy, share } }. */
+  teamActs(range, now = Date.now()) {
+    const tier = this.readTier();
+    if (tier >= 2) throw this.restError(tier);
+    const memo = (this.actMemo = this.actMemo || {});
+    if (memo[range] && now - memo[range].at < 60000) return memo[range].out;
+    const first = (this.one('SELECT MIN(day) AS d FROM teamacts') || {}).d;
+    const w = visitWindow(range, now, first == null ? null : first);
+    const from = Math.floor(w.from / 86400000) * 86400000;
+    const out = { from, since: first ?? null, teams: {} };
+    for (const r of this.run('SELECT team, kind, SUM(n) AS n FROM teamacts WHERE day >= ? GROUP BY team, kind', from)) (out.teams[r.team] = out.teams[r.team] || { signin: 0, copy: 0, share: 0 })[r.kind] = r.n;
+    memo[range] = { at: now, out };
     return out;
   }
 
@@ -409,6 +448,14 @@ export class SiteLogDO {
     const at = Number(e.at) || Date.now();
     const team = e.team == null ? null : Number(e.team);
     if (e.kind === 'visit' && e.page) this.countVisit(at, e.page, team);
+    // Week 10 (G11): each team's sign-ins, copies of the league data and shared links, counted per UTC day, whether or
+    // not the entry itself is kept under the day's cap.
+    const act = teamActOf(e);
+    if (act && team != null) {
+      this.run(`INSERT INTO teamacts (day, team, kind, n) VALUES (?, ?, ?, 1) ON CONFLICT (day, team, kind) DO UPDATE SET n = n + 1`,
+        Math.floor(at / 86400000) * 86400000, team, act);
+      this.actMemo = null;
+    }
     if (e.kind === 'sign-in' && e.text === 'Session lapsed') {
       // Asked of the table by its time index, which reads only this hour's entries: never the whole window.
       if (this.one("SELECT 1 AS x FROM events WHERE at >= ? AND kind = 'sign-in' AND text = 'Session lapsed' AND team IS ? LIMIT 1", hourOf(at), team)) return;
@@ -851,6 +898,8 @@ export class SiteLogDO {
       },
       pace: () => this.paceUsage(),
       visits: (range) => this.visitSeries(range),
+      visitHours: () => this.visitHours(),
+      teamActs: (range) => this.teamActs(range),
     };
   }
 

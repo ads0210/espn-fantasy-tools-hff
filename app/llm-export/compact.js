@@ -94,6 +94,11 @@ export function compactExport(doc) {
         break;
       case 'history':
         break;
+      case 'tradePostmortem':
+        // This season's completed trades only.
+        out.tradePostmortem = v.slice(0, 1).map((s) => ({ ...s, offers: s.offers.filter((o) => o.status === 'completed') })).filter((s) => s.offers.length);
+        if (!out.tradePostmortem.length) delete out.tradePostmortem;
+        break;
       default:
         out[key] = v;
     }

@@ -20,6 +20,7 @@ import { addWeek6Jobs } from './jobs6.js';
 import { addIosJobs } from './jobsios.js';
 import { seasonRecordRows } from '../../src/apiseason.js';
 import { insightCsvRows } from '../../src/apiinsights.js';
+import { postmortemCsvRows } from '../../src/apipostmortem.js';
 export function makeGuides(env) {
   var API = env.API, D = env.D, S = env.S, LEAGUE = env.LEAGUE, WEEK = env.WEEK, DAY = 86400000, MIN = 60000;
   var esc = env.esc, iso = env.iso, stamp = env.stamp, dayOf = env.dayOf, timeOf = env.timeOf, dateOf = env.dateOf, durWords = env.durWords;
@@ -57,6 +58,8 @@ export function makeGuides(env) {
   function seasonRows() { return D.season ? seasonRecordRows(D.season) : []; }
   /* Matchup Insights' week as /insights?format=csv gives it, for the pictures. */
   function insightRows() { return D.insights ? insightCsvRows(D.insights) : []; }
+  /* Trade Analyzer's Postmortem as /postmortem?format=csv gives it, for the pictures. */
+  function postmortemRows() { return D.postmortem ? postmortemCsvRows(D.postmortem) : []; }
   function gctx() {
     var t = S.guideTeam;
     return { K: keyInExamples(), T: t, TN: teamName(t), p: pace() };
@@ -191,6 +194,60 @@ export function makeGuides(env) {
             return LOOK.sheet('=IMPORTDATA("…/insights.csv?key=eft_…")', rows, insightRows().length ? 'A row per insight, refreshed by Sheets about hourly.' : 'Matchup Insights fills this in once it has read this week’s games.');
           },
           stop: 'As for the standings: a refusal arrives as one cell of text, <code>Site API: …</code>, until the next hourly refresh. Deleting the formula stops it for good. While Matchup Insights isn’t visible to members, the cell says so instead.' },
+        { key: 'postmortem', title: 'Keep every trade’s postmortem in a sheet', have: 'Every decided trade offer of the season from Trade Analyzer’s Postmortem, a row for each side: what it sent, its lineup impact to date and still to play, ESPN’s expected figure and the grade.',
+          keyInAddress: true,
+          steps: ['Add a tab to your sheet and click cell <b>A1</b>.',
+            'Paste the formula below. It asks <code>/postmortem</code> for this season as CSV: one row per offer and side, newest offer first.',
+            'Press Enter. Sheets refreshes it about once an hour; the figures move on as each week is played, and a new row arrives when an offer is decided.',
+            'For an earlier season, add <code>&amp;season=2025</code> (any season the site holds) to the address.',
+            'Keep the sheet private: anyone who can open it can read the key in the formula.'],
+          file: 'Cell A1', lang: 'formula',
+          code: function (c) { return '=IMPORTDATA("' + U('postmortem.csv', { key: c.K, name: 'postmortem-sheet' }) + '")'; },
+          look: function () {
+            var rows = [['status', 'team', 'sends', 'lineupImpactToDate', 'grade']].concat(postmortemRows().slice(0, 6).map(function (r) { return [r.status, r.team, r.sends, r.lineupImpactToDate, r.grade]; }));
+            return LOOK.sheet('=IMPORTDATA("…/postmortem.csv?key=eft_…")', rows, postmortemRows().length ? 'A row per offer and side, refreshed by Sheets about hourly.' : 'The Postmortem fills this in once it has read the season’s trades.');
+          },
+          stop: 'As for the standings: a refusal arrives as one cell of text, <code>Site API: …</code>, until the next hourly refresh. Deleting the formula stops it for good. While Trade Analyzer isn’t visible to members, the cell says so instead.' },
+        { key: 'recordbook', title: 'Keep Hall of Fame’s record book in a sheet', have: 'A Record book tab with every Hall of Fame record’s top 10, the season records and Record Holders (records held and prestige), refreshed once a day.',
+          steps: ['In your sheet, open <b>Extensions → Apps Script</b>.',
+            'Replace everything in <code>Code.gs</code> with the script below and save.',
+            'Open <b>Project Settings → Script properties</b> and add <code>SITE_API_KEY</code> with the league’s key as its value. The key stays out of the sheet.',
+            'Choose <code>start</code> in the toolbar and press Run. Allow access when Google asks. It fills the Record book tab now, then once a day: the record book changes only when a week settles.',
+            'To stop it yourself, run <code>stop</code>.'],
+          file: 'Code.gs', lang: 'js',
+          code: function (c) {
+            return "// Hall of Fame's record book, a row per place, refreshed once a day.\n" +
+              "const URL = '" + U('full', { name: 'record-book' }) + "';\n\n" +
+              "function start() {\n  stop();\n  ScriptApp.newTrigger('check').timeBased().everyDays(1).atHour(9).create();\n  check();\n}\n\n" +
+              "function stop() {\n  ScriptApp.getProjectTriggers().forEach((t) => ScriptApp.deleteTrigger(t));\n}\n\n" +
+              "function check() {\n  const key = PropertiesService.getScriptProperties().getProperty('SITE_API_KEY');\n" +
+              "  const res = UrlFetchApp.fetch(URL, { headers: { Authorization: 'Bearer ' + key }, muteHttpExceptions: true });\n" +
+              "  const body = JSON.parse(res.getContentText());\n" +
+              "  if (res.getResponseCode() === 429) {\n" +
+              "    if (body.error.stop === 'exit') {            // too_fast: switch the schedule off for good\n" +
+              "      stop();\n" +
+              "      MailApp.sendEmail(Session.getEffectiveUser().getEmail(), 'Site API stopped your record book', body.error.message);\n" +
+              "    }\n" +
+              "    return;                                       // pace_changed: the next run is a day away\n  }\n" +
+              "  if (!body.ok) throw new Error(body.error.message);\n" +
+              "  const recs = body.data.records || [];\n" +
+              "  if (!recs.length) return;                      // Hall of Fame isn't visible to members, or has no records yet\n\n" +
+              "  const book = SpreadsheetApp.getActive();\n" +
+              "  const sheet = book.getSheetByName('Record book') || book.insertSheet('Record book');\n" +
+              "  const GROUP = { allTime: 'All time', season: 'Season', recordHolders: 'Record Holders' };\n" +
+              "  const rows = [['group', 'record', 'place', 'team', 'value', 'season', 'week']].concat(recs.map((r) =>\n" +
+              "    [GROUP[r.group] || r.group, r.label, r.place || 1, r.team, r.text || r.value, r.season || '', r.week || '']));\n" +
+              "  sheet.clearContents();\n" +
+              "  sheet.getRange(1, 1, rows.length, rows[0].length).setValues(rows);\n}\n";
+          },
+          look: function () {
+            var G = { allTime: 'All time', season: 'Season', recordHolders: 'Record Holders' };
+            var rows = [['group', 'record', 'place', 'team', 'value', 'season']].concat((D.records || []).filter(function (r) { return (r.place || 1) <= 2; }).slice(0, 6).map(function (r) {
+              return [G[r.group] || r.group || '', r.label, r.place || 1, r.team, r.text || r.value, r.season || ''];
+            }));
+            return LOOK.sheet('Record book', rows, (D.records || []).length ? 'A row per place, rewritten once a day.' : 'Hall of Fame fills this in once the league’s history has been pulled.');
+          },
+          stop: 'On <code>too_fast</code> the script deletes its own schedule and emails you the site’s message, so it asks nothing more until you run <code>start</code> again. On <code>pace_changed</code> it skips the run; the next is a day away.' },
         { key: 'left', title: 'List who’s left to play', have: 'Your starters whose games haven’t kicked off, as a short list that updates itself.',
           keyInAddress: true,
           steps: ['In any empty cell of your sheet, paste the formula below. Your team is already filled in (<code>team=%T%</code>).',
@@ -764,7 +821,7 @@ export function makeGuides(env) {
   var PLAT_KIND = { sheets: 'Spreadsheet', excel: 'Spreadsheet', python: 'Script', node: 'Script', powershell: 'Script · Windows',
     shell: 'Script · macOS and Linux', iphone: 'Phone', android: 'Phone', ha: 'Smart home', chat: 'Chat bot' };
   var RUNS = {
-    'sheets.standings': 'About hourly, by Sheets', 'sheets.records': 'About hourly, by Sheets', 'sheets.insights': 'About hourly, by Sheets', 'excel.records': 'When the file opens', 'sheets.left': 'About hourly, by Sheets', 'sheets.log': 'Every 30 minutes', 'sheets.email': 'Daily at about 8',
+    'sheets.standings': 'About hourly, by Sheets', 'sheets.records': 'About hourly, by Sheets', 'sheets.insights': 'About hourly, by Sheets', 'sheets.postmortem': 'About hourly, by Sheets', 'sheets.recordbook': 'Daily at about 9', 'excel.records': 'When the file opens', 'sheets.left': 'About hourly, by Sheets', 'sheets.log': 'Every 30 minutes', 'sheets.email': 'Daily at about 8',
     'excel.standings': 'Every 15 minutes', 'excel.chart': 'When the file opens', 'excel.left': 'Every 15 minutes',
     'python.score': 'At the site’s pace', 'python.bot': 'Every 20 minutes', 'python.save': 'Once a day', 'python.chart': 'When you run it',
     'node.score': 'At the site’s pace', 'node.bot': 'Every 20 minutes', 'node.save': 'Once a day',

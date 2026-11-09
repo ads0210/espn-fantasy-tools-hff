@@ -19,6 +19,7 @@ import { makeGuides } from "./guides.js";
 import { seasonRecordRows } from "../../src/apiseason.js";
 import { insightCsvRows } from "../../src/apiinsights.js";
 import { foCsvRows } from "../../src/apifrontoffice.js";
+import { postmortemCsvRows } from "../../src/apipostmortem.js";
 
 var DAY = 86400000, MIN = 60000;
 var P = null;                 // the payload from /apps/site-api/api
@@ -59,7 +60,7 @@ export function setPayload(p, hooks) {
   LEAGUE = (p.league && p.league.name) || 'League'; SEASON = p.league && p.league.season; WEEK = p.league && p.league.matchupPeriod;
   var d = p.data || {};
   D = { scoreboard: d.scoreboard || [], _rosterRows: d.rosterRows || [], _activity: d.activity || [], standings: d.standings || [],
-    schedule: d.schedule || [], freeAgents: d.freeAgents || [], headToHead: d.headToHead || [], season: d.season || null, seasonPeriods: d.seasonPeriods || [], insights: d.insights || null, frontOffice: d.frontOffice || null };
+    schedule: d.schedule || [], freeAgents: d.freeAgents || [], headToHead: d.headToHead || [], season: d.season || null, seasonPeriods: d.seasonPeriods || [], insights: d.insights || null, frontOffice: d.frontOffice || null, postmortem: d.postmortem || null, postmortemSeasons: d.postmortemSeasons || [], records: d.records || [] };
   TEAMS = (p.teams || []).map(function (t) { return { teamId: t.teamId, name: t.name, logo: '/api/logo/' + t.teamId }; });
   if (!S.guideTeam || !TEAMS.some(function (t) { return t.teamId === S.guideTeam; })) S.guideTeam = TEAMS.length ? TEAMS[0].teamId : null;
   if (WEEK) { if (!S.dlWeek.live) S.dlWeek.live = WEEK; if (!S.dlWeek.timeline) S.dlWeek.timeline = WEEK; }
@@ -126,7 +127,7 @@ function leftOut(key) {
   return hit ? hit.why : null;
 }
 
-/* ---- the eight endpoints ------------------------------------------------------------------------------------------ */
+/* ---- the nine endpoints ------------------------------------------------------------------------------------------ */
 var ENDPOINTS = REG_ENDPOINTS.map(function (e) {
   return Object.assign({}, e, {
     refreshWords: function () { return e.refreshWords({ games: S.games, quiet: S.load === 'quiet' }); },
@@ -143,6 +144,7 @@ function endpointRows(key, team) {
   if (key === 'activity') return D._activity;
   if (key === 'season') return D.season ? (S.epTable === 'records' && S.epFormat.season === 'csv' ? seasonRecordRows(D.season) : D.season.standings) : [];
   if (key === 'insights') return D.insights ? insightCsvRows(D.insights) : [];
+  if (key === 'postmortem') return D.postmortem ? postmortemCsvRows(D.postmortem) : [];
   if (key === 'frontoffice') return D.frontOffice ? foCsvRows(D.frontOffice.filter(function (x) { return !t || x.teamId === t; })) : [];
   return null;
 }
@@ -627,10 +629,11 @@ var ERRORS = [
   { g: 'soon', s: 429, code: 'too_soon', kind: 'pace_changed', v: 'address', when: 'Four programs at this address already asked in this interval', msg: 'Four programs at this address have already asked in this minute, the most one address may. Pause this program and ask again in 20 seconds.', fix: 'Wait <code>Retry-After</code> seconds, then carry on. Programs at one address take turns.', stop: 'pause' },
   { g: 'soon', s: 429, code: 'too_soon', kind: 'too_fast', when: 'The program asked sooner than it was ever allowed', msg: 'This program asked after 12 seconds, but the site allows one round a minute. It should stop until its interval is fixed.', fix: 'Stop, and fix the program’s interval before running it again.', stop: 'exit' },
   { g: 'addr', s: 400, code: 'bad_request', when: 'Something after the address is wrong or unknown', msg: 'team must be one of this league’s team ids: 1 to 10.', fix: 'Check the address against the endpoint’s card above; every card lists what it takes.' },
-  { g: 'addr', s: 404, code: 'not_found', when: 'Any other address under /api/v1/', msg: 'There’s no endpoint here. The eight are /full, /scoreboard, /standings, /season, /insights, /frontoffice, /rosters and /activity.', fix: 'Check the spelling of the address.' },
+  { g: 'addr', s: 404, code: 'not_found', when: 'Any other address under /api/v1/', msg: 'There’s no endpoint here. The nine are /full, /scoreboard, /standings, /season, /insights, /frontoffice, /postmortem, /rosters and /activity.', fix: 'Check the spelling of the address.' },
   { g: 'addr', s: 405, code: 'method_not_allowed', when: 'Anything but GET, HEAD or OPTIONS', msg: 'The API only reads.', fix: 'Use <code>GET</code>.' },
   { g: 'site', s: 403, code: 'api_off', when: 'The API is switched off, or the tool is hidden', msg: 'The API is switched off for this league.', fix: 'Nothing on your side: ask whoever administers this site.' },
   { g: 'site', s: 403, code: 'not_visible', when: '/season while Season Statistics isn’t visible to members', msg: 'Season Statistics isn’t visible to members, so its data is left out.', fix: 'Nothing on your side: ask whoever administers this site.' },
+  { g: 'site', s: 403, code: 'not_visible', when: '/postmortem while Trade Analyzer isn’t visible to members', msg: 'Trade Analyzer isn’t visible to members, so its Postmortem is left out.', fix: 'Nothing on your side: ask whoever administers this site.' },
   { g: 'site', s: 503, code: 'not_ready', when: 'Nothing pulled yet (a site mid-setup)', msg: 'The league’s data hasn’t been pulled yet.', fix: 'Try again once whoever administers this site has finished setting it up.' },
   { g: 'site', s: 500, code: 'server_error', when: 'Something broke on the site', msg: 'Something went wrong on the site. Try again shortly.', fix: 'Wait a minute and try again.' },
 ];

@@ -41,7 +41,7 @@ const miJson = async (src, ctx, rest) => src.r2json(miKey(Number(ctx.cfg.season)
 const foJson = async (src, ctx, rest) => src.r2json(foKey(Number(ctx.cfg.season), rest));
 const DAY = 86400000;
 /** A trade's status in the words the home page's league activity uses (a proposal pulled by its proposer is withdrawn). */
-export const TRADE_STATUS = { completed: 'Completed', on_the_table: 'On the table', pending_approval: 'Pending approval', rejected: 'Rejected', cancelled: 'Withdrawn', expired: 'Expired' };
+export const TRADE_STATUS = { completed: 'Completed', on_the_table: 'On the table', pending_approval: 'Pending approval', rejected: 'Turned down', cancelled: 'Withdrawn', withdrawn: 'Withdrawn', superseded: 'Superseded', expired: 'Expired' };
 /** The span a "still signed in" count looks back over: the sign-in length, held to the seven days the log keeps. */
 const sessionSpan = async (src) => {
   const h = sessionHoursOf(await src.cfg()); const cap = 7 * 24;
@@ -679,6 +679,24 @@ const OWN = {
           for (const it of (tx && tx.items) || []) if (it.kind === 'trade' && it.status !== 'on_the_table') by[it.status || 'unknown'] = (by[it.status || 'unknown'] || 0) + 1;
           return [B.kv([['On the table', C.n(t ? (t.pending || []).length : 0)], ...Object.entries(by).map(([k, n]) => [TRADE_STATUS[k] || k.replace(/_/g, ' ').replace(/^./, (x) => x.toUpperCase()), C.n(n)])]),
             B.note('Counts only: which teams are involved is never shown here.')];
+        },
+      }),
+      P('t-postmortem', 'Postmortem', {
+        sum: async (src) => {
+          const st = await src.r2json('postmortem/state.json');
+          if (!st) return [null, 'not started'];
+          const all = Object.values(st.seasons || {}).filter((x) => !x.absent);
+          const built = all.filter((x) => x.builtAt).length;
+          return [built === all.length && all.length ? 'ok' : null, `${built} of ${all.length} season${all.length === 1 ? '' : 's'} worked out`];
+        },
+        body: async (src) => {
+          const st = await src.r2json('postmortem/state.json');
+          if (!st) return [B.empty('The Postmortem has not read anything yet. The minute\u2019s work reads a few of ESPN\u2019s records a minute until every season is done.')];
+          const rows = Object.entries(st.seasons || {}).sort((a, b) => b[0] - a[0]).map(([y, x]) => B.row([C.txt(String(y)),
+            C.txt(x.absent ? 'not served by ESPN' : x.builtAt ? 'worked out' : 'reading'), C.n(Object.keys(x.tx || {}).length), C.n(Object.keys(x.r || {}).length),
+            x.builtAt ? C.time(x.builtAt) : C.txt('\u2014'), C.n(x.offers || 0)]));
+          return [B.table([['Season'], ['State'], ['Trade weeks read', 'n'], ['Roster weeks read', 'n'], ['Worked out'], ['Decided offers', 'n']], rows),
+            B.note('Counts only: which teams and players are in an offer is never shown here. Past seasons are read once; this season\u2019s latest trades every half hour, its open weeks\u2019 rosters twice a day.')];
         },
       }),
       P('t-rules', 'League trade rules', {

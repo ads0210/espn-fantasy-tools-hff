@@ -27,6 +27,8 @@ ${LINEHOVER_CSS}
 #p-visits { --ink-2:var(--dim); --ink-3:var(--faint); --accent:var(--acc); }
 #p-visits .vplot { position:relative; margin:4px 0 0 0; }
 #p-visits .vplot svg { position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+#p-visits .vgame { fill:color-mix(in srgb,var(--sky) 10%,transparent); }
+#p-visits .vjump { fill:var(--acc); opacity:.55; }
 #p-visits .vgrid { stroke:var(--line); stroke-width:1; vector-effect:non-scaling-stroke; }
 #p-visits .vline { fill:none; stroke:var(--c); stroke-width:1.6; vector-effect:non-scaling-stroke; stroke-linejoin:round; opacity:.85; }
 #p-visits .vline.me { stroke-width:2.8; opacity:1; }
@@ -100,7 +102,7 @@ export default function VisitsChart({ d, vis, setVis }) {
         <button type="button" className="tog" aria-expanded={vis.open} aria-controls="b-p-visits" onClick={() => setVis((s) => ({ ...s, open: !s.open }))}>
           <span className="caret" aria-hidden="true">▾</span>
           <span className="phx"><span className="pt">Visits over time</span>
-            <span className="ps">Page visits by the team chosen on each browser. Counted by the hour, kept by the day after 8 days.</span></span>
+            <span className="ps">Page visits by the team chosen on each browser, counted by the hour all season. Shaded bands are NFL game windows; tap the chart to read that hour (or day) in the Site log below.</span></span>
         </button>
         {ready ? <span className="asof">as of {fmt({ hour: "numeric", minute: "2-digit", second: "2-digit" }, zone()).format(Date.parse(d.at))}</span> : null}
       </div>
@@ -112,8 +114,19 @@ export default function VisitsChart({ d, vis, setVis }) {
             : v.rest ? <div className="restnote">{v.rest.replace(/^The panels built from/, "Visits over time and the panels built from")}</div>
             : <>
               {total === 0 ? <div className="vempty">No visits recorded in this range{vis.page ? ` on ${pageName(vis.page)}` : ""}.</div> : null}
-              <div className="vplot" ref={plotRef} style={{ aspectRatio: `${W} / ${H}` }}>
+              <div className="vplot" ref={plotRef} style={{ aspectRatio: `${W} / ${H}`, cursor: "crosshair" }} onClick={(ev) => {
+                if (n < 1) return;
+                const box = ev.currentTarget.getBoundingClientRect();
+                const x = ((ev.clientX - box.left) / box.width) * W;
+                const i = Math.max(0, Math.min(n - 1, Math.round((x - PADL) / ((W - PADL - PADR) / Math.max(1, n - 1)))));
+                setVis((s) => ({ ...s, jump: { from: times[i], to: times[i] + v.step, hourly: v.hourly } }));
+              }}>
                 <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
+                  {n > 1 ? (d.gameWindows || []).filter(([a, b]) => b > times[0] && a < times[n - 1] + v.step).map(([a, b], i) => {
+                    const tx = (t) => PADL + Math.max(0, Math.min(1, (t - times[0]) / (times[n - 1] - times[0]))) * (W - PADL - PADR);
+                    return <rect key={i} className="vgame" x={tx(a)} y={PADT} width={Math.max(1.5, tx(b) - tx(a))} height={H - PADT - PADB} />;
+                  }) : null}
+                  {vis.jump && n > 1 ? <rect className="vjump" x={PADL + Math.max(0, (vis.jump.from - times[0]) / (times[n - 1] - times[0])) * (W - PADL - PADR) - 2} y={PADT} width={4} height={H - PADT - PADB} /> : null}
                   {[0, top / 2, top].map((y) => <line key={y} className="vgrid" x1={PADL} x2={W - PADR} y1={Y(y)} y2={Y(y)} />)}
                   {keys.map((k) => (
                     <path key={k} className={`vline${k === me ? " me" : ""}${k === NO_TEAM ? " none" : ""}`} data-k={k} style={{ "--c": colour(k) }}
@@ -133,7 +146,7 @@ export default function VisitsChart({ d, vis, setVis }) {
                     style={{ "--c": colour(k) }} onClick={() => toggle(k)}><i />{name(k)}</button>
                 ))}
               </div>
-              <p className="note">{v.hourly ? "Each point is one hour." : "Each point is one UTC day."}{v.since ? ` Counted since ${sinceLabel(v.since)}.` : ""}</p>
+              <p className="note">{v.hourly ? "Each point is one hour." : "Each point is one UTC day."}{v.since ? ` Counted since ${sinceLabel(v.since)}.` : ""}{(d.gameWindows || []).length ? " Shaded: NFL games on." : ""}</p>
             </>}
         </div>
       ) : null}

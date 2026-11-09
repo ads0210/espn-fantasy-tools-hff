@@ -367,7 +367,7 @@ function FitBar({ x }) {
     <div className="fofitbar">
       <div className="bar" aria-hidden="true">{pos.map(([k, v]) => <i key={k} className={`p-${k.replace(/\W/g, "").toLowerCase()}`} style={{ flexGrow: v }} />)}</div>
       <div className="lg">{parts.map(([k, v]) => <span key={k} className={`p-${k.replace(/\W/g, "").toLowerCase()}`}><i />{k} <b>{ptsSigned(v)}</b></span>)}</div>
-      {x.kind === "bench" && <p className="fodnote">He would not start for you, but he projects {pts2(x.gain.bench)} a week more than {x.drop.name} on your bench. A bench upgrade counts a quarter of that, so it ranks below pickups that would start.</p>}
+      {x.kind === "bench" && <p className="fodnote">He would not start for you, but he projects {pts2(x.gain.bench)} a week more than {(x.benchVs || x.drop).name} on your bench. A bench upgrade counts a quarter of that, so it ranks below pickups that would start.</p>}
     </div>
   );
 }
@@ -389,7 +389,7 @@ function PickDetail({ x }) {
         <h4>Add and drop</h4>
         <div className="trade">
           <div className="in"><span className="k">Add</span><span className="n">{x.name}</span><span className="bar"><i style={{ width: `${(x.ros / maxRos) * 100}%` }} /></span><span className="v">{pts2(x.ros)}</span></div>
-          <div className="out"><span className="k">Drop</span><span className="n">{x.drop.name} <small>{x.drop.pos} · {x.drop.nfl}</small></span><span className="bar"><i style={{ width: `${(x.drop.ros / maxRos) * 100}%` }} /></span><span className="v">{pts2(x.drop.ros)}</span></div>
+          <div className="out"><span className="k">{x.drop.toIR ? "To IR" : "Drop"}</span><span className="n">{x.drop.name} <small>{x.drop.pos} · {x.drop.nfl}</small></span><span className="bar"><i style={{ width: `${(x.drop.ros / maxRos) * 100}%` }} /></span><span className="v">{pts2(x.drop.ros)}</span></div>
           <span className="cap">Projected points for the rest of the regular season</span>
         </div>
         <ul className="fofacts"><li>ESPN owned <b>{x.own.toFixed(1)}%</b>{x.chg ? <span className={x.chg > 0 ? "up" : "down"}> {x.chg > 0 ? "+" : ""}{x.chg.toFixed(1)} this week</span> : null}</li></ul>
@@ -435,7 +435,7 @@ function Pickups({ pk }) {
               </header>
               <div className="mid">
                 <Tape tape={x.tape} pos={x.pos} ahead={x.opps.slice(1)} compact />
-                <span className="gl">Drop <b>{x.drop.name}</b></span>
+                <span className="gl">{x.drop.toIR ? <>Move <b>{x.drop.name}</b> to IR: no drop needed</> : <>Drop <b>{x.drop.name}</b></>}</span>
               </div>
               <p className="lead">{x.reasons[0] || "Would not crack your best lineup or beat your bench in the weeks ahead."}</p>
             </Card>
@@ -561,11 +561,13 @@ function PlayerHeat({ wa, idx }) {
     </ScrollBox>
   );
 }
-function WeeksAhead({ wa, bracket }) {
+function WeeksAhead({ wa, bracket, postFirst }) {
+  // The league's own calendar: the first postseason week comes with the page (docket A11), never a fixed number.
+  const isPost = (w) => postFirst != null && w >= postFirst;
   const [view, setView] = useState("lineup");
   const [onlyPost, setOnlyPost] = useState(false);
-  const idx = wa.weeks.map((w, i) => i).filter((i) => !onlyPost || wa.weeks[i] >= 14);
-  const anyPost = wa.weeks.some((w) => w >= 14);
+  const idx = wa.weeks.map((w, i) => i).filter((i) => !onlyPost || isPost(wa.weeks[i]));
+  const anyPost = wa.weeks.some(isPost);
   return (
     <>
       {wa.race ? <><SecHead>The race</SecHead><Race race={wa.race} /></> : null}
@@ -694,7 +696,7 @@ export default function FrontOffice() {
       <p className="foasof">As of <b>{dateTimeText(pg.asOf || pg.builtAt)}</b></p>
       {tab === "week" && <ThisWeek tw={pg.tw} />}
       {tab === "pick" && <Pickups key={pg.team.id} pk={pg.pk} />}
-      {tab === "ahead" && <WeeksAhead key={pg.team.id} wa={pg.wa} bracket={pg.wa.bracket} />}
+      {tab === "ahead" && <WeeksAhead key={pg.team.id} wa={pg.wa} bracket={pg.wa.bracket} postFirst={cal.postFirst ?? (cal.regLast != null ? cal.regLast + 1 : null)} />}
     </>
   );
 

@@ -25,7 +25,7 @@ import { PARAM_DATASETS, historySeasons } from './datasets.js';
 import { coordinatorRefresh } from './dedupe.js';
 import { timelineRead } from './timeline.js';
 import { FT_ESPN_ODDS_KEY } from './fortuneteller.js';
-import { buildSeasonModel, compactWeek, timelineFacts, periods, compute, SECTIONS } from './seasonstats.js';
+import { buildSeasonModel, compactWeek, timelineFacts, periods, compute, SECTIONS, SS_VERSION } from './seasonstats.js';
 import { liveBase } from './seasonlive.js';
 
 export const SS_PREFIX = 'season-stats/';
@@ -147,13 +147,21 @@ export async function gatherInputs(env, cfg, season, state) {
     past[yr] = d.schedule.filter((m) => m.home && m.away && m.winner && m.winner !== 'UNDECIDED' && m.matchupPeriodId <= reg)
       .map((m) => ({ week: m.matchupPeriodId, winner: m.winner === 'HOME' ? m.home.teamId : m.winner === 'AWAY' ? m.away.teamId : 0 }));
   }
+  // D21: Most lopsided trade reads the Postmortem's lineup impact (src/postmortemstep.js), once it has been worked out.
+  let postmortem = null;
+  try {
+    const o = await env.DATA.get(`postmortem/${season}/season.json`);
+    const doc = o ? await o.json() : null;
+    if (doc && Array.isArray(doc.offers)) postmortem = doc.offers.filter((x) => x.status === 'completed' && x.impact)
+      .map((x) => ({ id: x.id, teams: x.sides.map((s) => s.team), effWeek: x.effWeek, rows: Object.fromEntries(Object.entries(x.impact).map(([t, s]) => [t, s.rows.filter((r) => !r.future).map((r) => [r.w, r.impact])])) }));
+  } catch { /* the started-points ledger stands in */ }
   return {
     cal,
     inputs: {
       season, regWeeks: cal.regWeeks, playoffTeams: cal.playoffTeams, startSlots: startSlotsOf(settings), teams,
       schedule: schedule.schedule || [], weeks, players: Object.values(players),
       draft: (draft && draft.draftDetail && draft.draftDetail.picks) || [], txs, tl, tlWeeks, past,
-      hof: hof ? { records: hof.records || {} } : null, espnOdds: odds,
+      hof: hof ? { records: hof.records || {}, book: hof.book ? { league: hof.book.league || [], season: hof.book.season || [] } : null } : null, espnOdds: odds, postmortem,
     },
   };
 }
@@ -164,7 +172,8 @@ async function sourceSignature(env, state) {
   for (const [ds, part] of SOURCE_PARTS) { const h = await headPart(env, ds, part); tags.push(h ? h.etag || String(h.uploaded) : '-'); }
   for (let p = 1; p <= TX_PARTS; p++) { const h = await headPart(env, 'transactions', `sp${p}`); tags.push(h ? h.etag || '' : '-'); }
   const o = await env.DATA.head(FT_ESPN_ODDS_KEY).catch(() => null); tags.push(o ? o.etag || '' : '-');
-  tags.push(JSON.stringify(state.periods || {}), JSON.stringify(state.tl || {}));
+  const pm = await env.DATA.head(`postmortem/${state.season || ''}/season.json`).catch(() => null); tags.push(pm ? pm.etag || '' : '-');
+  tags.push(JSON.stringify(state.periods || {}), JSON.stringify(state.tl || {}), `v${SS_VERSION}`);
   return fingerprint(tags.join('|'));
 }
 
@@ -189,7 +198,8 @@ export async function rebuildParts(env, cfg, season, state, { now = Date.now(), 
     const frozen = v.key.startsWith('w') && /^w\d+$/.test(v.key);
     if (frozen) {
       const mps = model.settledWeeks.filter((w) => w <= Number(v.key.slice(1)));
-      const cover = coverOf(state, mps.flatMap((w) => g.cal.periodsOf(w)), mps);
+      // ':pm' once the Postmortem's lineup impact is read (D21), so every frozen part takes it once.
+      const cover = coverOf(state, mps.flatMap((w) => g.cal.periodsOf(w)), mps) + (g.inputs.postmortem ? ':pm' : '') + `:v${SS_VERSION}`;
       const have = state.frozen[v.key];
       if (!full && have && have.cover === cover) { parts.push(v); continue; }
       if (!full && frozenBuilt >= FROZEN_PER_CALL) { pending++; continue; }

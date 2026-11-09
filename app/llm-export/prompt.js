@@ -69,9 +69,10 @@ const SECTION_TEXT = {
   transactions: (c) => (c ? 'moves from this week and last week: waiver claims, free-agent adds and drops, and trades, including proposals that were withdrawn, rejected or expired.'
     : 'this season\'s completed moves (waiver claims, free-agent adds and drops, trades) and trade proposals that were withdrawn, rejected or expired.'),
   tradeOffers: () => 'trade proposals that are still open.',
+  tradePostmortem: (c) => `Trade Analyzer's Postmortem: ${c ? 'this season\'s completed trades' : 'every decided trade offer of every season the site holds (completed, expired, turned down, withdrawn, superseded), newest season first'}, judged in hindsight. For each side, its lineup impact: the points the deal added to (or took from) that side's best possible lineup each week since it counts (from when it went through, or for an offer that never did, from when it would have), against the same weeks without it, then "still to play" on ESPN's projections. \`outcome\` grades the gap in points a week in Trade Analyzer's verdict bands; \`espnExpected\` is the same grade on ESPN's projections; \`tradeAnalyzerSaid\` is Trade Analyzer's verdict when it first saw the offer, where it was stored.`,
   nfl: (c) => (c ? 'every NFL team\'s record and bye week, this week\'s and next week\'s NFL games, and `pointsAllowedByPosition`, which ranks every NFL defense against each position.'
     : 'every NFL team\'s record, standing and bye week; the full NFL schedule by week with final scores; and `pointsAllowedByPosition`, which ranks every NFL defense by the fantasy points it allows to each position.'),
-  history: () => 'past champions and each current team\'s all-time record.',
+  history: () => 'past champions, each current team\'s all-time record and, where present, Hall of Fame\'s Record Holders: how many of its records each team holds (+1 a good record, −1 a bad one) and its prestige (points for every top-ten place on those records).',
 };
 
 function sections(doc) {
