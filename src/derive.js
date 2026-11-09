@@ -15,6 +15,9 @@
  * 210KB in 314ms wall, comfortably inside the CPU budget.
  */
 
+import { roundPts, oneDecimal } from './round.js';
+import { hofRecordBook } from './hofrecords.js';
+import { offersOf, membersOf, isOfferRecord, isLostClaim } from './trades.js';
 // A function declaration, so the import cycle with llmexport.js is safe in
 // either load order: nothing from it is read while this module evaluates.
 import { buildLlmExportDigest } from './llmexport.js';
@@ -542,8 +545,8 @@ export function buildStandingsDigest(doc, ctx = {}) {
       wins: overall.wins || 0,
       losses: overall.losses || 0,
       ties: overall.ties || 0,
-      pointsFor: Math.round((overall.pointsFor || 0) * 10) / 10,
-      pointsAgainst: Math.round((overall.pointsAgainst || 0) * 10) / 10,
+      pointsFor: roundPts(overall.pointsFor),
+      pointsAgainst: roundPts(overall.pointsAgainst),
       seed: t.playoffSeed || 0,
       /* ESPN's own figure, carried through rather than recomputed. At its
          extremes it is no longer a probability but a fact, and the table says
@@ -602,82 +605,9 @@ export function buildRosterDigest(doc, ctx = {}) {
    move. These are the shapes that survive that translation. */
 const TX_KIND = { TRADE: 'trade', WAIVER: 'waiver', SWAP: 'swap', ADD: 'add', DROP: 'drop' };
 
-/**
- * Where a trade currently stands.
- *
- * ESPN keeps one record per proposal and rewrites its status in place, which is
- * what lets a trade occupy one row in the panel for its whole life rather than
- * a new row every time it moves along. The two pending states are not
- * distinguishable from the transaction record alone — both read PENDING — so
- * they are separated by whether the other side has actually answered, which
- * only the pending-offer payload knows.
- */
-/* Lapsing and being turned down are different things, and ESPN records both
-   as a cancellation. What separates them is when the cancellation happened: an
-   offer nobody answered is cancelled by the clock at its expiry, while one that
-   was declined is cancelled before it. A minute of slack covers the gap between
-   an expiry instant and the sweep that acts on it. */
-const EXPIRY_GRACE_MS = 60 * 1000;
-
-/**
- * Who ended a proposal, where that can be told.
- *
- * ESPN names the actor on the cancellation record. An offer that simply ran out
- * of time is cancelled by a task rather than a person, which is what separates
- * a lapse from somebody deciding — and once it is a person, which side they are
- * on separates a proposer withdrawing from a recipient turning it down.
- */
-function cancelledBySide(cancellation, proposal, membersByTeam) {
-  const member = cancellation && cancellation.memberId;
-  // Not a league member: the expiry sweep, not a decision by anybody.
-  if (!member || !/^\{?[0-9A-F]{8}-/i.test(String(member))) return 'system';
-  const proposer = proposal && proposal.teamId;
-  for (const [teamId, ids] of Object.entries(membersByTeam || {})) {
-    if (!ids.includes(member)) continue;
-    return Number(teamId) === Number(proposer) ? 'proposer' : 'recipient';
-  }
-  return 'unknown';
-}
-
-function tradeStatus(tx, cancellation, now, membersByTeam) {
-  const status = String(tx.status || '').toUpperCase();
-  if (status === 'EXECUTED') return 'completed';
-
-  /* ESPN writes a separate CANCELED record pointing back at the proposal
-     rather than rewriting it, so the cancellation carries the only timestamp
-     that says which of the two happened. */
-  if (cancellation) {
-    const at = cancellation.proposedDate || cancellation.processDate || 0;
-    if (tx.expirationDate && at >= tx.expirationDate - EXPIRY_GRACE_MS) return 'expired';
-    const by = cancelledBySide(cancellation, tx, membersByTeam);
-    if (by === 'system') return 'expired';
-    // Withdrawn by whoever offered it, as against turned down by whoever it
-    // was offered to. Different things, and members read them differently.
-    if (by === 'proposer') return 'cancelled';
-    return 'rejected';
-  }
-  if (status === 'CANCELED' || status === 'CANCELLED') {
-    // A cancellation with nothing to compare against: lapsed if its own window
-    // has closed, otherwise somebody said no.
-    return (tx.expirationDate && tx.expirationDate <= now) ? 'expired' : 'rejected';
-  }
-  if (status !== 'PENDING') return status ? status.toLowerCase() : 'completed';
-
-  // Still nominally pending, but the window has closed.
-  if (tx.expirationDate && tx.expirationDate <= now) return 'expired';
-
-  /* Answered by the other side and waiting out the review window, as against
-     sitting unanswered. A proposal records the proposer's own acceptance, so
-     this only reads true once everybody involved has acted. */
-  const acted = Object.keys(tx.teamActions || {}).map(Number);
-  const sides = new Set();
-  for (const it of tx.items || []) {
-    if (it.fromTeamId != null) sides.add(it.fromTeamId);
-    if (it.toTeamId != null) sides.add(it.toTeamId);
-  }
-  const everyoneActed = sides.size > 0 && [...sides].every((id) => acted.includes(id));
-  return everyoneActed ? 'pending_approval' : 'on_the_table';
-}
+/* Where a trade stands is worked out from ESPN's linked records in src/trades.js (docket A2, A8; plan D9):
+   one entry per offer, its status Completed, Pending approval, On the table, Expired, Turned down (rejected),
+   Withdrawn or Superseded. */
 
 /**
  * League activity, one row per transaction.
@@ -734,11 +664,6 @@ export function buildTransactionDigest(doc, ctx = {}) {
   }
   const team = (id) => (id != null && teamById[id]) || null;
 
-  // Which member owns which team, so a cancellation can be attributed.
-  const membersByTeam = {};
-  for (const t of (teamsDoc && teamsDoc.teams) || []) {
-    membersByTeam[t.id] = (t.owners || []).map(String);
-  }
 
   const playerById = {};
   for (const p of (playersDoc && playersDoc.players) || []) playerById[p.id] = p;
@@ -753,35 +678,45 @@ export function buildTransactionDigest(doc, ctx = {}) {
   };
 
   const raw = (doc && (doc.transactions || doc.items)) || [];
-
-  /* ESPN records the end of a proposal as its own transaction pointing back at
-     the original. Those companions are events in a deal's life, not deals, so
-     they are indexed here and never listed in their own right — which is also
-     what keeps one trade to one row as its status moves on. */
-  const cancelledBy = new Map();
-  for (const tx of raw) {
-    const st = String(tx.status || '').toUpperCase();
-    if ((st === 'CANCELED' || st === 'CANCELLED') && tx.relatedTransactionId) {
-      cancelledBy.set(tx.relatedTransactionId, tx);
-    }
-  }
-  const isCompanion = new Set(
-    raw.filter((tx) => tx.relatedTransactionId
-      && cancelledBy.get(tx.relatedTransactionId) === tx).map((tx) => tx.id),
-  );
   const out = [];
+
+  /* Trades: one row per offer, from ESPN's links (src/trades.js). The proposal, its acceptance, the review's
+     uphold, a decline or a cancellation are events in one offer's life, never rows of their own; two offers of the
+     same players are two rows (A8). The drops the receiving side made to fit the players in ride on the completed
+     trade (A2), and a completed trade is dated when it went through (G13). */
+  for (const o of offersOf(raw, { members: membersOf(teamsDoc), now })) {
+    const sides = o.teams.map((id) => ({ team: team(id), players: (o.sends[id] || []).map(player) })).filter((x) => x.team);
+    if (!sides.length) continue;
+    const when = o.status === 'completed' && o.executedAt ? o.executedAt : o.offeredAt;
+    out.push({
+      id: o.id || `${when}-trade`,
+      kind: TX_KIND.TRADE,
+      status: o.status,
+      // Three-team trades are legal in ESPN, so this is not assumed to be two.
+      teams: sides.map((x) => x.team),
+      sides,
+      players: sides.flatMap((x) => x.players),
+      adds: [],
+      drops: o.drops.map((d) => ({ ...player(d.pid), teamId: d.team })),
+      bid: null,
+      scoringPeriod: o.period,
+      date: when ? new Date(when).toISOString() : null,
+      offeredAt: o.offeredAt ? new Date(o.offeredAt).toISOString() : null,
+    });
+  }
 
   for (const tx of raw) {
     const type = String(tx.type || '').toUpperCase();
     if (type === 'DRAFT') continue;
-    // The cancellation half of a proposal is folded into the proposal itself.
-    if (isCompanion.has(tx.id)) continue;
+    if (isOfferRecord(tx)) continue;
 
     const items = (tx.items || []).filter((it) => {
       const k = String(it.type || '').toUpperCase();
       return k !== 'LINEUP' && k !== 'DRAFT';
     });
     if (!items.length) continue;
+    // A trade item outside a TRADE_* record has no offer to belong to: never listed on its own.
+    if (items.some((it) => String(it.type || '').toUpperCase() === 'TRADE')) continue;
 
     /* A waiver claim that has not processed yet is private.
        ESPN does not show one team's outstanding claim to the rest of the
@@ -790,44 +725,10 @@ export function buildTransactionDigest(doc, ctx = {}) {
        them here handed every member an advantage ESPN deliberately withholds.
        A claim appears once it has resolved — whether it went through or lost
        out to an earlier one. */
-    const pendingClaim = String(tx.status || '').toUpperCase() === 'PENDING'
-      && !type.startsWith('TRADE');
+    const pendingClaim = String(tx.status || '').toUpperCase() === 'PENDING';
     if (pendingClaim) continue;
 
     const when = tx.proposedDate || tx.processDate || tx.date || null;
-    const isTrade = type.startsWith('TRADE')
-      || items.some((it) => String(it.type || '').toUpperCase() === 'TRADE');
-
-    if (isTrade) {
-      /* A trade is two teams and what each of them sends. Grouping by the team
-         a player is leaving is what turns six rows into one deal. */
-      const bySender = new Map();
-      for (const it of items) {
-        const from = it.fromTeamId;
-        if (from == null) continue;
-        if (!bySender.has(from)) bySender.set(from, []);
-        bySender.get(from).push(player(it.playerId));
-      }
-      const sides = [...bySender.entries()]
-        .map(([teamId, players]) => ({ team: team(teamId), players }))
-        .filter((x) => x.team);
-      if (!sides.length) continue;
-      out.push({
-        id: tx.id || `${when}-trade`,
-        kind: TX_KIND.TRADE,
-        status: tradeStatus(tx, cancelledBy.get(tx.id), now, membersByTeam),
-        // Three-team trades are legal in ESPN, so this is not assumed to be two.
-        teams: sides.map((x) => x.team),
-        sides,
-        players: sides.flatMap((x) => x.players),
-        adds: [], drops: [],
-        bid: null,
-        scoringPeriod: tx.scoringPeriodId ?? null,
-        date: when ? new Date(when).toISOString() : null,
-      });
-      continue;
-    }
-
     const adds = items
       .filter((it) => String(it.type || '').toUpperCase() === 'ADD')
       .map((it) => player(it.playerId));
@@ -845,43 +746,28 @@ export function buildTransactionDigest(doc, ctx = {}) {
       : (adds.length && drops.length) ? TX_KIND.SWAP
         : adds.length ? TX_KIND.ADD : TX_KIND.DROP;
 
+    /* A claim that lost (ESPN's FAILED_*) stays listed, with its own status, so it never reads like one that went
+       through (docket A3). Nothing counts it as a move: every reader of moves takes `completed` only. */
+    const lost = isLostClaim(tx);
     out.push({
       id: tx.id || `${when}-${actor.id}`,
       kind,
-      status: String(tx.status || '').toUpperCase() === 'EXECUTED' ? 'completed'
-        : String(tx.status || '').toLowerCase() || 'completed',
+      status: lost ? 'claim_lost'
+        : String(tx.status || '').toUpperCase() === 'EXECUTED' ? 'completed'
+          : String(tx.status || '').toLowerCase() || 'completed',
       teams: [actor],
       sides: [],
       players: [...adds, ...drops],
       adds,
       drops,
       // A winning waiver bid is the interesting part of a claim; zero is not.
-      bid: type === 'WAIVER' && tx.bidAmount ? tx.bidAmount : null,
+      bid: type === 'WAIVER' && tx.bidAmount && !lost ? tx.bidAmount : null,
       scoringPeriod: tx.scoringPeriodId ?? null,
       date: when ? new Date(when).toISOString() : null,
     });
   }
 
-  /* One row per deal, whatever ESPN did behind it.
-   *
-   * A proposal and its execution can arrive as two records with different ids,
-   * and the panel must not then show the same trade twice — once as pending and
-   * once as done. Deals are collapsed on the set of players that moved, keeping
-   * whichever record has travelled furthest. */
-  const RANK = { on_the_table: 0, pending_approval: 1, expired: 2, rejected: 3, completed: 4 };
-  const seen = new Map();
-  const deduped = [];
-  for (const row of out) {
-    if (row.kind !== TX_KIND.TRADE) { deduped.push(row); continue; }
-    const key = row.players.map((p) => p.id).sort().join(',');
-    const prior = seen.get(key);
-    if (!prior) { seen.set(key, row); deduped.push(row); continue; }
-    if ((RANK[row.status] ?? 0) > (RANK[prior.status] ?? 0)) {
-      prior.status = row.status;
-      prior.date = row.date || prior.date;
-    }
-  }
-
+  const deduped = out;
   deduped.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
   return {
     generatedAt: new Date().toISOString(),
@@ -957,8 +843,7 @@ function weeklyStat(player, scoringPeriodId, sourceId) {
   return null;
 }
 
-// Week 6 (PD38): points are kept to two decimals, half up, so every page can show them to two (it was one).
-const roundPts = (n) => Math.round((Number(n) || 0) * 100 + (Number(n) < 0 ? -1e-6 : 1e-6)) / 100;
+// Week 6 (PD38) and docket A1: points are kept to two decimals, half up (`roundPts` in src/round.js).
 
 /**
  * The best score this roster could have produced, given what everyone actually
@@ -1347,15 +1232,15 @@ export async function buildHeadToHeadHistory({ teamIds, readPart, readCurrent })
       const rec = pairs[key];
       const lowPts = lowIsHome ? hp : ap;
       const highPts = lowIsHome ? ap : hp;
-      rec.lowPoints = Math.round((rec.lowPoints + lowPts) * 10) / 10;
-      rec.highPoints = Math.round((rec.highPoints + highPts) * 10) / 10;
+      rec.lowPoints = roundPts(rec.lowPoints + lowPts);
+      rec.highPoints = roundPts(rec.highPoints + highPts);
       if (lowPts > highPts) rec.lowWins += 1;
       else if (highPts > lowPts) rec.highWins += 1;
       else rec.ties += 1;
       rec.games.push({
         season: year, week: m.matchupPeriodId || null,
-        lowPts: Math.round(lowPts * 10) / 10,
-        highPts: Math.round(highPts * 10) / 10,
+        lowPts: roundPts(lowPts),
+        highPts: roundPts(highPts),
         playoff: m.playoffTierType && m.playoffTierType !== 'NONE' ? m.playoffTierType : null,
       });
     }
@@ -1395,15 +1280,15 @@ export async function buildHeadToHeadHistory({ teamIds, readPart, readCurrent })
       const rec = pairs[key];
       const lowPts = lowIsHome ? hp : ap;
       const highPts = lowIsHome ? ap : hp;
-      rec.lowPoints = Math.round((rec.lowPoints + lowPts) * 10) / 10;
-      rec.highPoints = Math.round((rec.highPoints + highPts) * 10) / 10;
+      rec.lowPoints = roundPts(rec.lowPoints + lowPts);
+      rec.highPoints = roundPts(rec.highPoints + highPts);
       if (lowPts > highPts) rec.lowWins += 1;
       else if (highPts > lowPts) rec.highWins += 1;
       else rec.ties += 1;
       rec.games.push({
         season: year, week: m.matchupPeriodId || null,
-        lowPts: Math.round(lowPts * 10) / 10,
-        highPts: Math.round(highPts * 10) / 10,
+        lowPts: roundPts(lowPts),
+        highPts: roundPts(highPts),
         playoff: m.playoffTierType && m.playoffTierType !== 'NONE' ? m.playoffTierType : null,
       });
     }
@@ -1481,7 +1366,6 @@ export function playoffRoundLabel(tier, week, { firstPlayoffWeek, lastPlayoffWee
 }
 
 const pairKeyOf = (a, b) => (a < b ? `${a}:${b}` : `${b}:${a}`);
-const r1 = (n) => Math.round(Number(n || 0) * 10) / 10;
 
 function displayName(t) {
   return t.name || `${t.location || ''} ${t.nickname || ''}`.trim() || `Team ${t.id}`;
@@ -1548,7 +1432,7 @@ function playedGames(season, year) {
     const periods = [...new Set([...Object.keys(hBy), ...Object.keys(aBy)])]
       .map(Number).filter((n) => Number.isFinite(n)).sort((x, y) => x - y);
     const perWeek = periods
-      .map((p) => ({ period: p, homePts: r1(hBy[p] || 0), awayPts: r1(aBy[p] || 0) }))
+      .map((p) => ({ period: p, homePts: roundPts(hBy[p] || 0), awayPts: roundPts(aBy[p] || 0) }))
       .filter((w) => w.homePts || w.awayPts);
 
     const tier = m.playoffTierType;
@@ -1556,13 +1440,13 @@ function playedGames(season, year) {
       season: year,
       week: Number(m.matchupPeriodId || 0) || null,
       homeId: h.teamId, awayId: a.teamId,
-      homePts: r1(hp), awayPts: r1(ap),
+      homePts: roundPts(hp), awayPts: roundPts(ap),
       round: playoffRoundLabel(tier, m.matchupPeriodId, bounds),
       postseason: Boolean(tier && tier !== 'NONE'),
       // A matchup with no per-period breakdown is treated as a single week, so
       // nothing silently drops out of the scoring pools.
       weeks: perWeek.length ? perWeek
-        : [{ period: Number(m.matchupPeriodId || 0) || null, homePts: r1(hp), awayPts: r1(ap) }],
+        : [{ period: Number(m.matchupPeriodId || 0) || null, homePts: roundPts(hp), awayPts: roundPts(ap) }],
     });
   }
   return out;
@@ -1599,8 +1483,8 @@ export async function buildHeadToHeadFull(ctx) {
       const rec = pairs[key];
       const phase = g.postseason ? rec.post : rec.regular;
       for (const bucket of [rec, phase]) {
-        bucket.lowPoints = r1(bucket.lowPoints + lowPts);
-        bucket.highPoints = r1(bucket.highPoints + highPts);
+        bucket.lowPoints = roundPts(bucket.lowPoints + lowPts);
+        bucket.highPoints = roundPts(bucket.highPoints + highPts);
         if (lowPts > highPts) bucket.lowWins += 1;
         else if (highPts > lowPts) bucket.highWins += 1;
         else bucket.ties += 1;
@@ -1681,6 +1565,8 @@ export async function buildLeagueHistoryDigest(rawCtx) {
   const owners = {};                      // id -> owner display name
   const gamesByTeam = {};                 // id -> chronological matchup list
   const champions = [];
+  const periodGames = [];
+  const namesBySeason = {};               // year -> { id: the team's name that season } (G8: "as …")
   let currentSeason = null;
 
   /** One phase's running totals for a team. */
@@ -1720,6 +1606,7 @@ export async function buildLeagueHistoryDigest(rawCtx) {
     seasonMeta[year] = {
       size: Number(settings.size || (season.teams || []).length || 0),
       playoffTeamCount: Number(sched.playoffTeamCount || 0),
+      mpc: Number(sched.matchupPeriodCount || 0) || null,
       inProgress: Boolean(isCurrent),
     };
 
@@ -1734,7 +1621,11 @@ export async function buildLeagueHistoryDigest(rawCtx) {
 
     for (const t of season.teams || []) {
       const row = ensure(t.id);
-      row.name = displayName(t);
+      // A season read without names (the season being played comes from a view that carries none) must not turn a
+      // team into "Team 3": keep the name already known and record no name for that season.
+      const named = Boolean(t.name || t.location || t.nickname);
+      if (named || !row.name) row.name = displayName(t);
+      if (named) (namesBySeason[year] = namesBySeason[year] || {})[t.id] = displayName(t);
       row.abbrev = t.abbrev || row.abbrev;
       if (!row.seasons.includes(year)) row.seasons.push(year);
       const own = memberName[t.primaryOwner] || (t.owners || []).map((o) => memberName[o]).find(Boolean);
@@ -1765,7 +1656,7 @@ export async function buildLeagueHistoryDigest(rawCtx) {
         row.seasonLog.push({
           year,
           wins: Number(rec.wins || 0), losses: Number(rec.losses || 0), ties: Number(rec.ties || 0),
-          pf: r1(rec.pointsFor), pa: r1(rec.pointsAgainst),
+          pf: roundPts(rec.pointsFor), pa: roundPts(rec.pointsAgainst),
           rank: rank || null, size: seasonMeta[year].size,
         });
       }
@@ -1779,6 +1670,8 @@ export async function buildLeagueHistoryDigest(rawCtx) {
     // counts exactly the games that have actually finished.
     for (const g of playedGames(season, year)) {
       ensure(g.homeId); ensure(g.awayId);
+      // Hall of Fame's record book reads every scoring period of every decided matchup (src/hofrecords.js).
+      for (const w of g.weeks) periodGames.push({ season: g.season, week: w.period, post: g.postseason, a: g.homeId, b: g.awayId, ap: w.homePts, bp: w.awayPts });
       const homeWon = g.homePts > g.awayPts, tie = g.homePts === g.awayPts;
 
       for (const [id, own, opp, won] of [
@@ -1787,8 +1680,8 @@ export async function buildLeagueHistoryDigest(rawCtx) {
       ]) {
         const buckets = [phases[id].all, g.postseason ? phases[id].post : phases[id].regular];
         for (const b of buckets) {
-          b.pointsFor = r1(b.pointsFor + own);
-          b.pointsAgainst = r1(b.pointsAgainst + opp);
+          b.pointsFor = roundPts(b.pointsFor + own);
+          b.pointsAgainst = roundPts(b.pointsAgainst + opp);
           if (tie) b.ties += 1;
           else if (won) b.wins += 1;
           else b.losses += 1;
@@ -1797,7 +1690,7 @@ export async function buildLeagueHistoryDigest(rawCtx) {
             const wOwn = id === g.homeId ? w.homePts : w.awayPts;
             const wOpp = id === g.homeId ? w.awayPts : w.homePts;
             b.weekScores.push({ points: wOwn, season: g.season, week: w.period, opponent: id === g.homeId ? g.awayId : g.homeId });
-            b.margins.push({ margin: r1(wOwn - wOpp), season: g.season, week: w.period, opponent: id === g.homeId ? g.awayId : g.homeId });
+            b.margins.push({ margin: roundPts(wOwn - wOpp), season: g.season, week: w.period, opponent: id === g.homeId ? g.awayId : g.homeId });
           }
         }
       }
@@ -1856,22 +1749,22 @@ export async function buildLeagueHistoryDigest(rawCtx) {
         winPct: played ? (p.wins + p.ties * 0.5) / played : 0,
       },
       points: {
-        for: r1(p.pointsFor), against: r1(p.pointsAgainst),
-        diff: r1(p.pointsFor - p.pointsAgainst),
+        for: roundPts(p.pointsFor), against: roundPts(p.pointsAgainst),
+        diff: roundPts(p.pointsFor - p.pointsAgainst),
         // Per scoring period, not per matchup, so a two-week postseason
         // fixture does not read as one enormous game.
-        perGame: p.weekScores.length ? r1(p.pointsFor / p.weekScores.length) : 0,
+        perGame: p.weekScores.length ? roundPts(p.pointsFor / p.weekScores.length) : 0,
         weeks: p.weekScores.length,
       },
       high: best(p.weekScores, 'points', true),
       low: best(p.weekScores, 'points', false),
       biggestWin: best(wins, 'margin', true),
       biggestLoss: losses.length
-        ? (() => { const w = best(losses, 'margin', false); return { ...w, margin: r1(Math.abs(w.margin)) }; })()
+        ? (() => { const w = best(losses, 'margin', false); return { ...w, margin: roundPts(Math.abs(w.margin)) }; })()
         : null,
       closestWin: best(wins, 'margin', false),
       closestLoss: losses.length
-        ? (() => { const w = best(losses, 'margin', true); return { ...w, margin: r1(Math.abs(w.margin)) }; })()
+        ? (() => { const w = best(losses, 'margin', true); return { ...w, margin: roundPts(Math.abs(w.margin)) }; })()
         : null,
     };
   }
@@ -1892,6 +1785,21 @@ export async function buildLeagueHistoryDigest(rawCtx) {
       if (res === 'W' && runLen > bestWin) { bestWin = runLen; bestWinAt = { ...runAt, endSeason: g.season, endWeek: g.week }; }
       if (res === 'L' && runLen > bestLoss) { bestLoss = runLen; bestLossAt = { ...runAt, endSeason: g.season, endWeek: g.week }; }
     }
+    // Every run of two or more, not only the best: a record's top ten ranks streaks, so one team can hold several
+    // places. Each game rides along as [season, week, opponent, own points, opponent points, postseason 0/1] for the
+    // record table's note; the twelve longest of each kind per team are kept.
+    const runs = { W: [], L: [] };
+    let cur = null;
+    for (const g of games) {
+      const res = g.own > g.opp ? 'W' : (g.own < g.opp ? 'L' : 'T');
+      if (cur && cur.type === res) cur.games.push(g); else { cur = { type: res, games: [g] }; if (res !== 'T') runs[res].push(cur); }
+    }
+    const runOut = (list) => list.filter((r) => r.games.length >= 2)
+      .map((r) => { const a = r.games[0], z = r.games[r.games.length - 1];
+        return { length: r.games.length, season: a.season, week: a.week, endSeason: z.season, endWeek: z.week,
+          ...(a.postseason && a.round ? { round: a.round } : {}), ...(z.postseason && z.round ? { endRound: z.round } : {}),
+          games: r.games.map((g) => [g.season, g.week, g.oppId, Math.round(g.own * 100) / 100, Math.round(g.opp * 100) / 100, g.postseason ? 1 : 0, g.postseason ? g.round || null : null]) }; })
+      .sort((x, y) => y.length - x.length || x.season - y.season || x.week - y.week).slice(0, 12);
 
     const all = phaseStats(phases[row.teamId].all);
     const regular = phaseStats(phases[row.teamId].regular);
@@ -1929,6 +1837,7 @@ export async function buildLeagueHistoryDigest(rawCtx) {
       })(),
       bestWinStreak: bestWin ? { length: bestWin, ...bestWinAt } : null,
       worstLossStreak: bestLoss ? { length: bestLoss, ...bestLossAt } : null,
+      streakRuns: { W: runOut(runs.W), L: runOut(runs.L) },
       postseason: {
         appearances: row.playoffAppearances,
         seasonsPlayed: row.seasonsCompleted,
@@ -2088,7 +1997,7 @@ export async function buildLeagueHistoryDigest(rawCtx) {
       // Per scoring period: a two-week postseason matchup would otherwise post
       // a margin no single week ever produced.
       for (const w of g.weeks || [{ period: g.week, lowPts: g.lowPts, highPts: g.highPts }]) {
-      const margin = r1(Math.abs(w.lowPts - w.highPts));
+      const margin = roundPts(Math.abs(w.lowPts - w.highPts));
       const winner = w.lowPts > w.highPts ? lowId : highId;
       const loser = winner === lowId ? highId : lowId;
       const entry = { winner, loser, teamA: lowId, teamB: highId, margin, season: g.season, week: w.period, postseason: g.postseason };
@@ -2149,6 +2058,8 @@ export async function buildLeagueHistoryDigest(rawCtx) {
     count: rows.length,
     rows,
     records,
+    // The record book in the shared record-panel format: top tens, season records, Records held and Prestige.
+    book: { ...hofRecordBook({ games: periodGames, rows, seasonMeta, currentSeason }), names: namesBySeason },
   };
 }
 
@@ -2181,9 +2092,9 @@ function formOf(entry, season) {
       const played = Number(raw['210']) > 0;
       // Opportunities: a passer's attempts and runs; anyone else's runs and targets.
       const opp = pos === 'QB' ? (Number(raw['0']) || 0) + (Number(raw['23']) || 0) : (Number(raw['23']) || 0) + (Number(raw['58']) || 0);
-      const row = [st.scoringPeriodId, r1(st.appliedTotal), played ? 1 : 0, Math.round(opp)];
+      const row = [st.scoringPeriodId, roundPts(st.appliedTotal), played ? 1 : 0, Math.round(opp)];
       if (st.seasonId === season) weeks.push(row);
-      else if (st.seasonId === season - 1 && played) last.push(r1(st.appliedTotal));
+      else if (st.seasonId === season - 1 && played) last.push(roundPts(st.appliedTotal));
     } else byId[st.id] = st;
   }
   weeks.sort((a, b) => a[0] - b[0]);
@@ -2198,18 +2109,18 @@ function formOf(entry, season) {
     // ESPN's updated projection: a per-game rate, over the games ESPN expects the player to play all season.
     rate: upd && upd.appliedAverage != null ? r2(upd.appliedAverage) : null,
     games: upd ? games(upd) || null : null,
-    pre: pre ? r1(pre.appliedTotal) : null,
-    act: act ? r1(act.appliedTotal) : 0,
+    pre: pre ? roundPts(pre.appliedTotal) : null,
+    act: act ? roundPts(act.appliedTotal) : 0,
     gp: games(act),
-    ly: ly ? r1(ly.appliedTotal) : null,
+    ly: ly ? roundPts(ly.appliedTotal) : null,
     lyg: ly ? games(ly) : null,
     wk: weeks,
     lw: last,
     // Touchdowns so far: thrown, and run or caught.
     td: [Number(raw['4']) || 0, (Number(raw['25']) || 0) + (Number(raw['43']) || 0)],
-    own: r1(own.percentOwned), st: r1(own.percentStarted), chg: r1(own.percentChange),
-    adp: own.averageDraftPosition != null ? r1(own.averageDraftPosition) : null,
-    auc: own.auctionValueAverage != null ? r1(own.auctionValueAverage) : null,
+    own: oneDecimal(own.percentOwned), st: oneDecimal(own.percentStarted), chg: oneDecimal(own.percentChange),
+    adp: own.averageDraftPosition != null ? oneDecimal(own.averageDraftPosition) : null,
+    auc: own.auctionValueAverage != null ? oneDecimal(own.auctionValueAverage) : null,
   };
 }
 
@@ -2275,7 +2186,7 @@ export async function buildWeeklyProjectionsDigest({ readPart, injury = null, no
       const own = p.ownership || {};
       players[p.id] = {
         n: p.fullName || '', p: p.defaultPositionId, t: p.proTeamId, i: injury ? injury.pick(p.id, p.injuryStatus || 'ACTIVE') : p.injuryStatus || 'ACTIVE', d: p.droppable === false ? 0 : 1,
-        o: Math.round((Number(own.percentOwned) || 0) * 10) / 10, c: Math.round((Number(own.percentChange) || 0) * 10) / 10,
+        o: oneDecimal(own.percentOwned), c: oneDecimal(own.percentChange),
         s: e.status || (part === 'rostered' ? 'ONTEAM' : 'FREEAGENT'), tm: e.onTeamId || 0, pr, ac, tg, ca,
       };
     }
@@ -2393,9 +2304,9 @@ export function buildTradeDigest(doc, ctx = {}) {
         pos: POSITION_MAP[p.defaultPositionId] || 'FLEX',
         sl: SLOT_NAMES[e.lineupSlotId] || String(e.lineupSlotId),
         tm: PRO_TEAM_MAP[p.proTeamId] ?? 'FA',
-        pr: Math.round((proj || 0) * 10) / 10,
+        pr: roundPts(proj),
         inj: injuryPick(ctx)(p.id ?? e.playerId, p.injuryStatus),
-        ow: Math.round(((p.ownership && p.ownership.percentOwned) || 0) * 10) / 10,
+        ow: oneDecimal(p.ownership && p.ownership.percentOwned),
         bl: null,
         // ESPN's updated projection as a rate a game, and the games it expects all season.
         rt: f && f.rate != null ? f.rate : (upd && upd.appliedAverage != null ? r2(upd.appliedAverage) : null),
@@ -2404,9 +2315,9 @@ export function buildTradeDigest(doc, ctx = {}) {
         ac: f ? f.act : null, gp: f ? f.gp : null, ly: f ? f.ly : null, lyg: f ? f.lyg : null,
         // Each week so far: [week, points, played, opportunities]; and last season's played games.
         wk: f ? f.wk : null, lw: f ? f.lw : null, td: f ? f.td : null,
-        st: r1(own.percentStarted), chg: r1(own.percentChange),
-        adp: own.averageDraftPosition != null ? r1(own.averageDraftPosition) : null,
-        auc: own.auctionValueAverage != null ? r1(own.auctionValueAverage) : null,
+        st: oneDecimal(own.percentStarted), chg: oneDecimal(own.percentChange),
+        adp: own.averageDraftPosition != null ? oneDecimal(own.averageDraftPosition) : null,
+        auc: own.auctionValueAverage != null ? oneDecimal(own.auctionValueAverage) : null,
         bye: byes[tm] ?? null,
         dc: dc ? { s: dc.s, d: dc.d, n: dc.n } : null,
       };
@@ -2421,7 +2332,7 @@ export function buildTradeDigest(doc, ctx = {}) {
     const rec = (t.record && t.record.overall) || {};
     standing[t.id] = {
       w: rec.wins ?? null, l: rec.losses ?? null, t: rec.ties ?? null,
-      pf: rec.pointsFor != null ? r1(rec.pointsFor) : (t.points != null ? r1(t.points) : null),
+      pf: rec.pointsFor != null ? roundPts(rec.pointsFor) : (t.points != null ? roundPts(t.points) : null),
       top: typeof sim.divisionWinPct === 'number' ? sim.divisionWinPct : null,
       clinch: t.playoffClinchType || null,
     };
