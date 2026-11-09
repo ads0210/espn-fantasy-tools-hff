@@ -25,8 +25,10 @@ import { historySeasons } from './datasets.js';
 import { timelineRead } from './timeline.js';
 import { FT_ESPN_ODDS_KEY, FT_SUMMARY_KEY } from './fortuneteller.js';
 import { timelineFacts } from './seasonstats.js';
+import { postPlacements, prePlacements, livePlacements, seasonPools } from './placements.js';
+import { solve, SLOT_POS } from './frontoffice.js';
 import { ssKey, readSeasonIndex, readSeasonState, fingerprint } from './seasonstep.js';
-import { buildInsightModel, bracketOf, teamWeekFromLive, provisionalAfter, allTimeBefore } from './insightmodel.js';
+import { buildInsightModel, bracketOf, teamWeekFromLive, provisionalAfter, allTimeBefore, periodsOfWeek } from './insightmodel.js';
 import { TYPES, baseWeight, playerLabel, rescaleRow, RULES_VERSION, preRows, lineupRows, postRows, liveRows, leagueRows, bracketRows, stakesRows, judge, byOrder, bannerFor } from './insights.js';
 
 export const MI_PREFIX = 'matchup-insights/';
@@ -46,8 +48,61 @@ const readJson = async (env, key) => {
 const partJson = async (env, ds, part = 'main') => {
   try { const o = await getPart(env, ds, part); return o ? await o.json() : null; } catch { return null; }
 };
+export const storedJson = partJson;
+
+/**
+ * Docket A4: is the stored live digest still on an older matchup week than the league's schedule? The schedule
+ * (refreshed every fifteen minutes by the minute's work) names the current matchup period in `status`; the live digest
+ * moves on only when a live page or a game window refreshes it, so after ESPN rolls the week on a Tuesday nothing did.
+ */
+export function liveWeekBehind(live, schedule) {
+  const cur = Number(schedule && schedule.status && schedule.status.currentMatchupPeriod);
+  if (!cur) return false;
+  const had = Number(live && live.matchupPeriod);
+  return !had || had < cur;
+}
 const putJson = (env, key, value) => env.DATA.put(key, JSON.stringify(value), { httpMetadata: { contentType: 'application/json; charset=utf-8' } });
 const r2 = (x) => Math.round(Number(x) * 100 + 1e-9) / 100;
+
+/**
+ * Every season's games per scoring period for the record placements, from the Postmortem's stored reads
+ * (src/postmortemstep.js): null until every season ESPN serves has been read. Kept in the object's memory per season,
+ * re-read only when that season's reads change.
+ */
+async function placementPools(env, cfg, mem) {
+  const st = await readJson(env, 'postmortem/state.json');
+  if (!st || !st.seasons) return null;
+  const live = Number(cfg.season);
+  mem.poolSeasons = mem.poolSeasons || {};
+  const out = { teamW: [], matchW: [], players: [], mpc: {}, complete: true };
+  const sigs = [];
+  for (const [y, s] of Object.entries(st.seasons)) {
+    if (s.absent) continue;
+    if (!s.base) { out.complete = false; continue; }
+    const sig = `${s.base}|${JSON.stringify(s.r || {})}`;
+    let got = mem.poolSeasons[y];
+    if (!got || got.sig !== sig) {
+      const base = await readJson(env, `postmortem/${y}/raw/base.json`);
+      if (!base) { out.complete = false; continue; }
+      const upTo = Number(y) === live ? base.current : Infinity;
+      const need = Number(y) === live ? Math.max(0, Math.min(base.current, base.final + 1) - 1) : base.final;
+      const rosters = {};
+      let have = 0;
+      for (let p = 1; p <= need; p++) { const r = (s.r || {})[p]; if (!r || (Number(y) === live && !r.final)) continue; rosters[p] = (await readJson(env, `postmortem/${y}/raw/r${p}.json`)) || {}; have++; }
+      const slots = []; for (const [k, n] of Object.entries(base.slots || {})) if (SLOT_POS[k]) for (let i = 0; i < n; i++) slots.push(Number(k));
+      slots.sort((a, b) => SLOT_POS[a].length - SLOT_POS[b].length);
+      const solveBest = (pool) => solve(pool, slots, (q) => q.act).total;
+      got = { sig, complete: have >= need, mpc: base.mpc, ...seasonPools(base, rosters, { upTo, solveBest }) };
+      mem.poolSeasons[y] = got;
+    }
+    if (!got.complete) out.complete = false;
+    out.mpc[y] = got.mpc;
+    out.teamW.push(...got.teamW); out.matchW.push(...got.matchW); out.players.push(...got.players);
+    sigs.push(`${y}:${got.complete ? got.teamW.length : 'x'}`);
+  }
+  out.sig = fingerprint(sigs.join(','));
+  return out.complete && out.teamW.length ? out : null;
+}
 
 /** The slow inputs (everything but the live digest), from stored copies. */
 export async function gatherInsightInputs(env, cfg, season) {
@@ -233,6 +288,8 @@ export function settledWeekDoc(M, week, series, kept, { now = new Date().toISOSt
     const post = postRows(M, week, f, facts, up);
     const pr = predictionsRow(f, pre);
     if (pr) post.push(pr);
+    // Record placements after the final (I232 onwards), against every season's games (src/placements.js).
+    post.push(...postPlacements(M.pools, M.season, periodsOfWeek(M.settings, week), f.home, f.away));
     games.push(gameRow(f, { state: 'final', settled: true, watched: Boolean(had && had.watched), hp: f.hp, ap: f.ap, ...withBracket(M, f), rows: [...pre, ...post].sort(byOrder) }));
   }
   const high = wk.flatMap((f) => [{ team: f.home, pts: f.hp }, { team: f.away, pts: f.ap }]).sort((x, y) => y.pts - x.pts)[0];
@@ -353,7 +410,14 @@ export function currentWeekDoc(M, prevDoc, { now = new Date().toISOString(), ser
     const H = g.sides.home, A = g.sides.away;
     margins.push(Math.abs(H.projected - A.projected));
     const b = bracketOf(M, fx);
-    const fresh = [...preRows(M, week, fx), ...lineupRows(M, g), ...(b ? bracketRows(M, fx, b) : []), ...(swing ? stakesRows(M, week, fx, swing) : [])]
+    // Record placements before kickoff, regular season only (a two-week postseason matchup is not one period). A
+    // low-projection placement waits until a day before the team's first kickoff, as lineup warnings do (G18).
+    const lowOk = !g.firstKickoff || Date.parse(g.firstKickoff) - Date.parse(now) <= 24 * 3600e3;
+    const others = M.now.games.filter((x) => x.id !== g.id && x.sides && x.sides.home && x.sides.away);
+    const sameWeek = { teams: others.flatMap((x) => [x.sides.home.projected, x.sides.away.projected]).filter((v) => v > 0),
+      matches: others.filter((x) => x.sides.home.projected > 0 && x.sides.away.projected > 0).map((x) => ({ pa: x.sides.home.projected, pb: x.sides.away.projected })) };
+    const prePl = week <= M.regWeeks ? prePlacements(M.pools, M.season, week, H.team, A.team, H.projected, A.projected, { lowOk, sameWeek }) : [];
+    const fresh = [...preRows(M, week, fx), ...lineupRows(M, g), ...(b ? bracketRows(M, fx, b) : []), ...(swing ? stakesRows(M, week, fx, swing) : []), ...prePl]
       .map((r) => ({ ...r, when: r.when === 'live' ? 'live' : 'pre', outcome: r.predict ? 'pending' : null }));
     const prev = prevGames[g.id];
     const started = startedOf(g);
@@ -370,6 +434,7 @@ export function currentWeekDoc(M, prevDoc, { now = new Date().toISOString(), ser
       const post = winner ? postRows(Ml, week, fxLive, facts, null) : [];
       const pr = predictionsRow(fxLive, pre);
       if (pr) post.push(pr);
+      if (week <= M.regWeeks) post.push(...postPlacements(M.pools, M.season, [week], H.team, A.team, liveExtra(M, week, H, A, tw)));
       rows = [...pre, ...post];
     }
     games.push(gameRow(fx, { state, watched: true, hp: r2(H.points), ap: r2(A.points), hproj: r2(H.projected), aproj: r2(A.projected), hwp: H.winProb,
@@ -402,6 +467,17 @@ export function currentWeekDoc(M, prevDoc, { now = new Date().toISOString(), ser
   return { season: M.season, week, kind: 'current', scale: 10, label: labelOf(M, week), post: week > M.regWeeks, builtAt: now, games, league, lines, after };
 }
 
+/** A game final this week but not settled, as pool entries for the placements (src/placements.js). */
+function liveExtra(M, week, H, A, tw) {
+  const s = (side, other) => ({ season: M.season, week, team: side.team, opp: other.team, pts: r2(side.points), oppPts: r2(other.points),
+    proj: tw[side.team] ? tw[side.team].proj : null, optimal: tw[side.team] ? tw[side.team].optimal : null, post: false });
+  const a = s(H, A), b = s(A, H);
+  const win = a.pts === b.pts ? null : a.pts > b.pts ? a : b, lose = win === a ? b : win === b ? a : null;
+  const upset = win && win.proj != null && lose.proj != null && lose.proj > win.proj ? r2(lose.proj - win.proj) : null;
+  const players = [a, b].flatMap((x) => ((tw[x.team] && tw[x.team].starters) || []).map((p) => ({ season: M.season, week, team: x.team, name: p.name, pos: p.pos, pts: p.pts })));
+  return { teamW: [a, b], matchW: [{ season: M.season, week, a: H.team, b: A.team, pa: a.pts, pb: b.pts, projA: a.proj, projB: b.proj, win: win && win.team, lose: lose && lose.team, upset, post: false }], players };
+}
+
 /** This week's games whose lineups have all finished, as settled fixtures (for the after-the-final rows). */
 function liveFinals(M) {
   return M.now.games.filter((g) => STATE_OF(g) === 'final').map((g) => {
@@ -422,7 +498,11 @@ export function liveDoc(M, series, { now = new Date().toISOString() } = {}) {
     const fx = M.fixtures.find((f) => f.id === g.id);
     if (!fx) continue;
     const lv = { ...liveFacts(g, series[g.id] || []), allTime };
-    games[g.id] = liveRows(M, week, fx, lv).map((r) => ({ ...r, when: 'live', outcome: r.predict ? 'pending' : null })).sort(byOrder);
+    const H = g.sides.home, A = g.sides.away;
+    const pl = week <= M.regWeeks ? livePlacements(M.pools, M.season, week, { home: H.team, away: A.team, hp: H.points, ap: A.points, hcourse: H.projected, acourse: A.projected,
+      starters: [H, A].flatMap((sd) => (sd.starters || []).filter((x) => x.id != null && x.points).map((x) => ({ team: sd.team, name: x.name || '', pos: x.pos, pts: x.points }))) },
+    M.now.games.filter((x) => STATE_OF(x) === 'final').map((x) => ({ pa: x.sides.home.points, pb: x.sides.away.points }))) : [];
+    games[g.id] = [...liveRows(M, week, fx, lv), ...pl].map((r) => ({ ...r, when: 'live', outcome: r.predict ? 'pending' : null })).sort(byOrder);
   }
   for (const g of M.now.games) for (const s of ['home', 'away']) { paceNow += g.sides[s].projected; n++; }
   const before = M.partBefore(week);
@@ -478,7 +558,11 @@ export async function insightStep(env, mem, { now = Date.now(), brake = 'normal'
   out.current = current;
   // What a played week reads, by content: its sources' copies are rewritten all through a game window (live scores
   // in the schedule, a refreshed standings digest) with nothing a played week reads changed.
-  if (mem.pastSigOf !== mem.sig) { mem.pastSig = pastSignature(M); mem.pastSigOf = mem.sig; }
+  // Record placements read every season's games from the Postmortem's stored rosters; once they are all read (and
+  // when a settled week's are read again) the played weeks are rebuilt once with them.
+  M.pools = await placementPools(env, cfg, mem);
+  const poolSig = M.pools ? M.pools.sig : '-';
+  if (mem.pastSigOf !== `${mem.sig}|${poolSig}`) { mem.pastSig = `${pastSignature(M)}|${poolSig}`; mem.pastSigOf = `${mem.sig}|${poolSig}`; }
 
   // 1. One played week rebuilt from settled data: missing, or what a played week reads has changed since.
   const settledAll = (w) => { const all = M.fixtures.filter((f) => f.week === w); return all.length > 0 && all.every((f) => f.winner != null); };
