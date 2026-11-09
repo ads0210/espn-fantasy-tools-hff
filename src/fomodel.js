@@ -16,6 +16,7 @@
  *   projFirst   { playerId: the first projection seen for him this week } (kept by the step)
  *   now         the clock, in milliseconds
  */
+import { oneDecimal } from './round.js';
 import { PRO_TEAM_MAP as PRO } from './derive.js';
 
 const r2 = (x) => Math.round(Number(x) * 100 + 1e-9) / 100;
@@ -69,8 +70,8 @@ export function buildFoModel(I, { now = Date.now() } = {}) {
         if (st.statSourceId === 0) act[st.scoringPeriodId] = r2(st.appliedTotal);
       }
       players[e.playerId] = { pid: e.playerId, name: p.fullName || 'A player', posId: p.defaultPositionId, nfl: PRO[p.proTeamId] || 'FA',
-        inj: p.injuryStatus || 'ACTIVE', droppable: p.droppable !== false, own: Math.round(((p.ownership || {}).percentOwned || 0) * 10) / 10,
-        chg: Math.round(((p.ownership || {}).percentChange || 0) * 10) / 10, proj, act, tgt: {}, car: {}, status: 'ONTEAM', onTeam: t.id };
+        inj: p.injuryStatus || 'ACTIVE', droppable: p.droppable !== false, own: oneDecimal((p.ownership || {}).percentOwned),
+        chg: oneDecimal((p.ownership || {}).percentChange), proj, act, tgt: {}, car: {}, status: 'ONTEAM', onTeam: t.id };
     }
     const rec = (t.record && t.record.overall) || {};
     const st = names[t.id] || {};
@@ -188,6 +189,8 @@ export function buildFoModel(I, { now = Date.now() } = {}) {
   }
   return {
     week, now, waiver, regLast: cal.regLast, postFirst: cal.postFirst, postLast: cal.postLast,
+    // TD: the league's trade deadline (ms), or null when it has none.
+    deadline: Number(((I.settings && I.settings.settings && I.settings.settings.tradeSettings) || {}).deadlineDate) || null,
     teams, rosters, players, slots, caps, schedule, rounds, brackets, nfl, games, ratings, depth, promoted, injuries, added, live,
     projFirst: I.projFirst || {}, swing: swingOf(I.ftSwing, week),
   };
