@@ -12,6 +12,13 @@
  * Stored in R2 under postmortem/<season>/: raw/… (the reduced reads), season.json (every decided offer with its
  * weekly figures, src/postmortem.js), verdicts.json (this season: Trade Analyzer's verdict on an offer the first time
  * the site sees it on the table, D6). postmortem/state.json holds the progress.
+ *
+ * Kept cheap when idle (12 Nov 2026 hotfix: an idle call took ~8 s re-reading every season's stored files every minute,
+ * which billed Durable Object duration all day): a past season whose reads are complete and whose document is built is
+ * sealed and never read again until the rules change (PM_VERSION); each scoring period's trade players are kept in the
+ * state, so no trade file is read to know them; a read whose content did not change is not written and does not count
+ * as a change; a call that found nothing to do rests the step for IDLE_MS; the verdict check's pace is kept in the
+ * state, since the object's memory does not outlive a minute.
  */
 import { loadConfig, isSetupFinished, canCallEspn } from './config.js';
 import { fetchPart } from './espn.js';
@@ -28,6 +35,7 @@ export const FETCHES_PER_CALL = 3;
 const HOUR = 3600e3;
 const BASE_EVERY = 6 * HOUR, TX_EVERY = 0.5 * HOUR, OPEN_ROSTERS_EVERY = 12 * HOUR, KICK_EVERY = 24 * HOUR, PLAYERS_EVERY = 12 * HOUR;
 const BUILD_EVERY_MS = 5 * 60e3, VERDICT_EVERY_MS = 5 * 60e3;
+export const IDLE_MS = 5 * 60e3;
 
 const readJson = async (env, key) => {
   try { const o = await env.DATA.get(key); return o ? await o.json() : null; } catch { return null; }
@@ -163,16 +171,39 @@ export async function postmortemStep(env, mem, { now = Date.now(), brake = 'norm
   const espnOk = canCallEspn(cfg) && brake === 'normal';
   let budget = espnOk ? FETCHES_PER_CALL : 0;
   let stateChanged = false;
+  let fetched = 0, built = 0;
+  const sealed = (s) => s && s.sealed === PM_VERSION;
+  const bases = new Map();   // each season's frame read at most once a call
+  const baseOf = async (yr, s) => {
+    if (!s.base) return null;
+    if (!bases.has(yr)) bases.set(yr, await readJson(env, pmKey(yr, 'raw/base.json')));
+    return bases.get(yr);
+  };
+  // Writes a read's reduced form only when it changed; says whether it did.
+  const putIfChanged = async (s, yr, name, value) => {
+    const body = JSON.stringify(value);
+    const h = `${body.length}:${fingerprint(body)}`;
+    if ((s.h || {})[name] === h) return false;
+    await env.DATA.put(pmKey(yr, name), body, { httpMetadata: { contentType: 'application/json; charset=utf-8' } });
+    (s.h = s.h || {})[name] = h;
+    return true;
+  };
+  const resting = !force && state.idleUntil && now < Date.parse(state.idleUntil);
+  if (resting) out.resting = state.idleUntil;
 
-  for (const yr of seasonsOf(cfg)) {
+  for (const yr of resting ? [] : seasonsOf(cfg)) {
     if (budget <= 0) break;
     const s = state.seasons[yr] || (state.seasons[yr] = {});
-    const base = s.base ? await readJson(env, pmKey(yr, 'raw/base.json')) : null;
+    if (sealed(s)) continue;
+    const base = await baseOf(yr, s);
     let txIds = null;
     if (base && Object.keys(s.tx || {}).length >= (yr === live ? Math.min(base.current, base.final) : base.final)) {
-      const tx = [];
-      for (const p of Object.keys(s.tx || {})) tx.push(...((await readJson(env, pmKey(yr, `raw/tx-p${p}.json`))) || []));
-      txIds = txPlayerIds(tx);
+      // Each period's trade players live in the state; a period read before they were kept is read once to fill them.
+      s.txp = s.txp || {};
+      for (const p of Object.keys(s.tx || {})) {
+        if (!s.txp[p]) { s.txp[p] = txPlayerIds((await readJson(env, pmKey(yr, `raw/tx-p${p}.json`))) || []); stateChanged = true; }
+      }
+      txIds = [...new Set(Object.values(s.txp).flat())].sort((a, b) => a - b);
     }
     const jobs = jobsFor(yr, s, { live: yr === live, now, base, txIds });
     for (const job of jobs) {
@@ -199,18 +230,24 @@ export async function postmortemStep(env, mem, { now = Date.now(), brake = 'norm
       }
       let d;
       try { d = JSON.parse(new TextDecoder().decode(res.buffer)); } catch { out.did.push(`${yr} ${job.kind} unreadable`); break; }
-      if (job.kind === 'base') { await putJson(env, pmKey(yr, 'raw/base.json'), reduceBase(d, yr)); s.base = iso; }
-      else if (job.kind === 'tx') { await putJson(env, pmKey(yr, `raw/tx-p${job.period}.json`), reduceTx(d)); (s.tx = s.tx || {})[job.period] = iso; }
-      else if (job.kind === 'roster') {
-        await putJson(env, pmKey(yr, `raw/r${job.period}.json`), reduceRosters(d, yr, job.period));
+      fetched++;
+      let changed = false;
+      if (job.kind === 'base') { const b = reduceBase(d, yr); changed = await putIfChanged(s, yr, 'raw/base.json', b); bases.set(yr, b); s.base = iso; }
+      else if (job.kind === 'tx') {
+        const tx = reduceTx(d);
+        changed = await putIfChanged(s, yr, `raw/tx-p${job.period}.json`, tx);
+        (s.tx = s.tx || {})[job.period] = iso;
+        (s.txp = s.txp || {})[job.period] = txPlayerIds(tx);
+      } else if (job.kind === 'roster') {
+        changed = await putIfChanged(s, yr, `raw/r${job.period}.json`, reduceRosters(d, yr, job.period));
         (s.r = s.r || {})[job.period] = { at: iso, final: yr !== live || (base && job.period < base.current) };
-      } else if (job.kind === 'kick') { await putJson(env, pmKey(yr, 'raw/kick.json'), reduceKick(d)); s.kick = iso; }
+      } else if (job.kind === 'kick') { changed = await putIfChanged(s, yr, 'raw/kick.json', reduceKick(d)); s.kick = iso; }
       else if (job.kind === 'players') {
         const had = job.batch === 0 ? {} : ((await readJson(env, pmKey(yr, 'raw/players.json'))) || {});
-        await putJson(env, pmKey(yr, 'raw/players.json'), { ...had, ...reducePlayers(d, yr, base ? base.final : 17) });
+        changed = await putIfChanged(s, yr, 'raw/players.json', { ...had, ...reducePlayers(d, yr, base ? base.final : 17) });
         if ((job.batch + 1) * 50 >= txIds.length) { s.playersFor = job.want; s.players = iso; }
       }
-      s.changedAt = iso;
+      if (changed) s.changedAt = iso;
       stateChanged = true;
       out.did.push(`${yr} ${job.kind}${job.period ? ` p${job.period}` : ''}${job.kind === 'players' ? ` ${job.batch + 1}` : ''}`);
     }
@@ -218,29 +255,46 @@ export async function postmortemStep(env, mem, { now = Date.now(), brake = 'norm
   }
 
   // At most one season rebuilt a call: one whose reads are complete and changed since it was last built.
-  for (const yr of seasonsOf(cfg)) {
+  for (const yr of resting ? [] : seasonsOf(cfg)) {
     const s = state.seasons[yr];
-    if (!s || s.absent || !s.base) continue;
-    const base = await readJson(env, pmKey(yr, 'raw/base.json'));
+    if (!s || s.absent || !s.base || sealed(s)) continue;
+    const sig = `${PM_VERSION}:${s.changedAt}`;
+    const due = !(s.sig === sig && !force) && !(yr === live && s.builtAt && now - Date.parse(s.builtAt) < BUILD_EVERY_MS && !force);
+    // A past season with nothing left to read and its document built for these rules is sealed: never read again.
+    const sealIfDone = async () => {
+      if (yr === live || s.sig !== sig) return;
+      const base = await baseOf(yr, s);
+      if (!base) return;
+      const txIds = s.txp ? [...new Set(Object.values(s.txp).flat())].sort((a, b) => a - b) : null;
+      if (!jobsFor(yr, s, { live: false, now, base, txIds }).length) { s.sealed = PM_VERSION; stateChanged = true; out.did.push(`${yr} sealed`); }
+    };
+    if (!due) { await sealIfDone(); continue; }
+    const base = await baseOf(yr, s);
     if (!base) continue;
     const complete = s.kick && Object.keys(s.tx || {}).length >= (yr === live ? Math.min(base.current, base.final) : base.final)
       && Object.keys(s.r || {}).length >= base.final && s.players;
     if (!complete) continue;
-    const sig = `${PM_VERSION}:${s.changedAt}`;
-    if (s.sig === sig && !force) continue;
-    if (yr === live && s.builtAt && now - Date.parse(s.builtAt) < BUILD_EVERY_MS && !force) continue;
     const S = { ...(await readSeasonInput(env, yr, s, base)), liveSeason: live, now };
     const doc = seasonDoc(S, await readJson(env, pmKey(yr, 'verdicts.json')), iso);
     await putJson(env, pmKey(yr, 'season.json'), doc);
     s.sig = sig; s.builtAt = iso; s.offers = doc.offers.length;
-    stateChanged = true;
+    stateChanged = true; built++;
     out.did.push(`${yr} built (${doc.offers.length} offers)`);
     break;
   }
 
-  // D6: Trade Analyzer's verdict on every offer on the table, stored the first time the site sees it.
-  if (!verdictsOf && mem.verdictAt && now - mem.verdictAt < VERDICT_EVERY_MS) return finish();
+  // Nothing read and nothing built: rest the step a few minutes (the verdict check below keeps its own pace).
+  if (!resting) {
+    if (!fetched && !built && !out.did.some((d) => d.includes('failed') || d.includes('unreadable'))) { state.idleUntil = new Date(now + IDLE_MS).toISOString(); stateChanged = true; }
+    else if (state.idleUntil) { delete state.idleUntil; stateChanged = true; }
+  }
+
+  // D6: Trade Analyzer's verdict on every offer on the table, stored the first time the site sees it. Its pace is kept
+  // in the state as well as in memory: the object's memory is gone by the next minute.
+  const lastVerdict = Math.max(mem.verdictAt || 0, state.verdictAt ? Date.parse(state.verdictAt) : 0);
+  if (!verdictsOf && lastVerdict && now - lastVerdict < VERDICT_EVERY_MS) return finish();
   mem.verdictAt = now;
+  if (!verdictsOf) { state.verdictAt = iso; stateChanged = true; }
   try {
     const got = verdictsOf ? await verdictsOf(env, cfg) : await taVerdicts(env, cfg);
     if (got && got.length) {
@@ -248,14 +302,14 @@ export async function postmortemStep(env, mem, { now = Date.now(), brake = 'norm
       const had = (await readJson(env, key)) || {};
       let added = 0;
       for (const v of got) if (v && v.id != null && !had[v.id]) { had[v.id] = { ...v, at: iso }; added++; }
-      if (added) { await putJson(env, key, had); out.did.push(`${added} verdict${added === 1 ? '' : 's'} kept`); const s = state.seasons[live]; if (s) { s.changedAt = iso; stateChanged = true; } }
+      if (added) { await putJson(env, key, had); out.did.push(`${added} verdict${added === 1 ? '' : 's'} kept`); const s = state.seasons[live]; if (s) { s.changedAt = iso; stateChanged = true; } delete state.idleUntil; }
     }
   } catch (e) { out.verdictError = String((e && e.message) || e).slice(0, 120); }
 
   return finish();
   async function finish() {
     if (stateChanged) { state.v = PM_VERSION; state.at = iso; await putJson(env, PM_STATE_KEY, state); }
-    out.seasons = Object.fromEntries(Object.entries(state.seasons).map(([y, s]) => [y, s.absent ? 'absent' : s.builtAt ? `built ${s.offers}` : 'reading']));
+    out.seasons = Object.fromEntries(Object.entries(state.seasons).map(([y, s]) => [y, s.absent ? 'absent' : s.builtAt ? `built ${s.offers}${sealed(s) ? ' sealed' : ''}` : 'reading']));
     return out;
   }
 }
