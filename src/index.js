@@ -80,7 +80,7 @@ import { started as startedKey, normaliseSiteApi, replaced as replacedKey, dueCh
 import { RELEASE_NOTE_ITEMS } from './release.js';
 import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r274';
+const BUILD_MARKER = 'r276';
 
 
 
@@ -211,13 +211,18 @@ export async function runMinute(rawEnv, { at = Date.now(), via = 'cron', cron = 
       result: { teams: (r.teams || []).map((t) => ({ teamId: t.teamId, name: t.name, state: t.state, status: t.status || null })) },
     } : { ran: false }));
     await timed('ft', () => fortuneTellerCheck(env), (r) => (r ? { ran: true, state: r.state || null } : { ran: false }));
+    // The four tools' steps each run in their own coordinator object and read each other's stored output only, so they
+    // run side by side: the clock waits for the slowest, not for the four in turn (12 Nov 2026 hotfix: the clock and
+    // each coordinator are billed Durable Object duration for every second the clock waits). Their entries keep this order.
+    for (const k of ['season', 'insights', 'frontoffice', 'postmortem']) jobs[k] = null;
+    await Promise.all([
     // Season Statistics: one settled week pulled or re-checked, one week's timeline facts, and a rebuild when its
     // sources changed, inside the dataset coordinator's 'season_stats' object (src/seasonstep.js).
-    await timed('season', () => seasonStatsTick(env, at), (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false }));
+    timed('season', () => seasonStatsTick(env, at), (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false })),
     // Matchup Insights: a played week rebuilt, this week's rows, Live rows while games are on and the home banners,
     // inside the dataset coordinator's 'matchup_insights' object (src/insightstep.js). Every 15 minutes the one
     // small source no page keeps fresh (positional ratings) is brought up to date first.
-    await timed('insights', async () => {
+    timed('insights', async () => {
       if (new Date(at).getUTCMinutes() % 15 === 3) {
         try {
           const c = await loadConfig(env);
@@ -231,11 +236,11 @@ export async function runMinute(rawEnv, { at = Date.now(), via = 'cron', cron = 
         } catch { /* read as stored */ }
       }
       return insightsTick(env, at);
-    }, (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false }));
+    }, (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false })),
     // Front Office: every team's page worked out again (every five minutes around games, fifteen otherwise; written only
     // when it changed), inside the dataset coordinator's 'front_office' object (src/frontofficestep.js). Every fifteen
     // minutes the sources no page keeps fresh (rosters, weekly projections, injuries) are brought up to date first.
-    await timed('frontoffice', async () => {
+    timed('frontoffice', async () => {
       if (new Date(at).getUTCMinutes() % 15 === 11) {
         try {
           const c = await loadConfig(env);
@@ -243,11 +248,12 @@ export async function runMinute(rawEnv, { at = Date.now(), via = 'cron', cron = 
         } catch { /* read as stored */ }
       }
       return frontOfficeTick(env, at);
-    }, (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false }));
+    }, (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false })),
     // Trade Analyzer's Postmortem: a few ESPN reads a minute until every season is read, then this season kept up to
     // date, a season rebuilt when its reads changed, and Trade Analyzer's verdict kept for each new offer
     // (src/postmortemstep.js, in the dataset coordinator's 'trade_postmortem' object).
-    await timed('postmortem', () => postmortemTick(env, at), (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false }));
+    timed('postmortem', () => postmortemTick(env, at), (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false })),
+    ]);
     // Week 6 (F2): the hourly reachability check, one dataset a minute (src/datacheck.js).
     await timed('check', async () => {
       const cfg = await loadConfig(env);
