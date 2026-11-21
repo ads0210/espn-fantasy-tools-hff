@@ -67,7 +67,10 @@ export class BackendClockDO {
     const last = await this.lastMinute();
     /* The clock that arrives second does no work. It leaves a note that it came, kept in storage because the
        object does not stay in memory between minutes, so Site Backend can tell "second" from "stopped". */
-    if (!this.busy && last === m && this.lastVia && via !== this.lastVia) {
+    /* A clock that arrives while the other is still busy with a minute (this one or an earlier, overrunning one)
+       was heard too: before r277 a knock that landed during the alarm's work was never noted, so Site Backend
+       reported "the cron has not knocked" although it had. */
+    if ((this.busy && via !== this.lastVia) || (!this.busy && last === m && this.lastVia && via !== this.lastVia)) {
       try { await this.ctx.storage.put('second', { m, via }); } catch { /* a note, never the work */ }
     }
     if (this.busy || last >= m) return { done: false, minute: m, by: this.recent.length ? this.recent[this.recent.length - 1].via : null };
