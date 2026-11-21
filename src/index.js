@@ -8,8 +8,9 @@
  * assets are reached only through env.ASSETS, and only after the gate passes.
  */
 
+import { DO_TIME_KEY } from './dotime.js';
 import { llmExportPayload, applyLiveScoring } from './llmexport.js';
-import { fortuneTellerPayload, fortuneTellerMap, simOdds } from './fortuneteller.js';
+import { fortuneTellerPayload, fortuneTellerLive, fortuneTellerMap, simOdds } from './fortuneteller.js';
 export { FortuneTellerDO } from './ftdo.js';
 import { FT_ACTIVE_KEY } from './ftdo.js';
 import { DATASETS, getDataset, planBatches, PARAM_DATASETS, TTL } from './datasets.js';
@@ -80,7 +81,7 @@ import { started as startedKey, normaliseSiteApi, replaced as replacedKey, dueCh
 import { RELEASE_NOTE_ITEMS } from './release.js';
 import { TRADE_ROWS } from './traderows.js';
 
-const BUILD_MARKER = 'r276';
+const BUILD_MARKER = 'r282';
 
 
 
@@ -183,6 +184,10 @@ export function clockIsOn(env) {
  * nothing in it is actually in play it returns without calling ESPN at all. `via` (alarm, knock or cron) and how
  * late the minute's work began are recorded with the tick, so Site Backend can show which clock kept each minute.
  */
+/** How long the minute's work waits for the four tools' steps, and the latest point in the minute a Fortune Teller nudge may start (W3). */
+export const STEPS_WAIT_MS = 35000;
+export const NUDGE_LAST_MS = 40000;
+
 export async function runMinute(rawEnv, { at = Date.now(), via = 'cron', cron = null, fallback = false, heard = null } = {}) {
     rawEnv.BUILD_MARKER = BUILD_MARKER;
     const env = meteredEnv(rawEnv);
@@ -215,7 +220,13 @@ export async function runMinute(rawEnv, { at = Date.now(), via = 'cron', cron = 
     // run side by side: the clock waits for the slowest, not for the four in turn (12 Nov 2026 hotfix: the clock and
     // each coordinator are billed Durable Object duration for every second the clock waits). Their entries keep this order.
     for (const k of ['season', 'insights', 'frontoffice', 'postmortem']) jobs[k] = null;
-    await Promise.all([
+    // W3 (r277): the clock waits at most STEPS_WAIT_MS for the four steps. On a Tuesday rollover every tool rebuilt at
+    // once and the minute's work ran past 60 s, so the next minute was lost (the clock cannot take it while busy). A step
+    // still working when the wait ends carries on inside its own object; its tick entry says it was left running.
+    const stepsStarted = Date.now();
+    const stepsWait = Number(rawEnv.MINUTE_STEPS_WAIT_MS) || STEPS_WAIT_MS;
+    let stepsTimer = null;
+    const stepsDone = Promise.all([
     // Season Statistics: one settled week pulled or re-checked, one week's timeline facts, and a rebuild when its
     // sources changed, inside the dataset coordinator's 'season_stats' object (src/seasonstep.js).
     timed('season', () => seasonStatsTick(env, at), (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false })),
@@ -252,18 +263,48 @@ export async function runMinute(rawEnv, { at = Date.now(), via = 'cron', cron = 
     // Trade Analyzer's Postmortem: a few ESPN reads a minute until every season is read, then this season kept up to
     // date, a season rebuilt when its reads changed, and Trade Analyzer's verdict kept for each new offer
     // (src/postmortemstep.js, in the dataset coordinator's 'trade_postmortem' object).
-    timed('postmortem', () => postmortemTick(env, at), (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false })),
+    timed('postmortem', async () => {
+      // W23 (r282): Trade Analyzer's verdict is kept the first time an offer is seen, from its stored board, which only
+      // a visit to Trade Analyzer refreshed. Every half hour, while an offer is on the table, the board is brought up to
+      // date here, so the verdict is kept whether or not anyone opens the page.
+      if (new Date(at).getUTCMinutes() % 30 === 21) {
+        try {
+          const c = await loadConfig(env);
+          const doc = isSetupFinished(c) ? await readPostmortem(env, Number(c.season)) : null;
+          if (doc && doc.counts && doc.counts.open > 0) await ensureDataset(env, 'trade_digest', null);
+        } catch { /* read as stored */ }
+      }
+      return postmortemTick(env, at);
+    }, (r) => (r ? { ran: !r.skipped, did: (r.did || []).slice(0, 4), ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.error ? { error: r.error } : {}) } : { ran: false })),
     ]);
+    const outOfTime = await Promise.race([stepsDone.then(() => false), new Promise((res) => { stepsTimer = setTimeout(() => res(true), stepsWait); })]);
+    clearTimeout(stepsTimer);
+    if (outOfTime) {
+      for (const k of ['season', 'insights', 'frontoffice', 'postmortem']) if (jobs[k] == null) jobs[k] = { ran: true, running: true, ms: Date.now() - stepsStarted };
+      stepsDone.catch(() => {});
+    }
     // Week 6 (F2): the hourly reachability check, one dataset a minute (src/datacheck.js).
     await timed('check', async () => {
       const cfg = await loadConfig(env);
       if (!isSetupFinished(cfg)) return null;
       return checkDue(env, cfg, { at, brake: brakeNow(at).brake });
     }, (r) => (r ? { ran: !r.rested, key: r.key, ...(r.rested ? { rested: true } : { ok: r.ok, kind: r.kind, streak: r.streak }) } : { ran: false }));
+    // W5 (r278): every fifteen minutes, today's estimated Durable Object time is stored for Fortune Teller's governor,
+    // which takes its share from what the rest of the site leaves (src/dotime.js).
+    if (new Date(at).getUTCMinutes() % 15 === 9) await timed('dotime', async () => {
+      const stub = logStub(rawEnv);
+      if (!stub) return null;
+      const r = await stub.fetch('https://site-log/dotime', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      const d = await r.json();
+      if (d && d.ok) await rawEnv.DATA.put(DO_TIME_KEY, JSON.stringify({ day: d.day, othersSec: d.othersSec, at: new Date().toISOString() }));
+      return d;
+    }, (r) => (r && r.ok ? { ran: true, sec: r.othersSec } : { ran: false }));
     // Week 6 (P1): the stored copies of the fourteen retired datasets are deleted once (src/retired.js).
     if (new Date(at).getUTCMinutes() % 15 === 7) await timed('retired', () => sweepRetired({ DATA: rawEnv.DATA }, { now: at }), (r) => (r && !r.already ? { ran: true, ...r } : { ran: false }));
     let nudge = null;
-    await timed('nudge', async () => { nudge = await nudgeFortuneTeller(env); return nudge; }, (r) => ({
+    // A Fortune Teller nudge can run slices for up to 15 s: none when the minute is already past its budget (W3).
+    const late = Date.now() - minuteStart > NUDGE_LAST_MS;
+    await timed('nudge', async () => { nudge = late ? 'skipped: the minute ran long' : await nudgeFortuneTeller(env); return nudge; }, (r) => ({
       ran: Boolean(r && typeof r === 'object'), result: typeof r === 'string' ? r : r && r.ran ? `ran ${r.ran} slice${r.ran === 1 ? '' : 's'}` : r && r.paused ? 'build paused' : r && r.onTime ? 'on time' : r && r.idle ? 'no build' : null,
     }));
     // The site log's record of this tick: what makes "last tick" and gap detection possible.
@@ -727,7 +768,9 @@ async function route(request, env, ctx) {
   if (path === '/api/llm-export') return llmExport(env, ctx, url);
   if (path === '/api/fortune-teller') {
     // The page before a map exists is built from the standings and the league's rules.
-    await Promise.all([ensureDataset(env, 'standings_digest', ctx), ensureDataset(env, 'league_settings', ctx), ensureDataset(env, 'season_schedule', ctx)]);
+    await Promise.all([ensureDataset(env, 'standings_digest', ctx), ensureDataset(env, 'league_settings', ctx), ensureDataset(env, 'season_schedule', ctx), ensureDataset(env, 'live_scoring_digest', ctx)]);
+    // Week 11 (W9): the page's light refresh while it is open: this week's win chances and the standings.
+    if (url.searchParams.get('live') === '1') return json(await fortuneTellerLive(env));
     return json(await fortuneTellerPayload(env));
   }
   if (path.startsWith('/api/fortune-teller/map/')) return fortuneTellerMap(env, path.slice('/api/fortune-teller/map/'.length));
