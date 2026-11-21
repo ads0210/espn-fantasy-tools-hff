@@ -8,7 +8,7 @@
  *   pickups(M, teamId)    free agents ranked by fit, each with its suggested drop
  *   weeksAhead(M, teamId) the roster x weeks grid, each week's best lineup, the fantasy schedule, stash candidates
  */
-export const RULES_VERSION = 5;
+export const RULES_VERSION = 6;
 export const MARGIN = 2;                  // D12: A7/A8 and a bench alternative
 export const HOT = 15;                    // D25: L1/L2, combined over three weeks
 export const SPREAD_X = 1.5;              // D25: L15
@@ -255,11 +255,27 @@ export function thisWeek(M, teamId) {
   const fixed = {};
   const order = slots.map((s, i) => [s, i]);
   for (const st of starters.filter((c) => c.locked)) { const hit = order.find(([s, i]) => s === st.slot && fixed[i] == null); if (hit) fixed[hit[1]] = st.pid; }
-  const best = solve(pool, slots, (p) => (byPid[p.pid].locked && byPid[p.pid].live != null ? byPid[p.pid].live : val(p)), fixed).total;
+  const bestRun = solve(pool, slots, (p) => (byPid[p.pid].locked && byPid[p.pid].live != null ? byPid[p.pid].live : val(p)), fixed);
+  const best = bestRun.total;
+  // W20 (r282): the moves that turn this lineup into the best one, chained moves included (bench RB to FLEX, the FLEX
+  // WR to WR). One-for-one swaps into the same slot are offered on the cards; this names the rest.
+  const reshuffle = (() => {
+    const inBest = new Set(bestRun.assign.filter((x) => x != null));
+    const moves = [];
+    bestRun.assign.forEach((pid, i) => {
+      if (pid == null || fixed[i] === pid) return;
+      const c = byPid[pid]; if (!c || c.locked) return;
+      if (c.slot === 20 || c.slot === 21) moves.push({ kind: 'start', pid, to: slots[i] });
+      else if (c.slot !== slots[i]) moves.push({ kind: 'move', pid, from: c.slot, to: slots[i] });
+    });
+    for (const s of starters) if (!s.locked && !inBest.has(s.pid)) moves.push({ kind: 'bench', pid: s.pid, from: s.slot });
+    return moves;
+  })();
   const fx = (M.schedule[w] || []).find((m) => m.home === teamId || m.away === teamId);
   const oppId = fx ? (fx.home === teamId ? fx.away : fx.home) : null;
   const oppProj = oppId ? r2(sum((M.rosters[oppId] || []).filter((e) => e.slot !== 20 && e.slot !== 21).map((e) => val(P(e.pid))))) : null;
-  const checklist = checks(M, teamId, { starters, bench, ir, cards, lineupNow, oppProj });
+  const altGain = r2(sum(starters.map((s) => (s.alt && s.alt.gain > 0 ? s.alt.gain : 0))));
+  const checklist = checks(M, teamId, { starters, bench, ir, cards, lineupNow: r2(sum(starters.map((s) => (s.locked && s.live != null ? s.live : val(P(s.pid)))))), oppProj, best, altGain, reshuffle });
   const open = starters.filter((s) => !s.locked);
   const nextLock = open.map((s) => s.kickoff).filter(Boolean).sort()[0] || null;
   const anyLocked = starters.some((s) => s.locked);
@@ -280,7 +296,8 @@ function checks(M, teamId, T) {
     if (s.bye) add('starterBye', 'red', `${name(s)} is on a bye.`);
     if (s.moved) add('gameMoved', 'red', `${name(s)}'s game has moved to ${s.moved}.`);
     if (s.inj === 'DOUBTFUL') add('doubtful', 'amber', `${name(s)} is doubtful.`);
-    if (s.inj === 'QUESTIONABLE') add('questionable', 'amber', `${name(s)} is questionable; his game kicks off`, s.kickoff);
+    // W19 (r282): a player on bye has no game to kick off; the bye line covers him.
+    if (s.inj === 'QUESTIONABLE' && !s.bye && s.kickoff) add('questionable', 'amber', `${name(s)} is questionable; his game kicks off`, s.kickoff);
     if (s.alt && s.alt.gain >= MARGIN) add(s.slot === 23 ? 'betterFlex' : 'betterStart', 'amber', `${M.players[s.alt.b].name} projects ${s.alt.gain.toFixed(2)} more than ${s.name} at ${SLOT_NAME[s.slot]}.`);
     const d = M.depth[s.pid];
     const slip = d && ((s.posId === 1 && d.d >= 2) || (s.posId === 4 && d.d >= 3) || (s.posId === 2 && d.d >= 3) || (s.posId === 5 && d.d >= 2));
@@ -288,6 +305,12 @@ function checks(M, teamId, T) {
     if (s.rank != null && s.rank <= 3 && s.posId !== 16) add('toughDefence', 'info', `${name(s)} faces ${s.opp}, the ${s.rank === 1 ? 'stingiest' : `${ordinal(s.rank)}-stingiest`} defence against ${s.pos}s.`);
     if (s.ou != null && s.ou < 38) add('lowTotal', 'info', `${name(s)}'s game has a low over/under (${s.ou}).`);
     if (s.weather && [1, 3, 5].includes(s.posId) && /wind|snow|rain/i.test(s.weather)) add('weather', 'info', `${name(s)}: ${s.weather}.`);
+  }
+  // W20 (r282): the best lineup needs moves the cards' one-for-one swaps do not cover.
+  if (T.reshuffle && T.reshuffle.length && T.best - T.lineupNow >= MARGIN && T.best - T.lineupNow - (T.altGain || 0) >= 0.5) {
+    const nm = (pid) => (M.players[pid] || {}).name || 'a player';
+    const words = T.reshuffle.map((m) => (m.kind === 'start' ? `start ${nm(m.pid)} at ${SLOT_NAME[m.to]}` : m.kind === 'move' ? `move ${nm(m.pid)} from ${SLOT_NAME[m.from]} to ${SLOT_NAME[m.to]}` : `bench ${nm(m.pid)}`));
+    add('reshuffle', 'amber', `Your best lineup is ${(T.best - T.lineupNow).toFixed(2)} points better: ${words.join(', ')}.`);
   }
   const empty = slotsNeeded - T.starters.length;
   if (empty > 0) add('emptySlot', 'red', `${empty} starting slot${empty > 1 ? 's are' : ' is'} empty.`);
