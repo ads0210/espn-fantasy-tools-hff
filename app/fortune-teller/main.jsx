@@ -64,9 +64,29 @@ root.render(<FortuneTeller data={null} />);
   // Like every poller on the site, it rests while the tab is hidden and stops after four hours without a tap.
   let lastActive = Date.now();
   ["pointerdown", "keydown", "scroll", "touchstart", "focus"].forEach((e) => window.addEventListener(e, () => { lastActive = Date.now(); }, { passive: true }));
-  let lastAsk = 0;
+  let lastAsk = 0, liveAsk = Date.now(), liveEvery = 60000, liveV = 0, liveProp = {};
   setInterval(async () => {
     if (document.hidden || Date.now() - lastActive > 4 * 60 * 60 * 1000) return;
+    // Week 11 (D4, W8, W9): this week's ESPN win chances and the standings as they stand, kept current while the page
+    // is open: every minute while a game is on, every ten minutes otherwise. Only the maps stay as they were made.
+    if (Date.now() - liveAsk >= pollDelay(liveEvery) - 1000) {
+      liveAsk = Date.now();
+      try {
+        const res = await fetch("/api/fortune-teller?live=1", { credentials: "same-origin" });
+        noteBrake(res);
+        const fresh = await res.json();
+        if (fresh && fresh.ok) {
+          liveEvery = fresh.gameOn ? 60000 : 600000;
+          if (current.ready) {
+            for (const g of fresh.games || []) if (current.games[g.i]) Object.assign(current.games[g.i], { pA: g.pA, pB: g.pB, projA: g.projA, projB: g.projB, live: g.live });
+            if (fresh.standingsNow) current.standingsNow = fresh.standingsNow;
+          } else if (fresh.standingsNow) current.preview = fresh.standingsNow;
+          if (fresh.espnHistory) current.espnHistory = fresh.espnHistory;
+          liveV += 1; liveProp = { ...liveProp, v: liveV };
+          root.render(<FortuneTeller data={current} loadMap={(i, onP) => fetchMap(current, i, onP)} live={liveProp} />);
+        }
+      } catch (e) { /* try again next time */ }
+    }
     // Only while a build or an update is running: weeks before one can start, there is nothing to wait for.
     const st = current && current.pipeline && current.pipeline.state;
     if (!["building", "updating"].includes(st)) return;
@@ -79,8 +99,9 @@ root.render(<FortuneTeller data={null} />);
       const fresh = prepare(await res.json());
       if (!current.ready) { current = fresh; root.render(<FortuneTeller data={fresh} loadMap={(i, onP) => fetchMap(fresh, i, onP)} />); return; }
       const changed = fresh.ready && (fresh.updatedAt || fresh.builtAt) !== (current.updatedAt || current.builtAt);
-      current = { ...current, pipeline: fresh.pipeline };
-      root.render(<FortuneTeller data={data} loadMap={load} live={{ pipeline: fresh.pipeline, changed }} />);
+      current.pipeline = fresh.pipeline;
+      liveProp = { ...liveProp, pipeline: fresh.pipeline, changed };
+      root.render(<FortuneTeller data={current} loadMap={load} live={liveProp} />);
     } catch (e) { /* try again next time */ }
   }, 30000);
 })();
