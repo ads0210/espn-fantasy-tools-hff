@@ -186,7 +186,7 @@ export default function Postmortem({ teams, me }) {
             <div className="pm-deck">
               {seasons.length > 1 ? (
                 <div className="pm-seasons" role="tablist" aria-label="Season">
-                  {seasons.map((s) => <button key={s.season} type="button" role="tab" aria-selected={season === s.season} className={season === s.season ? "on" : ""} onClick={() => { setSeason(s.season); setOpenId(null); }}>{s.season}<span className="pm-sn">{s.decided}</span></button>)}
+                  {seasons.map((s) => <button key={s.season} type="button" role="tab" aria-selected={season === s.season} aria-label={`${s.season}, ${s.decided} ${s.decided === 1 ? "offer" : "offers"}`} className={season === s.season ? "on" : ""} onClick={() => { setSeason(s.season); setOpenId(null); }}>{s.season}<span className="pm-sn">{s.decided}</span></button>)}
                 </div>
               ) : null}
               {me != null ? <button type="button" className={`pm-only${only ? " on" : ""}`} aria-pressed={only} onClick={() => setOnly((v) => !v)}>My team only</button> : null}
