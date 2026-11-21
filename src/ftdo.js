@@ -8,6 +8,7 @@
  * 00:00 UTC reset, and holds slices while NFL games are in their windows.
  * Everything is metered here, since nothing reports account usage to a Worker.
  */
+import { ftGbsAllowance, DO_TIME_KEY } from './dotime.js';
 import { buildTeam, buildTeamPart, mergeParts, finishFromPart, partPlan, assembleSummary, deflateRaw, pathCount, PATH_CEILING, placesOf } from './ftbuild.js';
 import { FT_SUMMARY_KEY, ftMapKey } from './fortuneteller.js';
 import { getPart } from './store.js';
@@ -27,6 +28,9 @@ async function inflateBytes(bytes) { return new Uint8Array(await new Response(ne
 // Measured: even a 12-team build uses under 2% of any daily quota, so builds run at
 // full speed by default; the allowance and pacing remain as a backstop.
 export const FT_ACTIVE_KEY = 'fortune-teller/build-active';
+/** A failed slice is tried again this many times, waiting SLICE_RETRY_MS and doubling (W13). */
+export const SLICE_RETRIES = 3;
+export const SLICE_RETRY_MS = 5000;
 export const FT_DEFAULTS = { allowancePct: 50, sliceGapMs: 150, gameGate: true, burst: true, burstHour: 23, paceFloor: 1, activateOnFinish: true,
   targetSliceMs: 10000, nsFast: 130, nsH2h: 1900, nsDiv: 4500, partDigits: -1 };
 async function inflateRaw(bytes) { return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer()); }
@@ -49,16 +53,28 @@ export class FortuneTellerDO {
     const pct = Math.max(1, Math.min(100, cfg.allowancePct)) / 100;
     const hour = d.getUTCHours() + d.getUTCMinutes() / 60;
     const pace = cfg.burst ? (hour >= cfg.burstHour ? 1 : Math.max(cfg.paceFloor, hour / cfg.burstHour)) : 1;
-    const used = { requests: m.alarms / (FREE.requests * pct), gbs: (m.wallMs / 1000) * 0.125 / (FREE.gbs * pct), rows: m.rows / (FREE.rows * pct) };
+    // W5 (r278): object time is shared with the rest of the site, which the site log estimates every 15 minutes.
+    // Fortune Teller's share is its own setting, or what the rest leaves if that is less.
+    const others = await this.othersTime(now, day);
+    const gbsAllow = others == null ? FREE.gbs * pct : ftGbsAllowance({ pct, othersSec: others, now, free: FREE.gbs });
+    const used = { requests: m.alarms / (FREE.requests * pct), gbs: gbsAllow > 0 ? (m.wallMs / 1000) * 0.125 / gbsAllow : Infinity, rows: m.rows / (FREE.rows * pct) };
     const worst = Math.max(used.requests, used.gbs, used.rows);
     const nextDay = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1, 0, 5);
-    if (worst >= 1) return { ok: false, reason: 'daily allowance spent', until: nextDay, pace, used };
+    if (worst >= 1) return { ok: false, reason: used.gbs === worst && gbsAllow < FREE.gbs * pct ? 'daily allowance spent: the rest of the site has used most of today\'s object time' : 'daily allowance spent', until: nextDay, pace, used };
     if (worst >= pace) return { ok: false, reason: `paced: ${Math.round(worst * 100)}% of today's allowance used, ${Math.round(pace * 100)}% released so far`, until: Math.min(now + 15 * 60000, nextDay), pace, used };
     if (cfg.gameGate) {
       const gate = await this.gameWindow(now);
       if (gate) return { ok: false, reason: `NFL game window (kickoff ${gate.kickoff})`, until: gate.until, pace, used };
     }
     return { ok: true, pace, used };
+  }
+  /** Today's object time used by the rest of the site, in seconds, as the site log last wrote it (null when unknown). */
+  async othersTime(now, day) {
+    if (this.othersAt && now - this.othersAt < 5 * 60000 && this.othersDay === day) return this.othersSec;
+    let v = null;
+    try { const o = await this.env.DATA.get(DO_TIME_KEY); const d = o ? await o.json() : null; if (d && d.day === day && Number.isFinite(d.othersSec)) v = d.othersSec; } catch { v = null; }
+    this.othersAt = now; this.othersDay = day; this.othersSec = v;
+    return v;
   }
   async gameWindow(now) {
     try {
@@ -209,7 +225,12 @@ export class FortuneTellerDO {
    */
   async recoverStalled(job, who) {
     if (!job || !['queued', 'running', 'paused'].includes(job.state)) return null;
+    // W14 (r280): a slice running right now has taken its alarm, so a missing alarm then is not a stall. Nor is one
+    // whose last slice ended under two minutes ago: its next alarm is being set.
+    if (this.busy) return null;
     const s = this.s(), now = this.now();
+    const lastSlice = job.slices && job.slices.length ? Date.parse(job.slices[job.slices.length - 1].at) : 0;
+    if (job.state === 'running' && lastSlice && now - lastSlice < 120000) return null;
     let alarm = null;
     try { alarm = await s.getAlarm(); } catch { alarm = null; }
     let marker = true;
@@ -503,7 +524,8 @@ export class FortuneTellerDO {
         await this.mark('part compressed', { bytes: zz.length });
         await this.env.DATA.put(`${job.prefix}work/t${i}-L${job.k}-c${c}.bin`, zz);
         await this.mark('part stored');
-        const partMeta = { root: part.root, LB: part.LB, leaves: part.leaves, fin: part.fin, best: part.best, trimOdds: part.trimOdds, paths: part.paths };
+        // W15 (r280): each part keeps its chance of every place, so a staged build records the week's places too.
+        const partMeta = { root: part.root, LB: part.LB, leaves: part.leaves, fin: part.fin, best: part.best, trimOdds: part.trimOdds, trimPlaces: part.trimPlaces, paths: part.paths };
         await this.mark('meta ready', { json: JSON.stringify(partMeta).length, best: JSON.stringify(part.best).slice(0, 300) });
         await s.put(`part:${i}:${job.k}:${c}`, partMeta); this.rows += 1;
         await this.mark('meta saved');
@@ -519,16 +541,19 @@ export class FortuneTellerDO {
           return { ...meta, nodes: new Int32Array(raw.buffer, raw.byteOffset, raw.length / 4) };
         };
         const merged = await mergeParts(3 ** m, load, L, L - m, input.teams.length, nTrims);
-        for (let c = 0; c < 3 ** m; c++) { await s.delete(key(c)); await this.env.DATA.delete(bin(c)); }
+        // W13 (r280): the parts are let go only once the merged result is stored, so a failed write can be retried.
+        const dropParts = async () => { for (let c = 0; c < 3 ** m; c++) { await s.delete(key(c)); await this.env.DATA.delete(bin(c)); } };
         if (L - m === 0) {
           const r = finishFromPart(input, i, merged), z = await deflateRaw(new Uint8Array(r.nodes.buffer, r.nodes.byteOffset, r.nodes.byteLength));
           await this.env.DATA.put(`${job.prefix}maps/${input.teams[i].id}.bin`, z, { httpMetadata: { contentType: 'application/octet-stream' } });
           await s.put('team:' + i, { root: r.root, nodeCount: r.nodeCount, trims: r.trims, odds: r.odds, bytes: z.length, ...(r.leaves ? { leafBase: r.leafBase, leaves: r.leaves } : {}) }); this.rows += 1;
+          await dropParts();
           detail = `${input.teams[i].name}: merged, ${r.nodeCount.toLocaleString('en-US')} nodes, ${(z.length / 1024).toFixed(0)} KB, odds ${(100 * r.odds).toFixed(1)}%`;
           job.team++; job.chunk = 0; job.next = job.team >= job.n ? 'finalize' : 'team';
         } else {
           await this.env.DATA.put(`${job.prefix}work/t${i}-L${L - m}-c${g}.bin`, await deflateRaw(new Uint8Array(merged.nodes.buffer, merged.nodes.byteOffset, merged.nodes.byteLength)));
-          await s.put(`part:${i}:${L - m}:${g}`, { root: merged.root, LB: merged.LB, leaves: merged.leaves, fin: merged.fin, best: merged.best, trimOdds: merged.trimOdds, paths: merged.paths }); this.rows += 1;
+          await s.put(`part:${i}:${L - m}:${g}`, { root: merged.root, LB: merged.LB, leaves: merged.leaves, fin: merged.fin, best: merged.best, trimOdds: merged.trimOdds, trimPlaces: merged.trimPlaces, paths: merged.paths }); this.rows += 1;
+          await dropParts();
           detail = `${input.teams[i].name}: merge stage ${L}→${L - m}, group ${g + 1}/${groups}, ${(merged.nodes.length / 4).toLocaleString('en-US')} nodes`;
           job.mergeGroup = g + 1; if (job.mergeGroup >= groups) { job.mergeLevel = L - m; job.mergeGroup = 0; }
         }
@@ -562,9 +587,19 @@ export class FortuneTellerDO {
         } else detail = 'written to the library';
         job.next = 'done'; job.state = 'done'; job.finishedAt = new Date(this.now()).toISOString();
       }
+      job.retries = 0;
     } catch (e) {
-      job.state = 'failed'; job.error = String((e && e.message) || e);
-      await this.log('error', `${step} failed: ${job.error}`);
+      // W13 (r280): one storage error (R2 10043 once) restarted a 1.7-hour build from zero. A slice that fails is
+      // tried again from the same step, a few times with a growing wait, before the build is called failed.
+      const err = String((e && e.message) || e);
+      job.retries = (job.retries || 0) + 1;
+      if (job.retries <= SLICE_RETRIES) {
+        job.next = step; job.state = 'running'; job.retryAt = this.now() + SLICE_RETRY_MS * 2 ** (job.retries - 1);
+        await this.log('warn', `${step} failed (${err}); trying the same step again (${job.retries} of ${SLICE_RETRIES})`);
+      } else {
+        job.state = 'failed'; job.error = err;
+        await this.log('error', `${step} failed: ${job.error}`);
+      }
     }
     await this.mark('step done', { state: job.state, error: job.error || null });
     await s.put('job', job); this.rows += 1;
@@ -575,7 +610,7 @@ export class FortuneTellerDO {
     const day = new Date(this.now()).toISOString().slice(0, 10), m = await this.meter(day);
     m.alarms += 1; m.wallMs += wall; m.rows += this.rows + 3; await s.put('meter:' + day, m);
     if (job.state !== 'failed') await this.log('info', `${step}${detail ? ' · ' + detail : ''} · ${wall} ms`);
-    if (!['done', 'failed', 'cancelled'].includes(job.state)) await s.setAlarm(this.now() + Math.max(0, cfg.sliceGapMs));
+    if (!['done', 'failed', 'cancelled'].includes(job.state)) await s.setAlarm(job.retryAt && job.retries ? job.retryAt : this.now() + Math.max(0, cfg.sliceGapMs));
     else if (job.state === 'done') await this.log('info', `build ${job.id} finished`);
     if (job.state === 'done') await this.siteChange(`Fortune Teller ${job.kind === 'trim' ? 'update' : 'build'} finished`, 'ok');
     else if (job.state === 'failed') await this.siteChange(`Fortune Teller ${job.kind === 'trim' ? 'update' : 'build'} failed: ${String(job.error || '').slice(0, 100)}`, 'bad');
