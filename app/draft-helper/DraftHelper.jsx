@@ -875,7 +875,7 @@ export default function DraftHelper() {
                 {scenario === "post" && (
                   <>
                     <div className="herobig">Draft complete</div>
-                    <div className="herosub">All {totalPicks} picks are in. Rosters below are final.</div>
+                    <div className="herosub">All {totalPicks} picks are in. Rosters below are as drafted.</div>
                   </>
                 )}
                 <div className="herostats">
