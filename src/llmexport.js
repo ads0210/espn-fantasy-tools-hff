@@ -9,6 +9,7 @@
  * Deliberately absent, for every team: owner names and account ids, pending
  * waiver claims, logos inside the export, and anything from the ESPN session.
  */
+import { oddsWords } from './oddsrule.js';
 import { oneDecimal } from './round.js';
 import { teamLogoUrl } from './derive.js';
 import { FREE_AGENT_DEPTH } from './datasets.js';
@@ -353,7 +354,8 @@ export async function buildLlmExportDigest(ctx) {
     pointsFor: r.pointsFor,
     pointsAgainst: r.pointsAgainst,
     streak: r.streak || null,
-    playoffOdds: typeof r.playoffPct === 'number' ? `${Math.round(r.playoffPct * 100)}%` : null,
+    // W26 (r283): the site's one percentage rule (one decimal, half up) and its one Clinched/Eliminated rule.
+    playoffOdds: typeof r.playoffPct === 'number' ? oddsWords(r.playoffPct, { clinched: 'clinched', eliminated: 'eliminated' }) : null,
   }));
 
   const nameById = {};
@@ -774,7 +776,7 @@ export function applySimOdds(digest, sim) {
   if (!digest || !digest.export || !Array.isArray(digest.export.standings) || !sim) return digest;
   const fin = sim.final && sim.final.seasonOver ? sim.final.inByTeam : null;
   if (!sim.byTeam && !fin) return digest;
-  const pct = (v) => (v >= 0.9995 ? 'clinched' : v <= 0.0005 ? 'eliminated' : `${Math.round(v * 1000) / 10}%`);
+  const pct = (v) => { const w = oddsWords(v, { clinched: 'clinched', eliminated: 'eliminated' }); return w == null ? null : w; };   // week 11 (D1, D7)
   const standings = digest.export.standings.map((r) => {
     let out = r;
     if (fin && fin[r.teamId] != null) out = { ...out, playoffOdds: fin[r.teamId] ? 'clinched' : 'eliminated' };   // the regular season is over
