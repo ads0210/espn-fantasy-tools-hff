@@ -23,6 +23,7 @@
 import { assembleTab, hourlyReports, runCensus, datasetDetail } from './sitebackend.js';
 import { LOG_BUDGET_REF, GUARD_BYTES, EVENTS_PER_DAY, WINDOW_ROWS, READ_TIERS } from './sblimits.js';
 import { meteredEnv } from './sitelog.js';
+import { objectTime, tickObjectMs } from './dotime.js';
 import { BYTE_BUDGET } from './scoretimeline.js';
 import { levelFrom, BRAKE_OF, BRAKE_WORDS, LIMIT_WORDS } from './budget.js';
 import { likelyTeams } from './sources.js';
@@ -187,7 +188,14 @@ export class SiteLogDO {
   run(query, ...binds) {
     const cur = this.sql.exec(query, ...binds);
     const rows = cur.toArray();
-    this.count(cur.rowsWritten || 0, cur.rowsRead || 0);
+    const read = cur.rowsRead || 0;
+    this.count(cur.rowsWritten || 0, read);
+    // W7 (r279): which route and which query read the rows, kept with the day's meter (read by the dev layer's log-reads probe, src/dev.js).
+    if (read > 0) {
+      const m = this.meterNow(); const by = m.by || (m.by = {});
+      const k = `${this.route || '-'} ${String(query).replace(/\s+/g, ' ').trim().slice(0, 80)}`;
+      if (by[k] != null || Object.keys(by).length < 80) by[k] = (by[k] || 0) + read;
+    }
     return rows;
   }
 
@@ -215,6 +223,7 @@ export class SiteLogDO {
       CREATE INDEX IF NOT EXISTS reports_hour ON reports(hour);
       CREATE TABLE IF NOT EXISTS visits (b INTEGER NOT NULL, d INTEGER NOT NULL, page TEXT NOT NULL, team INTEGER NOT NULL,
         n INTEGER NOT NULL, PRIMARY KEY (b, d, page, team)) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS visits_db ON visits(d, b);
       CREATE TABLE IF NOT EXISTS teamacts (day INTEGER NOT NULL, team INTEGER NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL,
         PRIMARY KEY (day, team, kind)) WITHOUT ROWID;`);
     const m = this.sql.exec("SELECT v FROM meta WHERE k = 'meter'").toArray()[0];
@@ -746,7 +755,10 @@ export class SiteLogDO {
       this.noteLogos(t.jobs && t.jobs.logos);
       this.noteTimeline(t.jobs && t.jobs.timeline);
       this.noteVersion(body.version);
-      if (minute % 3600000 === 0 || this.visitsCondensed == null) { this.condenseVisits(at); this.visitsCondensed = minute; }
+      // W7 (r281): once an hour, remembered in storage: an object that wakes often (between quiet minutes) no longer
+      // condenses on every wake. The lookup it starts with now reads one row from an index (visits_db), not the table.
+      if (this.visitsCondensed == null) this.visitsCondensed = this.getMeta('visitsCondensedHour', null);
+      if (this.visitsCondensed == null || hour > this.visitsCondensed) { this.condenseVisits(at); this.visitsCondensed = hour; this.setMeta('visitsCondensedHour', hour); }
       const lastReport = this.getMeta('lastReportHour', null);
       if (lastReport == null) this.setMeta('lastReportHour', hour);
       else if (hour > lastReport) { reportHour = hour - 3600000; this.setMeta('lastReportHour', hour); }
@@ -913,18 +925,49 @@ export class SiteLogDO {
       }
       this.init();
       this.meterNow().req += 1;
+      this.route = url.pathname === '/tab' ? `/tab:${body.tab || url.searchParams.get('tab') || ''}` : url.pathname;
       switch (url.pathname) {
         case '/ingest': return json(this.ingest(body));
         case '/tally': return json(this.tally(body));
         case '/tick': return json(await this.tick(body));
         case '/client': return json(this.clientEvent(body));
         case '/pace': return json({ ok: true, pace: this.paceUsage() });
+        case '/dotime': {
+          // W5 (r278): today's estimated object time from the recorded step times (read-only; the minute's work stores it).
+          const mid = Math.floor(Date.now() / 86400000) * 86400000;
+          const ticks = {};
+          for (const r of this.run('SELECT data FROM hours WHERE hour >= ?', mid)) { const d = JSON.parse(r.data); Object.assign(ticks, d.ticks || {}); }
+          return json({ ok: true, day: new Date(mid).toISOString().slice(0, 10), othersSec: Math.round(objectTime(ticks, 0).total) });
+        }
         case '/devtier': {
           if (!this.env.DEV_TOKEN) return json({ ok: false, error: 'unknown log route' }, 404);
           const n = Number(body.tier);
           if (body.cold) this.recentWin = null;
           this.devTier = n >= 0 && n <= 3 && body.minutes > 0 ? { n, until: Date.now() + Math.min(180, Number(body.minutes)) * 60000 } : null;
           return json({ ok: true, tier: this.readTier(), until: this.devTier ? new Date(this.devTier.until).toISOString() : null });
+        }
+        case '/devtime': {
+          // Dev layer (W6): where object time goes, summed from the step times every tick already carries.
+          if (!this.env.DEV_TOKEN) return json({ ok: false, error: 'unknown log route' }, 404);
+          const hours = Math.max(1, Math.min(48, Number(body.hours) || 24));
+          const since = Math.floor(Date.now() / 3600000) * 3600000 - (hours - 1) * 3600000;
+          const out = [], slow = [], perJob = {};
+          for (const r of this.run('SELECT hour, data FROM hours WHERE hour >= ? ORDER BY hour', since)) {
+            const d = JSON.parse(r.data); const ot = objectTime(d.ticks || {}, 0);
+            out.push({ hour: new Date(r.hour).toISOString(), minutes: Object.keys(d.ticks || {}).length, secs: Object.fromEntries(Object.entries(ot.secs).map(([k, v]) => [k, Math.round(v)])), total: Math.round(ot.total) });
+            for (const [m, t] of Object.entries(d.ticks || {})) {
+              const o = tickObjectMs(t); slow.push({ minute: new Date(Number(m)).toISOString(), clockMs: o.clock, steps: o.steps, jobs: Object.fromEntries(Object.entries(t).filter(([, v]) => v && v.ms).map(([k, v]) => [k, v.ms])) });
+              for (const [k, v] of Object.entries(t)) if (v && Number.isFinite(v.ms)) { const j = perJob[k] || (perJob[k] = { n: 0, ms: 0, max: 0 }); j.n += 1; j.ms += v.ms; j.max = Math.max(j.max, v.ms); }
+            }
+          }
+          slow.sort((a, b) => b.clockMs - a.clockMs);
+          const total = out.reduce((a, x) => a + x.total, 0);
+          return json({ ok: true, hours: out, totalSec: total, gbs: Math.round(total * 0.125), perJob: Object.fromEntries(Object.entries(perJob).map(([k, j]) => [k, { n: j.n, avgMs: Math.round(j.ms / j.n), max: j.max, totalSec: Math.round(j.ms / 1000) }])), slowest: slow.slice(0, 10) });
+        }
+        case '/devreads': {
+          if (!this.env.DEV_TOKEN) return json({ ok: false, error: 'unknown log route' }, 404);
+          const m = this.meterNow();
+          return json({ ok: true, day: m.day, read: m.read, rows: m.rows, req: m.req, by: Object.entries(m.by || {}).sort((a, b) => b[1] - a[1]) });
         }
         case '/members': return json(this.members(body.aliases));
         case '/tab':
