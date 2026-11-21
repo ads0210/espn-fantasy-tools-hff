@@ -73,6 +73,13 @@ async function placementPools(env, cfg, mem) {
   const st = await readJson(env, 'postmortem/state.json');
   if (!st || !st.seasons) return null;
   const live = Number(cfg.season);
+  // W4 (r278): the pools built from every season's stored rosters are kept in one stored document, keyed by what
+  // they were built from, so an object that wakes with an empty memory reads one document instead of ~60.
+  const srcSig = fingerprint(Object.entries(st.seasons).map(([y, s]) => `${y}:${s.absent ? 'a' : `${s.base}|${JSON.stringify(s.r || {})}`}`).join(','));
+  if (mem.pools && mem.poolsSrc === srcSig) return mem.pools;
+  const cacheKey = miKey(live, 'pools.json');
+  const cached = await readJson(env, cacheKey);
+  if (cached && cached.src === srcSig) { mem.pools = cached.pools; mem.poolsSrc = srcSig; return mem.pools; }
   mem.poolSeasons = mem.poolSeasons || {};
   const out = { teamW: [], matchW: [], players: [], mpc: {}, complete: true };
   const sigs = [];
@@ -101,7 +108,10 @@ async function placementPools(env, cfg, mem) {
     sigs.push(`${y}:${got.complete ? got.teamW.length : 'x'}`);
   }
   out.sig = fingerprint(sigs.join(','));
-  return out.complete && out.teamW.length ? out : null;
+  const pools = out.complete && out.teamW.length ? out : null;
+  if (pools) { try { await putJson(env, cacheKey, { src: srcSig, at: new Date().toISOString(), pools }); } catch { /* rebuilt next time */ } }
+  mem.pools = pools; mem.poolsSrc = srcSig;
+  return pools;
 }
 
 /** The slow inputs (everything but the live digest), from stored copies. */
@@ -114,21 +124,20 @@ export async function gatherInsightInputs(env, cfg, season) {
   ]);
   if (!settings || !schedule) return null;
   const teams = ((digest && digest.rows) || []).map((r) => ({ id: r.teamId, name: r.name, logo: r.logo || null, owner: r.owner || '' }));
+  // W4 (r278): the stored parts are read side by side, not one after another.
   const ss = {};
-  for (const p of (ssIndex && ssIndex.periods) || []) {
-    if (p.key !== 'whole' && p.key !== 'regular' && !/^w\d+$/.test(p.key)) continue;
-    const doc = await readJson(env, ssKey(season, `stats/${p.key}.json`));
-    if (doc) ss[p.key] = { standings: doc.standings || [], records: doc.records || [] };
-  }
+  const ssKeys = ((ssIndex && ssIndex.periods) || []).map((p) => p.key).filter((k) => k === 'whole' || k === 'regular' || /^w\d+$/.test(k));
+  const ssDocs = await Promise.all(ssKeys.map((k) => readJson(env, ssKey(season, `stats/${k}.json`))));
+  ssKeys.forEach((k, i) => { const doc = ssDocs[i]; if (doc) ss[k] = { standings: doc.standings || [], records: doc.records || [] }; });
   const weeks = {};
-  for (const p of Object.keys((ssState && ssState.periods) || {})) {
-    const w = await readJson(env, ssKey(season, `weeks/p${p}.json`));
-    if (w) weeks[p] = w;
-  }
+  const wKeys = Object.keys((ssState && ssState.periods) || {});
+  const wDocs = await Promise.all(wKeys.map((p) => readJson(env, ssKey(season, `weeks/p${p}.json`))));
+  wKeys.forEach((p, i) => { if (wDocs[i]) weeks[p] = wDocs[i]; });
   const past = {};
-  for (const yr of historySeasons(cfg)) {
-    if (Number(yr) >= season) continue;
-    const d0 = await partJson(env, 'league_history', String(yr));
+  const yrs = historySeasons(cfg).filter((yr) => Number(yr) < season);
+  const hist = await Promise.all(yrs.map((yr) => partJson(env, 'league_history', String(yr))));
+  for (const [i, yr] of yrs.entries()) {
+    const d0 = hist[i];
     const d = Array.isArray(d0) ? d0[0] : d0;
     if (!d || !d.schedule) continue;
     const reg = (d.settings && d.settings.scheduleSettings && d.settings.scheduleSettings.matchupPeriodCount) || 13;
@@ -138,10 +147,9 @@ export async function gatherInsightInputs(env, cfg, season) {
   // The depth charts the step has kept, one a week (D52), so I98 can say a player slipped since the last one.
   const depthWeeks = {};
   const mi = await readJson(env, miKey(season, 'state.json'));
-  for (const w of Object.keys((mi && mi.depth) || {})) {
-    const d = await readJson(env, miKey(season, `depth/w${w}.json`));
-    if (d && d.players) depthWeeks[w] = d.players;
-  }
+  const dKeys = Object.keys((mi && mi.depth) || {});
+  const dDocs = await Promise.all(dKeys.map((w) => readJson(env, miKey(season, `depth/w${w}.json`))));
+  dKeys.forEach((w, i) => { const d = dDocs[i]; if (d && d.players) depthWeeks[w] = d.players; });
   const ft = await readJson(env, FT_SUMMARY_KEY);
   const swingTable = ft && Array.isArray(ft.trims) && ft.trims.length ? (ft.trims[Math.max(0, Math.min(ft.trims.length - 1, ft.activeTrim ?? ft.trims.length - 1))] || {}).swing || null : null;
   return { season, settings, schedule, teams, weeks, ss, tx, h2hFull, injuries, byes, depth, depthWeeks, history, posratings, scoreboard, espnOdds: odds, past,
@@ -181,17 +189,39 @@ const PAST_SOURCES = new Set(['season_schedule', 'league_settings', 'h2h_full_di
  * is reused, and `past` for what a played week reads, so a played week is rebuilt only when one of those changed.
  */
 async function slowSignature(env, season) {
+  // Every head at once (W4, r277): they were asked one after another, about a second of an idle call.
+  const heads = await Promise.all([
+    ...MI_SOURCES.map(([ds, part]) => headPart(env, ds, part).catch(() => null)),
+    env.DATA.head(ssKey(season, 'index.json')).catch(() => null),
+    env.DATA.head(FT_ESPN_ODDS_KEY).catch(() => null),
+    env.DATA.head(FT_SUMMARY_KEY).catch(() => null),
+  ]);
   const tags = [], past = [];
-  for (const [ds, part] of MI_SOURCES) {
-    const h = await headPart(env, ds, part);
-    const t = h ? h.etag || String(h.uploaded) : '-';
-    tags.push(t);
-    if (PAST_SOURCES.has(ds)) past.push(t);
-  }
-  const i = await env.DATA.head(ssKey(season, 'index.json')).catch(() => null); tags.push(i ? i.etag || '' : '-'); past.push(i ? i.etag || '' : '-');
-  const o = await env.DATA.head(FT_ESPN_ODDS_KEY).catch(() => null); tags.push(o ? o.etag || '' : '-');
-  const f = await env.DATA.head(FT_SUMMARY_KEY).catch(() => null); tags.push(f ? f.etag || '' : '-');
+  MI_SOURCES.forEach(([ds], k) => { const h = heads[k]; const t = h ? h.etag || String(h.uploaded) : '-'; tags.push(t); if (PAST_SOURCES.has(ds)) past.push(t); });
+  const [i, o, f] = heads.slice(MI_SOURCES.length);
+  tags.push(i ? i.etag || '' : '-'); past.push(i ? i.etag || '' : '-');
+  tags.push(o ? o.etag || '' : '-');
+  tags.push(f ? f.etag || '' : '-');
   return { all: fingerprint(tags.join('|')), past: fingerprint(past.join('|')) };
+}
+
+/** Where the step's rest is kept (W4): R2, since the object's memory does not outlive a quiet minute. */
+export const MI_REST_KEY = (season) => miKey(season, 'rest.json');
+/**
+ * Whether a call may rest (W4, r277): nothing it reads has changed since the call that set the rest, and the rest
+ * has not run out. A rest is set only by a call that found no game on and no played week to build; it runs out at
+ * the next five-minute rebuild of the Before rows or two minutes before the week's next kickoff, whichever is first.
+ */
+export function mayRest(rest, { sig, live, now, force }) {
+  return Boolean(!force && rest && rest.sig === sig && rest.live === live && now < rest.until);
+}
+export function restUntil(now, games) {
+  let until = now + PRE_EVERY_MS;
+  for (const g of games || []) {
+    const k = Date.parse(g.firstKickoff || '');
+    if (Number.isFinite(k) && k > now && k - 120000 < until) until = Math.max(now, k - 120000);
+  }
+  return until;
 }
 
 /**
@@ -448,7 +478,7 @@ export function currentWeekDoc(M, prevDoc, { now = new Date().toISOString(), ser
   for (const st of (afterNow && afterNow.standings) || []) if (finals.some((f) => f.home === st.team || f.away === st.team)) after[st.team] = { w: st.w, l: st.l, t: st.t, seed: st.seed, pf: r2(st.pf) };
   const clinch = swing ? [...new Set(games.flatMap((x) => x.rows.filter((r) => r.type === 'I1').map((r) => r.teams[0])))] : null;
   const bg = swing && swing.bigGame ? games.find((x) => x.id === swing.bigGame) : null;
-  let league = leagueRows(M, week, 'pre', { margins, odds: M.oddsWeeks[String(week - 1)], clinch, bigGame: bg ? { teams: [bg.home, bg.away], swing: swing.bigSwing } : null });
+  let league = leagueRows(M, week, 'pre', { margins, odds: M.oddsWeeks[String(week - 1)], simOdds: swing ? swing.odds : null, clinch, bigGame: bg ? { teams: [bg.home, bg.away], swing: swing.bigSwing } : null });
   if (allFinal) {
     const fin = liveFinals(M);
     const high = fin.flatMap((f) => [{ team: f.home, pts: f.hp }, { team: f.away, pts: f.ap }]).sort((x, y) => y.pts - x.pts)[0];
@@ -544,16 +574,23 @@ export async function insightStep(env, mem, { now = Date.now(), brake = 'normal'
   const out = { ok: true, season, did: [] };
   let changed = false;
 
-  const sigs = await slowSignature(env, season);
+  const [sigs, liveHead, rest] = await Promise.all([slowSignature(env, season), headPart(env, 'live_scoring_digest').catch(() => null), readJson(env, MI_REST_KEY(season))]);
+  const liveEtag = liveHead ? liveHead.etag || String(liveHead.uploaded) : '-';
+  if (mayRest(rest, { sig: sigs.all, live: liveEtag, now, force })) return { ok: true, season, did: [], rested: true, until: new Date(rest.until).toISOString() };
+  const tm = {}; let tq = Date.now();
+  const lap = (k) => { const t = Date.now(); tm[k] = (tm[k] || 0) + t - tq; tq = t; };
   if (!mem.inputs || mem.sig !== sigs.all || force) {
     mem.inputs = await gatherInsightInputs(env, cfg, season);
+    lap('gather');
     mem.sig = sigs.all;
     mem.preAt = 0;
   }
   if (!mem.inputs) { out.skipped = 'no schedule or settings stored yet'; return out; }
   const live = await partJson(env, 'live_scoring_digest');
   const liveTag = live ? fingerprint(JSON.stringify(live.games || []).slice(0, 200000)) : '-';
+  lap('live');
   const M = buildInsightModel({ ...mem.inputs, live, now: iso });
+  lap('model');
   const current = M.now.week;
   out.current = current;
   // What a played week reads, by content: its sources' copies are rewritten all through a game window (live scores
@@ -561,6 +598,7 @@ export async function insightStep(env, mem, { now = Date.now(), brake = 'normal'
   // Record placements read every season's games from the Postmortem's stored rosters; once they are all read (and
   // when a settled week's are read again) the played weeks are rebuilt once with them.
   M.pools = await placementPools(env, cfg, mem);
+  lap('pools');
   const poolSig = M.pools ? M.pools.sig : '-';
   if (mem.pastSigOf !== `${mem.sig}|${poolSig}`) { mem.pastSig = `${pastSignature(M)}|${poolSig}`; mem.pastSigOf = `${mem.sig}|${poolSig}`; }
 
@@ -594,13 +632,20 @@ export async function insightStep(env, mem, { now = Date.now(), brake = 'normal'
     if (anyOn || anyFinal) series = await timelineSeries(env, season, current);
     if (preDue && !(cur && cur.kind === 'past')) {
       const prev = await readJson(env, miKey(season, `w${current}.json`));
+      lap('beforePre');
       const doc = currentWeekDoc(M, prev && prev.week === current ? prev : null, { now: iso, series: series || {}, swing: swing || swingFor(M, mem.inputs.ftSwing) });
-      await putJson(env, miKey(season, `w${current}.json`), doc);
-      state.weeks[current] = { kind: 'current', at: iso, games: doc.games.length, rows: doc.games.reduce((x, g) => x + g.rows.length, 0) };
+      lap('pre');
+      // W4 (r279): written only when what it says changed; the five-minute rebuild usually finds it the same.
+      const docTag = fingerprint(JSON.stringify(doc.games) + JSON.stringify(doc.league || null) + JSON.stringify(doc.after || null) + JSON.stringify(doc.lines || null));
       mem.preAt = now; mem.preWeek = current; mem.liveTag = liveTag;
       mem.doc = doc;
-      out.did.push(`week ${current}: ${state.weeks[current].rows} rows`);
-      changed = true;
+      if (!(cur && cur.kind === 'current' && cur.tag === docTag) || force) {
+        await putJson(env, miKey(season, `w${current}.json`), doc);
+        state.weeks[current] = { kind: 'current', at: iso, games: doc.games.length, rows: doc.games.reduce((x, g) => x + g.rows.length, 0), tag: docTag };
+        out.did.push(`week ${current}: ${state.weeks[current].rows} rows`);
+        changed = true;
+        out.pre = 'written';
+      } else out.pre = 'unchanged';
     }
     let ldoc = null;
     if (anyOn) {
@@ -634,6 +679,12 @@ export async function insightStep(env, mem, { now = Date.now(), brake = 'normal'
     }
   }
 
+  // W4: a call with no game on and no played week built may let the next calls rest until something changes.
+  const onNow = current && M.now.games.some((g) => STATE_OF(g) === 'live');
+  if (!due && !onNow) {
+    const until = restUntil(now, current ? M.now.games : []);
+    if (until > now) await putJson(env, MI_REST_KEY(season), { sig: sigs.all, live: liveEtag, until, at: iso });
+  }
   if (changed) {
     state.sig = mem.sig;
     await putJson(env, stateKey, state);
@@ -641,7 +692,9 @@ export async function insightStep(env, mem, { now = Date.now(), brake = 'normal'
     await putJson(env, miKey(season, 'index.json'), { season, builtAt: iso, current, regWeeks: M.regWeeks, places: M.places, weeks,
       teams: Object.fromEntries(Object.values(M.teams).map((t) => [t.id, { id: t.id, name: t.name, logo: t.logo }])) });
   }
+  lap('rest');
   out.state = { weeks: Object.keys(state.weeks).length, depth: Object.keys(state.depth).length };
+  out.ms = tm;
   return out;
 }
 
