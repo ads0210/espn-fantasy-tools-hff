@@ -13,18 +13,17 @@
  * updated, which is the honest thing to say about a build whose changes nobody
  * outside the repo would notice.
  */
-/* Week 10: drafted for review on 5 November 2026 and approved by the user as written on 6 November. Replaces the
-   Front Office list (v1.253). */
+/* Week 11: a DRAFT written by Claude at the user's request on 18 November 2026, for the user's review before any
+   production package (Step 0). Replaces the week-10 list (v1.274/v1.276). */
 export const RELEASE_NOTE_ITEMS = [
-  'Trade Analyzer\u2019s new Postmortem judges every trade offer of every season in hindsight: what each deal did to '
-  + 'both sides\u2019 best lineups, beside what ESPN expected and what Trade Analyzer said at the time.',
-  'Hall of Fame\u2019s record book is rebuilt: a top 10 on every record, season records, Record Holders, and a glow on '
-  + 'records set this season.',
-  'Season Statistics adds top 10 tables, Records held and Prestige, and counts Hall of Fame records once this season '
-  + 'can no longer lose them.',
-  'Matchup Insights calls out games that climb a record\u2019s top 10. League activity shows each trade offer once, '
-  + 'with how it really ended, and marks waiver claims that didn\u2019t go through.',
-  'Site API: a Postmortem address and sheets for the trades and the record book. LLM Data Export includes the Postmortem.',
+  'Fortune Teller keeps this week’s games live: ESPN’s win chances and scores update while the page is open, '
+  + 'weeks already played fold away until you switch on What-if, and Standings open on the outcomes you pick (Current '
+  + 'shows the table as it stands).',
+  'A team now reads Eliminated only when no result can put it in the playoffs, and Clinched only when none can keep it '
+  + 'out, everywhere on the site; Must Win and the other stakes in Matchup Insights agree with it.',
+  'Front Office shows your total and your opponent’s as ESPN projects them live during games, and names every move '
+  + 'when your best lineup needs more than one swap.',
+  'Site Backend shows the site’s use of Durable Object time, and the site uses much less of it.',
   'Various bug fixes and performance improvements.',
 ];
 
@@ -37,5 +36,5 @@ export const RELEASE_NOTE_ITEMS = [
  * production package's Step 0): the list is reviewed with the notes, and like them it is cleared or rewritten for the
  * next release. Keys are those in src/tools.js; a test holds every one to a registered tool.
  */
-/* Week 10's release: no new tool. */
+/* Week 11's release: no new tool. */
 export const NEW_TOOLS = [];
