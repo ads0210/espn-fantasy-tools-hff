@@ -1,4 +1,5 @@
 import ScrollBox from "../shared/ScrollBox.jsx";
+import { isClinched, isEliminated, oddsWords } from "../../src/oddsrule.js";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { PALETTES, BASE_CSS, BACKDROP, TEAM_COOKIE, THEME_COOKIE, pts2 } from "../../src/ui.js";
 import TeamSelect from "../shared/TeamSelect.jsx";
@@ -66,8 +67,8 @@ function Gauge({ value, cls }) {
       <defs><linearGradient id="gaugefill" x1="0" y1="1" x2="1" y2="0"><stop offset="0%" className="gs0" /><stop offset="100%" className="gs1" /></linearGradient></defs>
       <path className="gtrack" d={arc(A0, A0 + SW)} />
       <g className="gticks">{ticks}</g>
-      {v > 0.0005 ? <path className="gglow" d={arc(A0, A0 + SW * v)} /> : null}
-      {v > 0.0005 ? <path className="gval" d={arc(A0, A0 + SW * v)} /> : null}
+      {v > 0 ? <path className="gglow" d={arc(A0, A0 + SW * v)} /> : null}
+      {v > 0 ? <path className="gval" d={arc(A0, A0 + SW * v)} /> : null}
     </svg>
   );
 }
@@ -155,7 +156,8 @@ function OddsByWeek({ points, k, nowLabel = "Now", note = null }) {
         ))}
         <span className="owwipe" ref={wipe} />
       </div>
-      <div className="owaxis" ref={axis}>{points.map((p, i) => <span key={i} className={p === now ? "now" : ""} data-edge={i === 0 || i === points.length - 1 ? "1" : undefined} style={{ left: `${X(p.week)}%` }}>{p === now ? nowLabel : p.week === 0 ? "Pre" : many ? String(p.week) : `Wk ${p.week}`}</span>)}</div>
+      {/* One label a week, even where ESPN's figure and the simulation's share it (W12). */}
+      <div className="owaxis" ref={axis}>{order.map((w, i) => { const isNow = now && now.week === w; return <span key={w} className={isNow ? "now" : ""} data-edge={i === 0 || i === order.length - 1 ? "1" : undefined} style={{ left: `${X(w)}%` }}>{isNow ? nowLabel : w === 0 ? "Pre" : order.length > 8 ? String(w) : `Wk ${w}`}</span>; })}</div>
       {note ? <p className="ownote">{note}</p> : null}
     </div>
   );
@@ -254,11 +256,22 @@ function NotReady({ p }) {
   return <div className="panel ftstate"><div className="placeholder"><b>{title}</b><span>{body}</span>{extra}</div></div>;
 }
 
+/* Week 11 (W12): ESPN's odds keep every recorded week once the simulation exists, and today's figure where the
+   record has no entry for it yet, so ESPN's line runs beside the simulation's to the latest week. */
+function espnLatest(pts, now, teamId) {
+  const t = now && Array.isArray(now.teams) ? now.teams.find((x) => x.id === teamId) : null;
+  const wk = now ? now.weeksPlayed || 0 : null;
+  if (t && typeof t.playoffPct === "number" && wk != null && !pts.some((q) => q.week === wk)) return [...pts, { week: wk, v: t.playoffPct, kind: "espn" }].sort((a, b) => a.week - b.week);
+  return pts;
+}
+
 /* Sim %, with the same markers as the dashboard's Playoff % at the extremes. */
 function simCell(v) {
   if (v == null) return <span className="dim">—</span>;
-  if (v >= 0.9995) return <span className="stflag in">Clinched</span>;
-  if (v <= 0.0005) return <span className="stflag out">Eliminated</span>;
+  // Week 11 (D1, D7): Clinched only at exactly 100%, Eliminated only at exactly 0%.
+  if (isClinched(v)) return <span className="stflag in">Clinched</span>;
+  if (isEliminated(v)) return <span className="stflag out">Eliminated</span>;
+  if (v < 0.0005 || v >= 0.9995) return <span className="stpct">{oddsWords(v)}</span>;
   return <span className="stpct">{pct(v, 1)}</span>;   // the dial's own formatter, so the page agrees with itself
 }
 
@@ -276,14 +289,14 @@ function Preview({ data }) {
   useLinks(conRef, [["c5", "p5", "w"], ["c7", "p5", "w"], ["c5", "p7", "l"], ["c9", "p7", "w"], ["c7", "p9", "l"], ["c9", "p9", "l"]]);
   const me = teams[ti], odds = me.playoffPct;
   const byRank = seedOrder(teams, "standings"), bk = brackets(seedOrder(teams, seedBy), places, pv.consolation);
-  const status = odds == null ? "No odds yet" : odds >= 0.9995 ? "Clinched" : odds <= 0.0005 ? "Eliminated" : "In the hunt";
+  const status = odds == null ? "No odds yet" : isClinched(odds) ? "Clinched" : isEliminated(odds) ? "Eliminated" : "In the hunt";
   const none = new Map();
   // ESPN's figure after each settled week, ending on today's.
   const pts = espnPoints(data.espnHistory, me.id); if (odds != null && !pts.some((q) => q.week === pv.weeksPlayed)) pts.push({ week: pv.weeksPlayed || 0, v: odds, kind: "espn" });
   pts.sort((a, b) => a.week - b.week);
   const teamOptions = teams.slice().sort((a, b) => a.name.localeCompare(b.name)).map((t) => ({ value: t.id, label: t.name, logo: t.logo }));
   const choose = (id) => { const i = teams.findIndex((t) => t.id === Number(id)); if (i >= 0) { setTi(i); writeCookie("eft_team", String(teams[i].id)); } };
-  const espnCell = (v) => (v == null ? <span className="dim">—</span> : v >= 0.9995 ? <span className="stflag in">Clinched</span> : v <= 0.0005 ? <span className="stflag out">Eliminated</span> : <span className="stpct">{pct(v, 1)}</span>);
+  const espnCell = (v) => simCell(v);   // one rule for ESPN's figure and the simulation's (week 11, D1, D7)
   const recStr = (t) => `${t.w}-${t.l}${t.t ? `-${t.t}` : ""}`;
   return (
     <Chrome leagueName={data.leagueName}>
@@ -318,11 +331,11 @@ function Preview({ data }) {
       <div className="sechead"><span className="t">Standings</span><span className="rule" /><span className="count">as they stand</span></div>
       <div className="panel stpanel ftin">
         {/* Week 6 (N1, PD2): the same two modes as the live page; the second opens with the map. */}
-        <div className="panelhead"><span className="t">Standings</span><span className="count">live</span>
+        <div className="panelhead"><span className="t">Standings</span><span className="count">as they stand now</span>
           <span className="stmodes" role="radiogroup" aria-label="Standings shown">
-            <button type="button" role="radio" className="stmode on" aria-checked="true">Live</button>
             <button type="button" role="radio" className="stmode" aria-checked="false" disabled>With selected outcomes</button>
-            <em className="stmodehint">Opens with the map</em>
+            <button type="button" role="radio" className="stmode on" aria-checked="true">Current</button>
+            <em className="stmodehint">Outcomes open with the map</em>
           </span></div>
         <ScrollBox>
           <table className="datatable ftst">
@@ -607,8 +620,8 @@ function Live({ data, loadMap, boot, live, replay }) {
   const liveRows = data.standingsNow && Array.isArray(data.standingsNow.teams) && data.standingsNow.teams.length
     ? data.standingsNow.teams.slice().sort((a, b) => (a.rank || 99) - (b.rank || 99)) : null;
   const picksKey = (() => { let k = ""; for (let j = trim.fixed; j < G; j++) k += pins[j] < 0 ? "." : pins[j]; return k; })();
-  const [stMode, setStMode] = useState(() => (picks || !liveRows ? "path" : "live"));
-  useEffect(() => { setStMode(picks || !liveRows ? "path" : "live"); }, [picksKey]);
+  // Week 11 (D5): the panel opens on the standings the selected outcomes produce; Current is a tap away.
+  const [stMode, setStMode] = useState("path");
   const stShown = !liveRows ? "path" : stMode;
   const myBlock = { start: myRow.block.start, size: myRow.block.size };
   const myCls = classify(myBlock, places);
@@ -830,6 +843,7 @@ function Live({ data, loadMap, boot, live, replay }) {
 
   const teamOptions = data.teams.slice().sort((a, b) => a.name.localeCompare(b.name)).map((t) => ({ value: t.id, label: t.name, logo: t.logo }));
   const weeks = [...new Set(data.games.map((g) => g.week))];
+  const hiddenWeeks = whatIf ? 0 : weeks.filter((wk) => data.games.every((g) => g.week !== wk || g.i < trim.fixed)).length;
   const thisWeek = weeks.find((wk) => data.games.some((g) => g.week === wk && g.i >= trim.fixed));
   const tiesOnPath = st.blocks.filter((b) => b.size > 1);
   // Tie groups alternate between two ambers, so neighbouring groups never read as one.
@@ -857,7 +871,7 @@ function Live({ data, loadMap, boot, live, replay }) {
           {isBest ? <span className="besttag">Best</span> : null}
           {d === 0 ? <span className="tieglyph" aria-hidden="true">=</span> : <span className="lg"><TeamLogo src={data.teams[tix].logo} alt="" /></span>}
           <span className="nm">{d === 0 ? "Tie" : data.teams[tix].name}</span>
-          <span className="sub">{sub}</span>
+          <span className="sub">{sub}{d !== 0 && !settled && g.live && g.live.state === "live" ? <span className="livetag">live</span> : null}</span>
           <span className="res"><span className="rl"><b>{r.label}</b><em>{od.paths ? pct(od.pl, od.paths) : "–"}</em></span><span className="meter"><i style={{ transform: `scaleX(${share})` }} /></span></span>
         </button>
       );
@@ -868,7 +882,9 @@ function Live({ data, loadMap, boot, live, replay }) {
         <div className="gmeta">
           {mine ? <span className="tag mine">Your game</span> : null}
           {biggest && biggest.j === j && f.relevant ? <span className="tag big">Biggest game on this path{biggest.root ? <React.Fragment> · root for <strong>{biggest.root}</strong></React.Fragment> : null}</span> : null}
-          {!settled
+          {!settled && g.live && g.live.state !== "pre" && g.live.hp != null
+            ? <span className="tag proj">{g.live.state === "live" ? "Live" : "Final, not yet settled"} · <strong>{g.aName}</strong> {pts2(g.live.hp)}–{pts2(g.live.ap)} <strong>{g.bName}</strong> · projected {pts2(g.projA)}–{pts2(g.projB)}</span>
+            : !settled
             ? <span className="tag proj">Projected winner <strong>{g.projA >= g.projB ? g.aName : g.bName}</strong> {pts2(Math.max(g.projA, g.projB))}–{pts2(Math.min(g.projA, g.projB))}</span>
             : <span className="tag final">{fut.hp === fut.ap ? "Final · tied " : <React.Fragment>Final · <strong>{fut.hp > fut.ap ? g.aName : g.bName}</strong> won </React.Fragment>}{fmtPts(Math.max(fut.hp, fut.ap))}–{fmtPts(Math.min(fut.hp, fut.ap))}</span>}
           {changed ? <span className="tag wif">What-if</span> : null}
@@ -937,7 +953,7 @@ function Live({ data, loadMap, boot, live, replay }) {
               <span className="fcut" style={{ gridColumn: `${places + 1}` }} aria-hidden="true" />
             </div>
             <div className="faxis">{fin.map((v, p) => <span key={p} className={(p < places ? "po" : "") + (p === likely ? " likely" : "")} title={p === likely ? "Most likely finish" : undefined}>{ordinal(p + 1)}</span>)}</div>
-            <OddsByWeek points={[...espnPoints(data.espnHistory, data.teams[ti].id, data.trims[0].thru), ...series.map((q) => { const k = data.trims.findIndex((t) => t.thru === q.week); const f = q.kind === "played" && k >= 0 ? finalOdds(data, data.trims[k]) : null; return f ? { ...q, v: f[ti] } : q; })]} k={`${ti}:${trimIdx}`} nowLabel={decided ? "Final" : "Now"} />
+            <OddsByWeek points={[...espnLatest(espnPoints(data.espnHistory, data.teams[ti].id), data.standingsNow, data.teams[ti].id), ...series.map((q) => { const k = data.trims.findIndex((t) => t.thru === q.week); const f = q.kind === "played" && k >= 0 ? finalOdds(data, data.trims[k]) : null; return f ? { ...q, v: f[ti] } : q; })]} k={`${ti}:${trimIdx}`} nowLabel={decided ? "Final" : "Now"} />
           </div>
         </div>
       </div>
@@ -983,9 +999,12 @@ function Live({ data, loadMap, boot, live, replay }) {
             <g className="rails" /><g className="stations" /><path className="glow" /><path className="line" /><g className="beads" />
           </svg>
           <div className="lanekey" aria-hidden="true"><span>A</span><span>Tie</span><span>B</span></div>
+          {hiddenWeeks ? <p className="wkhidden">{hiddenWeeks === 1 ? "1 week already played is" : `${hiddenWeeks} weeks already played are`} hidden. Switch on <b>What-if</b> to see or change {hiddenWeeks === 1 ? "it" : "them"}.</p> : null}
           {weeks.map((wk) => {
             const wg = data.games.filter((g) => g.week === wk);
             const played = wg.every((g) => g.i < trim.fixed), now = wk === thisWeek;
+            // Week 11 (D6): a week already played folds away unless What-if is on.
+            if (played && !whatIf) return null;
             const hid = wg.filter((g) => !flips[g.i].relevant).length;
             return (
               <section className={"week" + (now ? " now" : "") + (played ? " played" : "")} key={wk}>
@@ -1008,10 +1027,10 @@ function Live({ data, loadMap, boot, live, replay }) {
         <aside className="panel stpanel ftin" style={{ "--d": "300ms" }}>
           {/* Week 6 (N1, PD2): one Standings panel with two modes. It follows the map (an outcome picked shows the
               final standings that result; nothing picked shows them live) until switched by hand. */}
-          <div className="panelhead"><span className="t">Standings</span><span className="count">{stShown === "live" ? "live" : "with the outcomes you picked"}</span>
+          <div className="panelhead"><span className="t">Standings</span><span className="count">{stShown === "live" ? "as they stand now" : "with the outcomes you picked"}</span>
             <span className="stmodes" role="radiogroup" aria-label="Standings shown">
-              <button type="button" role="radio" className={"stmode" + (stShown === "live" ? " on" : "")} aria-checked={stShown === "live"} disabled={!liveRows} onClick={() => setStMode("live")}>Live</button>
               <button type="button" role="radio" className={"stmode" + (stShown === "path" ? " on" : "")} aria-checked={stShown === "path"} onClick={() => setStMode("path")}>With selected outcomes</button>
+              <button type="button" role="radio" className={"stmode" + (stShown === "live" ? " on" : "")} aria-checked={stShown === "live"} disabled={!liveRows} onClick={() => setStMode("live")}>Current</button>
             </span>
             <button className="sttoggle" type="button" aria-expanded={String(stOpen)} aria-label={stOpen ? "Hide standings" : "Show standings"} onClick={() => setStOpen(!stOpen)}><i /></button></div>
           <div className="stbody" hidden={!stOpen || stShown !== "live"}>
