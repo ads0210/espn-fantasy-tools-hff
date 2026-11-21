@@ -162,7 +162,23 @@ export function overlayLive(doc, digest, now = Date.now()) {
   tw.starters = tw.starters.map(fix); tw.bench = tw.bench.map(fix); tw.ir = tw.ir.map(fix);
   const val = (c) => (c.locked && c.live != null ? c.live : c.bye || ['OUT', 'INJURY_RESERVE', 'SUSPENSION'].includes(c.inj) ? 0 : c.proj);
   tw.totals = { ...tw.totals, lineup: Math.round(tw.starters.reduce((s, c) => s + val(c), 0) * 100) / 100 };
-  if (tw.totals.best < tw.totals.lineup) tw.totals.best = tw.totals.lineup;
+  /* W18, W21 (r282): this lineup is ESPN's lineup, so its total and the opponent's are ESPN's own projections as they
+     stand now: a starter still playing counts his points so far plus the rest of his projection, the opponent moves
+     with the game, and the figure is the one Live Matchups shows (no 0.01 apart from rounding each player first). */
+  const myId = doc.team && doc.team.id;
+  const game = (digest.games || []).find((g) => g.home && g.away && (g.home.teamId === myId || g.away.teamId === myId));
+  const ownLineup = tw.totals.lineup, alreadyBest = Math.abs((tw.totals.best ?? 0) - ownLineup) < 0.005;
+  if (game) {
+    const mine = game.home.teamId === myId ? game.home : game.away, theirs = mine === game.home ? game.away : game.home;
+    if (Number.isFinite(Number(mine.projected))) tw.totals.lineup = Math.round(Number(mine.projected) * 100) / 100;
+    if (Number.isFinite(Number(theirs.projected)) && theirs.teamId === (doc.tw.oppId ?? theirs.teamId)) tw.totals.opp = Math.round(Number(theirs.projected) * 100) / 100;
+  }
+  if (tw.totals.best < tw.totals.lineup || alreadyBest) tw.totals.best = tw.totals.lineup;
+  // The "you trail" note is worked out again from these totals.
+  if (Array.isArray(tw.checklist)) {
+    tw.checklist = tw.checklist.filter((x) => x.id !== 'trailing');
+    if (tw.totals.opp != null && tw.totals.opp - tw.totals.lineup >= 15) tw.checklist.push({ id: 'trailing', tone: 'info', text: `You trail by ${(tw.totals.opp - tw.totals.lineup).toFixed(2)} projected points: upside plays matter this week.`, at: null });
+  }
   const open = tw.starters.filter((c) => !c.locked);
   const anyLocked = tw.starters.some((c) => c.locked);
   tw.lateSwap = anyLocked && open.length ? { open: open.map((c) => SLOT_NAME[c.slot]), nextLock: open.map((c) => c.kickoff).filter(Boolean).sort()[0] || null } : null;

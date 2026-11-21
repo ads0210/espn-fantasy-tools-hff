@@ -476,6 +476,10 @@ html[data-theme="light"] .seedby .ftbtn[aria-pressed="true"] { color:var(--accen
 .stmode:disabled { cursor:not-allowed; color:var(--ink-3); }
 .stmode:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .stmodehint { font-style:normal; font-size:10.5px; color:var(--ink-3); padding:0 10px; letter-spacing:.06em; }
+/* Week 11 (D6): the note that played weeks are folded away until What-if is on. */
+.wkhidden { margin:0 0 14px; font-size:12.5px; color:var(--ink-2); text-align:center; }
+.wkhidden b { color:var(--ink); font-weight:600; }
+.livetag { display:inline-block; margin-left:6px; font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); font-weight:700; }
 .stmodes + .sttoggle { margin-left:0; }
 @media (max-width: 560px) { .stmodes { margin-left:0; width:100%; flex-wrap:wrap; } .stmode { flex:1; } }
 `;

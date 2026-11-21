@@ -116,8 +116,11 @@ ${PTS_JS}
   /* At the extremes the number has stopped being a probability: Clinched or Eliminated instead. */
   function odds(v) {
     if (v == null) return '<span class="dim">&mdash;</span>';
-    if (v >= 0.9995) return '<span class="stflag in">Clinched</span>';
-    if (v <= 0.0005) return '<span class="stflag out">Eliminated</span>';
+    /* Week 11 (D1, D7): Clinched only at exactly 100%, Eliminated only at exactly 0%; a sliver either side reads <0.1% or >99.9%. */
+    if (v >= 1) return '<span class="stflag in">Clinched</span>';
+    if (v <= 0) return '<span class="stflag out">Eliminated</span>';
+    if (v < 0.0005) return '<span class="stpct">&lt;0.1%</span>';
+    if (v >= 0.9995) return '<span class="stpct">&gt;99.9%</span>';
     return '<span class="stpct">' + pct1(v) + '</span>';
   }
   function value(r, key, teams) {

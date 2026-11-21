@@ -309,11 +309,14 @@ place, worked out from ESPN's projections for every week left, your league's lin
 - **This week**: every starter as a card in his slot's colour, with his projection, his game, how the defence he faces
   ranks against his position, notes worth knowing (running hot, a teammate out, a shootout, a soft matchup and more),
   and **Start … instead** when someone on your bench projects 2.00 or more higher, or a note makes him worth a look.
+  When reaching your best lineup takes more than one swap (a bench running back into the FLEX, the FLEX receiver back
+  to his own slot), the checklist names every move.
   Open any card with the arrow at its foot for his season so far against his projections, this week's game in full,
   the next three weeks and how he compares with everyone who could play his slot.
 - **Before lock**: a checklist, most urgent first: a starter ruled out or on a bye, an empty slot, a game moved, a
   better start on the bench, an open IR spot, and the league's trade deadline when it is close. Once the first game
-  kicks off, the slots still open for a late swap are listed with the next lock.
+  kicks off, the slots still open for a late swap are listed with the next lock, and your total and your opponent's
+  are ESPN's live projections, the same figures as on Live Matchups.
 - **Pickups**: free agents ranked by how much they would add to *your* lineups, weighted towards the next three weeks,
   then the rest of the season and the postseason weeks. Each comes with the player to drop for him (the least valuable
   one who leaves no hole in the next three weeks, or, when your IR spot is free and a player can go there, a move to
@@ -381,8 +384,13 @@ played.
 - **League odds**: every team's playoff odds after each week, ESPN's and the simulation's side by side. Point at a line
   to read it, or tap a team in the legend to show it alone.
 - **The map.** Every remaining game is a switch with three results. **Tap a result to set it**, and every figure
-  recounts over only the ways the season can go where that happens.
-- **Standings** switch between the table as it stands and the table your selected results would produce.
+  recounts over only the ways the season can go where that happens. Weeks already played fold away; switch on
+  **What-if** to see them and change a result that happened.
+- **This week's games** show ESPN's win chances as they stand now, and once a game is under way its live score, kept
+  current while the page is open. Only the map itself is made once a week.
+- **Standings** open on the table your selected outcomes would produce; **Current** shows the table as it stands.
+- A team is **Eliminated** only when no remaining result can put it in the playoffs, and **Clinched** only when none
+  can keep it out; a sliver either side reads <0.1% or >99.9%.
 - **Jumps**: your best path, ESPN's projected winners, the simplest path to a playoff place, winning out and losing out.
 - **Share** the exact path you are looking at with a link.
 - Before the map can be built, the page shows ESPN's odds and the brackets as they stand; after the regular season it
@@ -498,7 +506,9 @@ a page that shows how to use it on the tools people already have.
 **For whoever administers the site**
 
 - **Overview**: one word for how the site is doing, a heartbeat of the site's once-a-minute work, anything that needs a
-  look, and the site's use of its free daily allowance.
+  look, and the site's use of its free daily allowance, including an estimate of its **Durable Object time**, the
+  limit Cloudflare counts by the second. Fortune Teller takes its share of that time from what the rest of the site
+  leaves. A quiet cron is raised only after three hours without a knock, since the site's own clock keeps every minute.
 - **Activity**: the site's log, and **Visits over time**, a chart by page and by team with the NFL's game windows
   shaded; tap a point to narrow the log to that time. Then the league's views: **Teams active per day**, **Tool
   reach** (how many teams use each page), **When the league visits** (by day and hour) and a card per team with its

@@ -40,6 +40,8 @@ async function context(src) {
   ]);
   const rowByKey = Object.fromEntries(rows.map((r) => [r.key, r]));
   const ticks = ticksOf(hours.filter((h) => h.hour >= hourOf(now) - 3600000));
+  // The cron's knock is judged over three hours (D2, r277): one quiet hour is not worth raising.
+  const ticks3h = ticksOf(hours.filter((h) => h.hour >= hourOf(now) - 3 * 3600000));
   const tickKeys = Object.keys(ticks).map(Number);
   const lastTickMeta = src.deps.meta('lastTick', null);
   const lastTick = tickKeys.length ? Math.max(...tickKeys) : lastTickMeta ? lastTickMeta.minute : null;
@@ -68,7 +70,7 @@ async function context(src) {
   const weeks = await timelineWeeks(src, cfg.season, week, window.open);
   const cur = weeks.find((w) => w.week === week);
   const ctx = {
-    cfg, finished, espn, rows, rowByKey, hours, ticks, lastTick, firstTick, cronMissed, cronCounted, ftp, teams,
+    cfg, finished, espn, rows, rowByKey, hours, ticks, ticks3h, lastTick, firstTick, cronMissed, cronCounted, ftp, teams,
     logoState, logosFailing, window, errorsHour, errors24, timelineWeeks: weeks,
     timelinePct: cur ? (cur.bytes || 0) / BYTE_BUDGET : 0,
   };
@@ -504,7 +506,7 @@ export async function hourlyReports(deps, hour) {
   if ((hour + 3600000) % DAY_MS === 0) {
     const dayStart = hour + 3600000 - DAY_MS;
     const u = await usage(src, dayStart);
-    const keep = ['worker', 'doReq', 'rowsW', 'kvR', 'kvW', 'r2A', 'r2B'];
+    const keep = ['worker', 'doReq', 'rowsW', 'kvR', 'kvW', 'r2A', 'r2B', 'doGbs'];
     const days = (deps.meta('days', []) || []).filter((x) => x.day !== u.day);
     days.push({ day: u.day, ...Object.fromEntries(keep.map((k) => [k, u[k] || 0])) });
     meta.days = days.slice(-40);

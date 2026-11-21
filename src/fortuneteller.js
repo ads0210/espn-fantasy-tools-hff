@@ -9,7 +9,7 @@
  */
 import { getPart } from './store.js';
 import { finalOdds } from '../app/fortune-teller/final.js';
-import { leagueState } from './ftleague.js';
+import { leagueState, TIE_CHANCE } from './ftleague.js';
 import { json } from './http.js';
 
 export const FT_SUMMARY_KEY = 'fortune-teller/summary.json';
@@ -56,9 +56,45 @@ export async function fortuneTellerPayload(env) {
   try { s = await obj.json(); } catch { return notReady(); }
   const logos = await teamLogos(env);
   s.teams = (s.teams || []).map((t) => ({ ...t, logo: logos.get(Number(t.id)) || null }));
-  // Week 6 (N1, PD2): the standings as they stand, for the Standings panel's Live mode and the league odds legend.
+  // Week 6 (N1, PD2): the standings as they stand, for the Standings panel's Current mode and the league odds legend.
   const standingsNow = await previewData(env).catch(() => null);
+  // Week 11 (D4, W8): this week's win chances are ESPN's as they stand now, not as they stood when the map was made.
+  s.games = liveChances(s.games, await readLive(env));
   return { ok: true, ready: true, ...s, pipeline, espnHistory, standingsNow };
+}
+
+async function readLive(env) { try { const o = await getPart(env, 'live_scoring_digest', 'main'); return o ? await o.json() : null; } catch { return null; } }
+
+/**
+ * Week 11 (D4, W8): every game of the week being played takes ESPN's win chance as it stands now (it moves through a
+ * game), shared out as the build shares it (a tie keeps its small chance), with each side's live projection and,
+ * once under way, its score and state. Games of other weeks keep what the map was made from. A plain function.
+ */
+export function liveChances(games, live) {
+  if (!Array.isArray(games) || !live || !Array.isArray(live.games)) return games;
+  const byId = new Map(live.games.map((g) => [Number(g.id), g]));
+  return games.map((g) => {
+    const lg = byId.get(Number(g.matchupId));
+    if (!lg || Number(lg.period) !== Number(g.week) || !lg.home || !lg.away || lg.home.teamId !== g.a || lg.away.teamId !== g.b) return g;
+    const out = { ...g, live: { state: lg.state || 'pre', hp: lg.home.points ?? null, ap: lg.away.points ?? null } };
+    const a = Number(lg.home.winProb), b = Number(lg.away.winProb);
+    if (Number.isFinite(a) && Number.isFinite(b) && a + b > 0) {
+      const pT = g.pT ?? TIE_CHANCE;
+      out.pA = +(a / (a + b) * (1 - pT)).toFixed(3); out.pB = +(b / (a + b) * (1 - pT)).toFixed(3);
+      out.source = 'espn';
+    }
+    if (Number.isFinite(Number(lg.home.projected)) && Number.isFinite(Number(lg.away.projected))) { out.projA = Number(lg.home.projected); out.projB = Number(lg.away.projected); }
+    return out;
+  });
+}
+
+/** The page's light refresh (W9): this week's chances and the standings as they stand, nothing heavier. */
+export async function fortuneTellerLive(env) {
+  let summary = null;
+  try { const o = await env.DATA.get(FT_SUMMARY_KEY); summary = o ? await o.json() : null; } catch { summary = null; }
+  const [live, standingsNow, espnHistory] = await Promise.all([readLive(env), previewData(env).catch(() => null), espnOddsHistory(env)]);
+  const games = summary && Array.isArray(summary.games) ? liveChances(summary.games, live).filter((g) => g.live).map((g) => ({ i: g.i, pA: g.pA, pB: g.pB, projA: g.projA, projB: g.projB, live: g.live })) : [];
+  return { ok: true, at: new Date().toISOString(), games, standingsNow, espnHistory, gameOn: games.some((g) => g.live && g.live.state === 'live') || Boolean(live && Array.isArray(live.games) && live.games.some((g) => g.state === 'live')) };
 }
 
 /** One team's map, compressed exactly as stored: the browser inflates it. */

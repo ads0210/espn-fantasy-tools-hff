@@ -1,3 +1,4 @@
+import { oddsWords } from "../../src/oddsrule.js";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { PALETTES, BASE_CSS, BACKDROP, pts2, ptsSigned, dateText, dateTimeText } from "../../src/ui.js";
 import ToolControls from "../shared/ToolControls.jsx";
@@ -449,7 +450,7 @@ function Pickups({ pk }) {
 
 /* ------------------------------------------------------------------ Tab 3: weeks ahead */
 /* Playoff odds as the site writes every percentage: half up, one decimal (a decided race in words). */
-const oddsText = (x) => (x == null ? "\u2014" : x >= 0.9995 ? "Clinched" : x <= 0.0005 ? "Out" : `${(Math.round(x * 1000 + 1e-6) / 10).toFixed(1)}%`);
+const oddsText = (x) => (x == null ? "\u2014" : oddsWords(x, { eliminated: "Out" }));   // week 11 (D1, D7): exactly 0% / 100%
 const oddsGain = (x) => `+${(Math.round(x * 1000 + 1e-6) / 10).toFixed(1)}`;
 function Race({ race }) {
   // Fortune Teller's exact odds for this team at its last update: now, with a win or a loss this week, if it wins out;

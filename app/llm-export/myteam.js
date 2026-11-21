@@ -53,6 +53,7 @@ function myTeamBlock(doc, team) {
     block.standing = `${ordinal(row.rank)} of ${doc.standings.length}`;
     block.record = row.record;
     if (row.playoffOdds) block.playoffOdds = row.playoffOdds;
+    if (row.simPlayoffOdds) block.simPlayoffOdds = row.simPlayoffOdds;   // W26: Fortune Teller's figure too, once it has run
   }
   if (opp) {
     block.thisWeek = {

@@ -1,3 +1,4 @@
+import { oddsWords } from "../../src/oddsrule.js";
 import React, {
   useState, useEffect, useMemo, useRef, useCallback, useDeferredValue,
 } from "react";
@@ -1531,7 +1532,7 @@ export default function TradeAnalyzer() {
             ? <span className="mine">Your team</span> : null}
           <span>{engine.ownerOf(team)}</span>
           <span>waiver <b>{team.wr}</b></span>
-          {team.pp != null ? <span>odds <b>{(team.pp * 100).toFixed(0)}%</b></span> : null}
+          {team.pp != null ? <span>odds <b>{oddsWords(team.pp)}</b></span> : null}
           <span>roster <b>{counted}/{engine.ROSTER_CAP}</b></span>
           {cut ? <span className="over">{cut} cut{cut > 1 ? "s" : ""} forced</span> : null}
           {over.length ? <span className="over">over {over.join(", ")}</span> : null}

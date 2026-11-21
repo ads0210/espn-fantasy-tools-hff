@@ -1,3 +1,4 @@
+import { oddsWords } from "../../src/oddsrule.js";
 import React, { useEffect, useRef } from "react";
 import { attachLineHover } from "../shared/linehover.js";
 import { teamVar } from "../shared/teamcolours.js";
@@ -9,7 +10,7 @@ import { teamVar } from "../shared/teamcolours.js";
  */
 const W = 600, H = 230, PADL = 34, PADR = 14, PADT = 14, PADB = 12;
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const oddsText = (v) => (v >= 0.9995 ? "Clinched" : v <= 0.0005 ? "Eliminated" : `${(Math.round(v * 1000 + 1e-6) / 10).toFixed(1)}%`);
+const oddsText = (v) => oddsWords(v);   // week 11 (D1, D7): exactly 0% / 100%
 const ordinal = (n) => { const s = ["th", "st", "nd", "rd"], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
 
 export function chartGeometry(series) {

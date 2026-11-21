@@ -17,7 +17,7 @@
 
 import { roundPts, oneDecimal } from './round.js';
 import { hofRecordBook } from './hofrecords.js';
-import { offersOf, membersOf, isOfferRecord, isLostClaim } from './trades.js';
+import { offersOf, membersOf, isOfferRecord, isLostClaim, isCancelledClaim } from './trades.js';
 // A function declaration, so the import cycle with llmexport.js is safe in
 // either load order: nothing from it is read while this module evaluates.
 import { buildLlmExportDigest } from './llmexport.js';
@@ -726,7 +726,7 @@ export function buildTransactionDigest(doc, ctx = {}) {
        A claim appears once it has resolved — whether it went through or lost
        out to an earlier one. */
     const pendingClaim = String(tx.status || '').toUpperCase() === 'PENDING';
-    if (pendingClaim) continue;
+    if (pendingClaim || isCancelledClaim(tx)) continue;   // W22: a claim cancelled before it processed is private too
 
     const when = tx.proposedDate || tx.processDate || tx.date || null;
     const adds = items
@@ -1601,8 +1601,14 @@ export async function buildLeagueHistoryDigest(rawCtx) {
 
   const currentIncluded = await eachSeason(ctx, (season, year, isCurrent) => {
     if (isCurrent) currentSeason = year;
-    const settings = season.settings || {};
-    const sched = settings.scheduleSettings || {};
+    let settings = season.settings || {};
+    let sched = settings.scheduleSettings || {};
+    // W28 (r283): the season being played is read from a view without its settings, so its length and playoff
+    // places came out empty and readers fell back to this league's 13 and 4. They come from the league's settings.
+    if (isCurrent && !(sched.matchupPeriodCount && sched.playoffTeamCount)) {
+      const ls = (ctx.sources && ctx.sources.league_settings && ctx.sources.league_settings.settings) || null;
+      if (ls) { settings = { ...ls, ...settings }; sched = { ...(ls.scheduleSettings || {}), ...sched }; }
+    }
     seasonMeta[year] = {
       size: Number(settings.size || (season.teams || []).length || 0),
       playoffTeamCount: Number(sched.playoffTeamCount || 0),
@@ -2580,7 +2586,7 @@ export const DERIVATIONS = {
       // Current identity for names, logos and the active-team test. The
       // pairwise history it also needs is computed in-process rather than
       // declared here — see the note in buildLeagueHistoryDigest.
-      needs: ['league_teams'],
+      needs: ['league_teams', 'league_settings'],
     },
   ],
   nfl_scoreboard: {

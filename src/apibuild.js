@@ -10,6 +10,7 @@
  * tested by behaviour against real captured digests. Field lists are named here, never copied from
  * a source object, so nothing a member could not see can ride along.
  */
+import { isClinched, isEliminated } from './oddsrule.js';
 import { SECTIONS, rowsOf, toCsv } from './apisections.js';
 import { applyLiveScoring, STAT } from './llmexport.js';
 import { playoffRoundLabel } from './derive.js';
@@ -266,8 +267,8 @@ export function shapeStandings(standingsDoc, sim, season = null) {
     const s = sim && sim.byTeam && typeof sim.byTeam[r.teamId] === 'number' ? sim.byTeam[r.teamId] : null;
     let decided = null;
     if (fin && fin[r.teamId] != null) decided = fin[r.teamId] ? 'clinched' : 'eliminated';
-    else if (s != null && s >= 0.9995) decided = 'clinched';
-    else if (s != null && s <= 0.0005) decided = 'eliminated';
+    else if (isClinched(s)) decided = 'clinched';          // week 11 (D1, D7): exactly 100% / exactly 0%
+    else if (isEliminated(s)) decided = 'eliminated';
     return {
       seed: r.rank ?? r.seed ?? null, teamId: r.teamId, team: r.name, wins: r.wins ?? 0, losses: r.losses ?? 0, ties: r.ties ?? 0,
       pointsFor: r2(r.pointsFor), pointsAgainst: r2(r.pointsAgainst), streak: r.streak || null,

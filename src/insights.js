@@ -121,7 +121,7 @@ const TEN = {
   I41: 4, I79: 4, I80: 4, I163: 4, I102: 4, I27: 6, I28: 6, I115: 6, I129: 7,
 };
 /* The rules' version: raise it with any change to what a row says or weighs, so played weeks are rebuilt once with it. */
-export const RULES_VERSION = 15;
+export const RULES_VERSION = 17;
 export const WEIGHT_MAX = 10;
 export const BANNER_MIN = 7;
 const CAP = new Set(['I132', 'I186', 'I178', 'I59']);
@@ -227,15 +227,23 @@ export function preRows(M, week, fx, opts = {}) {
       }
     }
     // Tiebreak watch: level on record with the team next to it, near the line.
+    // W25 (r283): every team level on that record is named, in points order (three level at 6-3 named two before).
+    const seenLevel = new Set();
     for (const s of (M.seedByPoints !== false ? [sh, sa] : [])) {
-      const nb = Object.values(S).filter((o) => o.team !== s.team && o.w === s.w && o.l === s.l && Math.abs(o.seed - s.seed) === 1);
-      for (const o of nb) {
-        if (Math.min(s.seed, o.seed) <= M.places && Math.max(s.seed, o.seed) >= M.places - 1 && gp >= 4) {
-          const ahead = s.pf >= o.pf ? s : o, behind = ahead === s ? o : s;
-          out.push(row('I29', { teams: [s.team, o.team], about: 'team',
-            parts: [T(s.team), ' and ', T(o.team), ` are level at ${recOf(s)}; `, T(ahead.team), ' is ahead on points by ', V(pts(ahead.pf - behind.pf)), ', so every point counts here, win or lose.'] }));
-        }
-      }
+      const grp = Object.values(S).filter((o) => o.w === s.w && o.l === s.l).sort((a, b) => a.seed - b.seed);
+      const k = grp.map((o) => o.team).join(',');
+      if (grp.length < 2 || seenLevel.has(k) || gp < 4) continue;
+      // Only a group that sits across the playoff line, and only its run of neighbouring seeds that touches it.
+      if (!(grp[0].seed <= M.places && grp[grp.length - 1].seed >= M.places - 1)) continue;
+      if (grp.some((o, i) => i && o.seed - grp[i - 1].seed !== 1)) continue;
+      seenLevel.add(k);
+      const names = grp.flatMap((o, i) => [i ? (i === grp.length - 1 ? ' and ' : ', ') : '', T(o.team)]);
+      const lead = grp.length === 2
+        ? [T(grp[0].team), ' is ahead on points by ', V(pts(grp[0].pf - grp[1].pf))]
+        : ['on points they stand in that order, ', T(grp[0].team), ' ', V(pts(grp[0].pf - grp[1].pf)), ' clear of ', T(grp[1].team)];
+      // The game's own team first: a row is frozen at kickoff by its first team, and named teams follow in points order.
+      out.push(row('I29', { teams: [s.team, ...grp.map((o) => o.team).filter((t) => t !== s.team)], about: 'team',
+        parts: [...names, ` are level at ${recOf(s)}; `, ...lead, ', so every point counts here, win or lose.'] }));
     }
     const cut = Object.values(S).find((s) => s.seed === M.places);
     for (const s of [sh, sa]) {
@@ -501,7 +509,8 @@ export function lineupRows(M, game, opts = {}) {
     if (onBye.length >= 2) out.push(row('I107', { teams: [id], about: 'team', parts: ['Bye crunch: ', T(id), ` has ${num(onBye.length)} regular starters on bye this week.`] }));
     const healthyBench = (pos) => sd.bench.filter((p) => p.pos === pos && !['OUT', 'INJURY_RESERVE', 'DOUBTFUL'].includes(p.injury)).length;
     for (const p of st) if ((p.injury === 'QUESTIONABLE' || p.injury === 'DOUBTFUL') && unplayed(p) && healthyBench(p.pos) === 0 && Date.parse(p.kickoff) - Date.parse(sd.starters.reduce((m, x) => (x.kickoff && x.kickoff < m ? x.kickoff : m), '9999')) > 3 * 3600e3)
-      out.push(row('I108', { teams: [id], about: 'player', until: p.kickoff, parts: [name(p), ' is questionable for a late kickoff and ', T(id), ` has no healthy ${p.pos} on the bench to cover.`] }));
+      // W24 (r283): the player's own status, and his kickoff, not "a late kickoff" (it can be the earliest game of Sunday).
+      out.push(row('I108', { teams: [id], about: 'player', until: p.kickoff, parts: [name(p), ` is ${p.injury === 'DOUBTFUL' ? 'doubtful' : 'questionable'}, his game kicks off `, { d: p.kickoff }, ' after the rest of the lineup has locked, and ', T(id), ` has no healthy ${p.pos} on the bench to cover.`] }));
     for (const pos of ['RB', 'WR']) if (st.filter((p) => p.pos === pos).length >= 2 && healthyBench(pos) === 0) out.push(row('I111', { teams: [id], about: 'team', parts: [T(id), ` has no healthy ${pos} on its bench.`] }));
     // Players and lineups.
     if (s70 && s70.entries[0] && st.some((p) => p.id === s70.entries[0].pid)) out.push(row('I77', { teams: [id], about: 'player', parts: [T(id), ' starts the league’s top scorer, ', P(s70.entries[0].player.name, s70.entries[0].player.pos), ' (', V(pts(s70.entries[0].value)), ').'] }));
@@ -940,8 +949,9 @@ export function leagueRows(M, week, kind, facts) {
   }
   if (kind === 'pre' && week === Math.ceil(M.regWeeks / 2)) out.push(row('I228', { about: 'league', parts: [`Week ${week} of ${M.regWeeks}: the regular season passes halfway this week.`] }));
   if (kind === 'pre' && facts.odds) {
-    const alive = Object.values(facts.odds).every((x) => x > 0);
-    if (alive && week > M.regWeeks / 2) out.push(row('I226', { about: 'league', parts: ['Every team still has a playoff chance by ESPN’s odds.'] }));
+    // Week 11 (D1): once Fortune Teller has counted the week, a team it shows out is out here too.
+    const alive = Object.values(facts.odds).every((x) => x > 0) && (!facts.simOdds || Object.values(facts.simOdds).every((x) => x > 0));
+    if (alive && week > M.regWeeks / 2) out.push(row('I226', { about: 'league', parts: [facts.simOdds ? 'Every team still has a playoff chance.' : 'Every team still has a playoff chance by ESPN’s odds.'] }));
   }
   if (facts.clinch && facts.clinch.length) out.push(row('I221', { teams: facts.clinch, about: 'league', bump: facts.clinch.length >= 3 ? 1 : 0,
     parts: [`${num(facts.clinch.length).replace(/^./, (c) => c.toUpperCase())} team${facts.clinch.length === 1 ? '' : 's'} can clinch a playoff place this week: `, ...facts.clinch.flatMap((id, i) => [i ? ', ' : '', T(id)]), '.'] }));
@@ -971,13 +981,14 @@ export function stakesRows(M, week, fx, sw) {
   const res = (id, won) => (won ? (id === h ? g.home : g.away) : (id === h ? g.away : g.home));
   for (const id of [h, a]) {
     const p = sw.odds[id], pw = res(id, true)[id], pl = res(id, false)[id];
-    if (p > 0 && p < 1 && pw >= 0.9995) out.push(row('I1', { teams: [id], about: 'team', parts: ["Win and You're In: a win clinches a playoff place for ", T(id), ', whatever else happens.'], predict: { kind: 'win', team: id } }));
-    if (p > 0 && p < 1 && pl <= 0.0005) out.push(row('I2', { teams: [id], about: 'team', parts: ['Must Win: a loss ends ', T(id), "'s playoff hopes."], predict: { kind: 'win', team: id } }));
+    // Week 11 (D1): a win clinches only when it leaves exactly 100%; a loss ends a season only at exactly 0%.
+    if (p > 0 && p < 1 && pw >= 1) out.push(row('I1', { teams: [id], about: 'team', parts: ["Win and You're In: a win clinches a playoff place for ", T(id), ', whatever else happens.'], predict: { kind: 'win', team: id } }));
+    if (p > 0 && p < 1 && pl <= 0) out.push(row('I2', { teams: [id], about: 'team', parts: ['Must Win: a loss ends ', T(id), "'s playoff hopes."], predict: { kind: 'win', team: id } }));
     else if (p > 0.05 && pl > 0 && pl < 0.05) out.push(row('I8', { teams: [id], about: 'team', parts: ['Season on the line: a loss leaves ', T(id), ' a ', V(pct(pl)), ' playoff chance.'] }));
     if (p > 0 && p < 1 && Math.abs(pw - pl) >= 0.05) out.push(row('I3', { teams: [id], about: 'team', bump: pw - pl >= 0.4 ? 1 : 0, parts: [T(id), ': ', V(pct(pw)), ' with a win, ', V(pct(pl)), ' with a loss (', V(pct(p)), ' now).'] }));
     if (sw.critical[id] === fx.id && p > 0 && p < 1) out.push(row('I4', { teams: [id], about: 'team', bump: 1, parts: ['Most critical: no game ', T(id), ' has left moves its playoff chances more.'] }));
-    if (p > 0 && p < 1 && sw.winOut[id] >= 0.9995) out.push(row('I11', { teams: [id], about: 'team', parts: [T(id), ' controls its own destiny: win out and it is in.'] }));
-    if (p <= 0.0005) {
+    if (p > 0 && p < 1 && sw.winOut[id] >= 1) out.push(row('I11', { teams: [id], about: 'team', parts: [T(id), ' controls its own destiny: win out and it is in.'] }));
+    if (p <= 0) {
       const o = id === h ? a : h;
       if (sw.odds[o] > 0 && sw.odds[o] < 1) out.push(row('I10', { teams: [id, o], parts: ['Spoiler: ', T(id), ' is out of the race, and a win would hurt ', T(o), ' (', V(pct(res(o, false)[o])), ' with a loss).'] }));
     }

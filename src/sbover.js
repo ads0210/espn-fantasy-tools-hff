@@ -18,10 +18,11 @@ import {
 } from './sbcore.js';
 import { pageForRoute } from './readers.js';
 import { levelFrom, paceOf, BRAKE_OF, BRAKE_WORDS, LIMIT_WORDS } from './budget.js';
+import { objectTime, DO_GBS_FREE, DO_SAFE_SHARE } from './dotime.js';
 
 export const LIMITS = {
   worker: 100000, doReq: 100000, rowsW: 100000, rowsR: 5000000, kvR: 100000, kvW: 1000,
-  r2Bytes: 10 * 1024 ** 3, r2A: 1000000, r2B: 10000000, logs: 200000,
+  r2Bytes: 10 * 1024 ** 3, r2A: 1000000, r2B: 10000000, logs: 200000, doGbs: DO_GBS_FREE,
 };
 
 const sumOps = (rows, pred) => {
@@ -77,6 +78,9 @@ async function usageOf(src, mid, isToday) {
     cacheMiss: sumOps(rows, (k) => k === 'cacheMiss'),
   };
   u.logs = u.worker + u.doReq;
+  // W5 (r278): Durable Object time, estimated from the minute's recorded job times and Fortune Teller's meter.
+  u.doTime = objectTime(ticksOf(rows), ftm.wallMs || 0);
+  u.doGbs = Math.round(u.doTime.gbs);
   if (!isToday) return { day, ...u };
   const census = await src.census();
   u.r2Bytes = census ? census.total.bytes : null;
@@ -140,7 +144,7 @@ export async function reasons(src, ctx) {
   for (const l of ctx.logosFailing) r.push({ s: 'warn', text: `Logo for ${l.name} failing to fetch; the stored copy is still served`, go: 'p-logos' });
   if (ctx.timelinePct > 0.8) r.push({ s: 'warn', text: `This week's score timeline is at ${Math.round(ctx.timelinePct * 100)}% of its byte budget`, go: 'p-livescore' });
   const u = await usage(src);
-  const over = [['Worker requests', u.worker / LIMITS.worker], ['Durable Object requests', u.doReq / LIMITS.doReq], ['rows written', u.rowsW / LIMITS.rowsW], ['KV writes', u.kvW / LIMITS.kvW], ['KV reads', u.kvR / LIMITS.kvR]].filter((x) => x[1] > 0.7);
+  const over = [['Worker requests', u.worker / LIMITS.worker], ['Durable Object requests', u.doReq / LIMITS.doReq], ['rows written', u.rowsW / LIMITS.rowsW], ['KV writes', u.kvW / LIMITS.kvW], ['KV reads', u.kvR / LIMITS.kvR], ['Durable Object time (estimated)', u.doGbs / LIMITS.doGbs]].filter((x) => x[1] > 0.7);
   for (const [n, p] of over) r.push({ s: 'warn', text: `${n} at ${Math.round(p * 100)}% of today's free limit`, go: 'p-usage' });
   // The brake (C5): which level, and which limit put it there.
   const lvl = levelFrom({ counts: { worker: u.worker, doReq: u.doReq, rowsW: u.rowsW, kvR: u.kvR, kvW: u.kvW }, rate: {} });
@@ -151,8 +155,11 @@ export async function reasons(src, ctx) {
   // Judged on whether each clock was heard, not on which did the work: the one that arrives second does none.
   if (cs.clockOn && cs.heard.judged >= 30) {
     if (!cs.heard.alarm) r.push({ s: 'warn', text: 'The backend clock\'s own alarm has not fired this hour: the cron\'s knock is keeping every minute', go: 'p-cron' });
-    else if (!cs.heard.knock && !cs.fallback) r.push({ s: 'warn', text: 'The cron has not knocked this hour: the backend clock\'s alarm is keeping every minute', go: 'p-cron' });
   }
+  // The cron's knock (D2, r277): raised only after three hours in a row without one. The clock keeps every minute
+  // either way, so a quiet hour is not worth a member's attention.
+  const k3 = knockSilence(ctx.ticks3h || ctx.ticks, src.now);
+  if (k3 && !cs.fallback) r.push(k3);
   if (cs.fallback) r.push({ s: 'warn', text: `The cron did ${cs.fallback} minute${cs.fallback === 1 ? '' : 's'} of work itself this hour: the backend clock could not be reached`, go: 'p-cron' });
   const m = src.meter();
   if (m.paused) r.push({ s: 'warn', text: 'The log reached its daily budget: counters and status reports pause until 00:00 UTC', go: 'p-usage' });
@@ -317,7 +324,7 @@ export const OVERVIEW = [
     sub: 'Today against each free limit, counted by the site', live: true,
     sum: async (src) => {
       const u = await usage(src);
-      const list = [['Worker requests', u.worker / LIMITS.worker], ['Durable Object requests', u.doReq / LIMITS.doReq], ['rows written', u.rowsW / LIMITS.rowsW], ['KV reads', u.kvR / LIMITS.kvR], ['KV writes', u.kvW / LIMITS.kvW]].sort((a, b) => b[1] - a[1]);
+      const list = [['Worker requests', u.worker / LIMITS.worker], ['Durable Object requests', u.doReq / LIMITS.doReq], ['rows written', u.rowsW / LIMITS.rowsW], ['KV reads', u.kvR / LIMITS.kvR], ['KV writes', u.kvW / LIMITS.kvW], ['Durable Object time', u.doGbs / LIMITS.doGbs]].sort((a, b) => b[1] - a[1]);
       const p = list[0][1];
       return [p > 0.9 ? 'bad' : p > 0.7 ? 'warn' : 'ok', `highest: ${list[0][0]} at ${(p * 100).toFixed(1)}%`];
     },
@@ -330,6 +337,8 @@ export const OVERVIEW = [
           gauge('Durable Object requests', u.doReq, LIMITS.doReq, { est: true, lines: BRAKE_LINES, spark: wk('doReq'), reserved: u.ftDo, caps: [[0.1, 'the log\'s budget: 10%'], [0.5, 'Fortune Teller\'s allowance: up to 50%']] }),
           gauge('Durable Object rows written', u.rowsW, LIMITS.rowsW, { est: true, lines: BRAKE_LINES, spark: wk('rowsW'), caps: [[0.1, 'the log\'s budget: 10%']] }),
           gauge('Durable Object rows read', u.rowsR, LIMITS.rowsR, { est: true, note: 'the log\'s own reads' }),
+          gauge('Durable Object time (GB-s)', u.doGbs, LIMITS.doGbs, { est: true, spark: wk('doGbs'), caps: [[0.5, 'Fortune Teller\'s allowance: up to 50%'], [DO_SAFE_SHARE, 'Fortune Teller always leaves the rest']],
+            note: `the backend clock ${Math.round(u.doTime.secs.clock).toLocaleString('en-US')} s, the four tools' steps ${Math.round(u.doTime.secs.season + u.doTime.secs.insights + u.doTime.secs.frontoffice + u.doTime.secs.postmortem).toLocaleString('en-US')} s, Fortune Teller ${Math.round(u.doTime.secs.ft).toLocaleString('en-US')} s; a page's own object time is not counted` }),
           gauge('KV reads', u.kvR, LIMITS.kvR, { est: true, lines: BRAKE_LINES, spark: wk('kvR') }),
           gauge('KV writes', u.kvW, LIMITS.kvW, { lines: BRAKE_LINES, spark: wk('kvW') }),
           gauge('Workers Logs events', u.logs, LIMITS.logs, { est: true }),
@@ -565,6 +574,14 @@ export const fmtHours = (h) => {
  * cron's knock did, how many the cron did itself (where the clock is off, or as a fallback), and how late the work
  * began. A plain function of the stored ticks, tested by behaviour.
  */
+/** The cron's knock silent for three hours in a row while the clock ran (D2): a reason line, else null. */
+export const KNOCK_SILENT_HOURS = 3;
+export function knockSilence(ticks, now) {
+  const cs = clockSummary(ticks, now - KNOCK_SILENT_HOURS * 3600000);
+  if (!cs.clockOn || cs.heard.judged < (KNOCK_SILENT_HOURS - 0.5) * 60 || cs.heard.knock) return null;
+  return { s: 'warn', text: `The cron has not knocked for ${KNOCK_SILENT_HOURS} hours: the backend clock's alarm is keeping every minute`, go: 'p-cron' };
+}
+
 export function clockSummary(ticks, since = 0) {
   const by = { alarm: 0, knock: 0, cron: 0 }, lates = [];
   // Minutes in which each clock was heard at all, among the minutes that say (the one that arrives second does no work).

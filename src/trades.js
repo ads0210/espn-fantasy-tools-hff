@@ -110,3 +110,9 @@ export function offersOf(raw, opts = {}) {
 
 /** A waiver claim (or a free-agent move) that did not go through: ESPN marks it FAILED_<reason>. */
 export const isLostClaim = (tx) => !up(tx && tx.type).startsWith('TRADE') && up(tx && tx.status).startsWith('FAILED');
+/**
+ * W22 (r282): a claim its own team cancelled before it processed. ESPN never shows it to the rest of the league, so,
+ * like a pending claim, it is private: never listed, never counted (it showed on League activity as a move that
+ * happened until r282).
+ */
+export const isCancelledClaim = (tx) => !up(tx && tx.type).startsWith('TRADE') && /^CANCEL/.test(up(tx && tx.status));
